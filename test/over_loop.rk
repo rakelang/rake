@@ -1,0 +1,33 @@
+~~ Test: over_loop.rk
+~~ Tests over loops with pack iteration.
+
+~~ Stack definition for points
+stack Point {
+  x: float rack,
+  y: float rack
+}
+
+~~ Simple crunch for distance calculation
+crunch distance_2d x y -> d:
+  let d = sqrt(x * x + y * y)
+
+~~ Run function that iterates over a pack of points
+run compute_magnitudes (points : Point pack) (<count> : int64) -> result:
+  over points, <count> |> pt:
+    let mag = distance_2d(pt.x, pt.y)
+    mag
+
+~~ Iterate and apply a scalar offset
+run offset_all (points : Point pack) (<count> : int64) (<offset> : float) -> result:
+  over points, <count> |> pt:
+    let new_x = pt.x + <offset>
+    let new_y = pt.y + <offset>
+    new_x
+
+~~ Iterate with scaling
+run scale_points (data : Point pack) (<n> : int64) (<scale> : float) -> result:
+  over data, <n> |> p:
+    let scaled_x = p.x * <scale>
+    let scaled_y = p.y * <scale>
+    let dist = distance_2d(scaled_x, scaled_y)
+    dist

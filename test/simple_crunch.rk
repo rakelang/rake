@@ -1,0 +1,34 @@
+~~ Test: simple_crunch.rk
+~~ Tests basic crunch function with simple arithmetic operations.
+
+~~ Simple addition of two racks
+crunch add_racks a b -> result:
+  let result = a + b
+  result
+
+~~ Simple multiplication
+crunch mul_racks a b -> result:
+  let result = a * b
+  result
+
+~~ Compound arithmetic: a*b + c (fused multiply-add pattern)
+crunch fma_racks a b c -> result:
+  let result = a * b + c
+  result
+
+~~ Unary negation
+crunch negate_rack x -> result:
+  let result = -x
+  result
+
+~~ Multiple operations chained
+crunch complex_arith a b c -> result:
+  let t1 = a + b
+  let t2 = t1 * c
+  let result = t2 - a
+  result
+
+~~ Using explicit FMA intrinsic
+crunch explicit_fma a b c -> result:
+  let result = fma(a, b, c)
+  result

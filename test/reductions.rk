@@ -1,0 +1,68 @@
+~~ Test: reductions.rk
+~~ Tests reduction operators: \+/ \*/ \min/ \max/ \|/ \&/
+
+~~ Sum all elements in a rack
+crunch sum_rack values -> result:
+  let result = values \+/
+  result
+
+~~ Product of all elements
+crunch product_rack values -> result:
+  let result = values \*/
+  result
+
+~~ Minimum value
+crunch min_rack values -> result:
+  let result = values \min/
+  result
+
+~~ Maximum value
+crunch max_rack values -> result:
+  let result = values \max/
+  result
+
+~~ Combine reductions: compute range (max - min)
+crunch range_rack values -> result:
+  let lo = values \min/
+  let hi = values \max/
+  let result = hi - lo
+  result
+
+~~ Mean calculation: sum / count (using lanes intrinsic)
+crunch mean_rack values -> result:
+  let total = values \+/
+  let count = lanes
+  let result = total / count
+  result
+
+~~ Logical OR reduction (any true?)
+crunch any_positive values -> result:
+  let positive = values > <0.0>
+  let result = positive \|/
+  result
+
+~~ Logical AND reduction (all true?)
+crunch all_positive values -> result:
+  let positive = values > <0.0>
+  let result = positive \&/
+  result
+
+~~ Scan operations (prefix sum)
+crunch prefix_sum values -> result:
+  let result = values \+\
+  result
+
+~~ Running product
+crunch running_product values -> result:
+  let result = values \*\
+  result
+
+~~ Running minimum
+crunch running_min values -> result:
+  let result = values \min\
+  result
+
+~~ Running maximum
+crunch running_max values -> result:
+  let result = values \max\
+  result

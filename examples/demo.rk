@@ -1,0 +1,70 @@
+~~ Standalone Raytracer in Rake
+~~ This demonstrates the complete tine/through/sweep model with over loops
+
+~~ Type definitions
+stack Ray {
+  ox: float rack, oy: float rack, oz: float rack,
+  dx: float rack, dy: float rack, dz: float rack
+}
+
+single Sphere {
+  cx: float, cy: float, cz: float, r: float
+}
+
+~~ Pure vector dot product (always inlined)
+~~ Uses fused binding (| d <|) to guarantee no intermediate storage
+crunch dot ax ay az bx by bz -> d:
+  | d <| ax * bx + ay * by + az * bz
+
+~~ Ray-sphere intersection with divergence handling
+rake intersect_flat
+  ray_ox ray_oy ray_oz ray_dx ray_dy ray_dz
+  <sphere_cx> <sphere_cy> <sphere_cz> <sphere_r>
+  -> t_result:
+
+  ~~ Quadratic formula setup
+  let ocx = ray_ox - <sphere_cx>
+  let ocy = ray_oy - <sphere_cy>
+  let ocz = ray_oz - <sphere_cz>
+
+  let a = dot(ray_dx, ray_dy, ray_dz, ray_dx, ray_dy, ray_dz)
+  let b = <2.0> * dot(ocx, ocy, ocz, ray_dx, ray_dy, ray_dz)
+  let c = dot(ocx, ocy, ocz, ocx, ocy, ocz) - <sphere_r> * <sphere_r>
+
+  let disc = b * b - <4.0> * a * c
+
+  ~~ Tine declarations: partition lanes by discriminant
+  | #miss  := (disc < <0.0>)
+  | #maybe := (!#miss)
+
+  ~~ Compute t only for rays that might hit
+  through #maybe:
+    let sqrt_disc = sqrt(disc)
+    let t = (- b - sqrt_disc) / (<2.0> * a)
+    t
+  -> t_value
+
+  ~~ Miss result: t = -1
+  through #miss:
+    let neg_one = < -1.0>
+    neg_one
+  -> miss_result
+
+  ~~ Sweep: collect results based on which tine matched
+  sweep:
+    | #miss  -> miss_result
+    | #maybe -> t_value
+  -> t_result
+
+~~ Main entry point: process all rays in pack
+~~ The over loop iterates in SIMD-width chunks
+run render_all (rays : Ray pack) (<count> : int64)
+               (<sphere_cx> : float) (<sphere_cy> : float) (<sphere_cz> : float) (<sphere_r> : float)
+               -> result:
+  over rays, <count> |> ray:
+    let t = intersect_flat(
+      ray.ox, ray.oy, ray.oz,
+      ray.dx, ray.dy, ray.dz,
+      <sphere_cx>, <sphere_cy>, <sphere_cz>, <sphere_r>
+    )
+    t

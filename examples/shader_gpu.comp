@@ -1,0 +1,76 @@
+#version 450
+
+// Rake-equivalent ray-sphere intersection for Vulkan compute
+// This demonstrates the same algorithm running on GPU
+
+layout(local_size_x = 256) in;
+
+// Ray data (SoA layout matching Rake's pack)
+layout(std430, binding = 0) readonly buffer RayOriginX { float ray_ox[]; };
+layout(std430, binding = 1) readonly buffer RayOriginY { float ray_oy[]; };
+layout(std430, binding = 2) readonly buffer RayOriginZ { float ray_oz[]; };
+layout(std430, binding = 3) readonly buffer RayDirX { float ray_dx[]; };
+layout(std430, binding = 4) readonly buffer RayDirY { float ray_dy[]; };
+layout(std430, binding = 5) readonly buffer RayDirZ { float ray_dz[]; };
+
+// Sphere data (uniform, matching Rake's <scalar>)
+layout(std140, binding = 6) uniform Sphere {
+    vec4 sphere; // cx, cy, cz, r
+};
+
+// Output
+layout(std430, binding = 7) writeonly buffer Result { float t_result[]; };
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    uint num_rays;
+};
+
+// Dot product (equivalent to Rake crunch)
+float dot3(vec3 a, vec3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+// Ray-sphere intersection (equivalent to Rake rake function)
+// Maps directly to the tine/through/sweep model
+float intersect(vec3 origin, vec3 dir, vec3 center, float radius) {
+    vec3 oc = origin - center;
+
+    float a = dot3(dir, dir);
+    float b = 2.0 * dot3(oc, dir);
+    float c = dot3(oc, oc) - radius * radius;
+
+    float disc = b * b - 4.0 * a * c;
+
+    // Tine equivalent: miss := disc < 0
+    // Tine equivalent: hit := !miss
+    if (disc < 0.0) {
+        // through #miss: return -1.0
+        return -1.0;
+    } else {
+        // through #hit: compute t
+        float sqrt_disc = sqrt(disc);
+        float t = (-b - sqrt_disc) / (2.0 * a);
+        return t > 0.0 ? t : -1.0;
+    }
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if (idx >= num_rays) return;
+
+    // Load ray (from SoA buffers)
+    vec3 origin = vec3(ray_ox[idx], ray_oy[idx], ray_oz[idx]);
+    vec3 dir = vec3(ray_dx[idx], ray_dy[idx], ray_dz[idx]);
+
+    // Load sphere (broadcast scalar)
+    vec3 center = sphere.xyz;
+    float radius = sphere.w;
+
+    // Compute intersection
+    float t = intersect(origin, dir, center, radius);
+
+    // Store result
+    t_result[idx] = t;
+}

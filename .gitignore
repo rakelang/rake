@@ -1,0 +1,24 @@
+# Build artifacts
+**/_build/
+**/build/
+*.o
+*.ll
+*.mlir
+*.s
+
+# Dune
+_opam/
+
+# Nix
+.direnv/
+result
+
+# Benchmark results (keep .gitkeep)
+bench/results/*.json
+bench/results/*.html
+
+# Rust analyzer
+target/
+
+# Tree-sitter (subproject)
+tree-sitter-rake/

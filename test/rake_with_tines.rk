@@ -1,0 +1,88 @@
+~~ Test: rake_with_tines.rk
+~~ Tests rake functions with tine predicates and through blocks.
+
+~~ Simple conditional: clamp negative values to zero
+rake clamp_positive values -> result:
+  | #negative := (values < <0.0>)
+  | #positive := (!#negative)
+
+  through #negative:
+    let zero = <0.0>
+    zero
+  -> clamped
+
+  through #positive:
+    values
+  -> kept
+
+  sweep:
+    | #negative -> clamped
+    | #positive -> kept
+  -> result
+
+~~ Compare two values, select based on condition
+rake select_greater a b -> result:
+  | #a_wins := (a > b)
+  | #b_wins := (!#a_wins)
+
+  through #a_wins:
+    a
+  -> a_val
+
+  through #b_wins:
+    b
+  -> b_val
+
+  sweep:
+    | #a_wins -> a_val
+    | #b_wins -> b_val
+  -> result
+
+~~ Threshold detection with computation
+rake threshold_detect values <threshold> -> result:
+  | #above := (values >= <threshold>)
+  | #below := (!#above)
+
+  through #above:
+    let diff = values - <threshold>
+    diff
+  -> above_result
+
+  through #below:
+    let neg_diff = <threshold> - values
+    neg_diff
+  -> below_result
+
+  sweep:
+    | #above -> above_result
+    | #below -> below_result
+  -> result
+
+~~ Multiple tines with compound predicates
+rake classify_sign values -> result:
+  let zero = <0.0>
+
+  | #negative := (values < zero)
+  | #positive := (values > zero)
+  | #zero := (!#negative && !#positive)
+
+  through #negative:
+    let neg_one = < -1.0>
+    neg_one
+  -> neg_result
+
+  through #positive:
+    let pos_one = <1.0>
+    pos_one
+  -> pos_result
+
+  through #zero:
+    let zero_val = <0.0>
+    zero_val
+  -> zero_result
+
+  sweep:
+    | #negative -> neg_result
+    | #positive -> pos_result
+    | #zero -> zero_result
+  -> result

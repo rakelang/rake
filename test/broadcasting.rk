@@ -1,0 +1,54 @@
+~~ Test: broadcasting.rk
+~~ Tests scalar to rack broadcasting with <scalar> syntax.
+
+~~ Add a scalar to every lane
+crunch add_scalar values <offset> -> result:
+  let result = values + <offset>
+  result
+
+~~ Multiply by a scalar
+crunch scale_rack values <factor> -> result:
+  let result = values * <factor>
+  result
+
+~~ Broadcast a literal value
+crunch add_constant values -> result:
+  let result = values + <42.0>
+  result
+
+~~ Multiple scalar parameters
+crunch linear_transform values <scale> <offset> -> result:
+  let scaled = values * <scale>
+  let result = scaled + <offset>
+  result
+
+~~ Scalar in arithmetic expression
+crunch clamp_to_range values <lo> <hi> -> result:
+  ~~ Note: This is a simplified clamp, actual would need tines
+  let above_lo = values - <lo>
+  let range = <hi> - <lo>
+  let normalized = above_lo / range
+  let result = normalized * <100.0>
+  result
+
+~~ Broadcast negative literal
+crunch negate_and_offset values -> result:
+  let negated = -values
+  let result = negated + < -10.0>
+  result
+
+~~ Broadcast with comparison
+crunch threshold_mask values <threshold> -> result:
+  let above = values > <threshold>
+  let one = <1.0>
+  let zero = <0.0>
+  ~~ Would need select/tines for actual conditional
+  above
+
+~~ Complex expression with multiple broadcasts
+crunch quadratic x <a> <b> <c> -> result:
+  let x2 = x * x
+  let ax2 = <a> * x2
+  let bx = <b> * x
+  let result = ax2 + bx + <c>
+  result

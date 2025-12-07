@@ -1,0 +1,69 @@
+~~ Test: field_access.rk
+~~ Tests stack and single field access.
+
+~~ Stack definition with multiple fields
+stack Particle {
+  x: float rack,
+  y: float rack,
+  z: float rack,
+  mass: float rack
+}
+
+~~ Single (uniform) configuration struct
+single Config {
+  dt: float,
+  gravity: float,
+  damping: float
+}
+
+~~ Access stack fields and compute
+crunch particle_energy px py pz pmass -> result:
+  let vx2 = px * px
+  let vy2 = py * py
+  let vz2 = pz * pz
+  let v2 = vx2 + vy2 + vz2
+  let ke = <0.5> * pmass * v2
+  ke
+
+~~ Run with pack field access
+run compute_kinetic_energy (particles : Particle pack) (<count> : int64) -> result:
+  over particles, <count> |> p:
+    let vx2 = p.x * p.x
+    let vy2 = p.y * p.y
+    let vz2 = p.z * p.z
+    let v2 = vx2 + vy2 + vz2
+    let ke = <0.5> * p.mass * v2
+    ke
+
+~~ Access single fields (uniform values)
+~~ Note: Single fields would be accessed like <config.dt> for broadcast
+crunch apply_gravity y <dt> <gravity> -> result:
+  let dv = <gravity> * <dt>
+  let result = y + dv * <dt>
+  result
+
+~~ Nested field access simulation
+stack Ray {
+  ox: float rack,
+  oy: float rack,
+  oz: float rack,
+  dx: float rack,
+  dy: float rack,
+  dz: float rack
+}
+
+~~ Access multiple fields from ray
+crunch ray_at_t ray_ox ray_oy ray_oz ray_dx ray_dy ray_dz t -> result:
+  let px = ray_ox + ray_dx * t
+  let py = ray_oy + ray_dy * t
+  let pz = ray_oz + ray_dz * t
+  ~~ Return just x for simplicity
+  px
+
+~~ Process rays in a pack
+run march_rays (rays : Ray pack) (<count> : int64) (<step> : float) -> result:
+  over rays, <count> |> r:
+    let new_ox = r.ox + r.dx * <step>
+    let new_oy = r.oy + r.dy * <step>
+    let new_oz = r.oz + r.dz * <step>
+    new_ox

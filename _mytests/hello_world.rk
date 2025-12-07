@@ -1,0 +1,22 @@
+stack Students = {
+  age: int rack;
+  score: float rack;
+  grade: char rack;
+  attempts: int rack;
+}
+
+cohort = pack[1000] Students;
+
+crunch mark_tests Students -> grades:
+  | ascii_E <| 45 ~~ Magic number from ASCII table.
+  | normalized <| (score - 40) \ 20 ~~ i.e. 0,20,40,60,80,100 -> 0,0,1,2,3,4
+  | grades <| normalized - ascii_E
+  ~~ No error handling for now, i.e. negative or >100 scores
+
+rake educate student:
+  age, height, score = spread student
+  | #is_young = age <= 12
+  | #excelled = score >= <69.420>
+
+over cohort run educate;
+
