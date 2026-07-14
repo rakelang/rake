@@ -1,0 +1,3 @@
+crunch mismatched_fusion(values: f32s) -> f32s:
+  | result: i32s <| values + <1.0>
+  return result

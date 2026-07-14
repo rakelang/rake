@@ -1,0 +1,6 @@
+~~ docs:start crunch
+crunch advance(positions: f32s, velocities: f32s) -> f32s:
+  | scaled: f32s <| velocities * <0.5>
+  | result: f32s <| positions + scaled
+  return result
+~~ docs:end crunch

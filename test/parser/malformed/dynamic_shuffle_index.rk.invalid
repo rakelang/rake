@@ -1,0 +1,2 @@
+crunch dynamic_shuffle_index(values: f32s, index: i32s) -> f32s:
+  return shuffle(values, [0, index, 2, 3])

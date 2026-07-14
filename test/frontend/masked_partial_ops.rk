@@ -1,0 +1,12 @@
+rake guarded_partial(x: f32s, denominator: f32s) -> f32s:
+  tine #active when x >= <0.0>
+
+  through #active else <-7.0> into computed:
+    let root = sqrt(x)
+    let logged = log(x)
+    let quotient = (root + logged) / denominator
+    quotient
+
+  return sweep:
+    | #active => computed
+    | _       => <-7.0>

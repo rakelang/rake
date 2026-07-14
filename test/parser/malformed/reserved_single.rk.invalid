@@ -1,0 +1,3 @@
+single Config {
+  f32: scale, bias;
+}

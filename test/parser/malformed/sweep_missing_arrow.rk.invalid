@@ -1,0 +1,9 @@
+rake malformed_sweep(values: f32s) -> f32s:
+  tine #active when values >= <0.0>
+
+  through #active else <0.0> into active_value:
+    values
+
+  return sweep:
+    | #active active_value
+    | _ => values

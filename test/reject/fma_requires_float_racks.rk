@@ -1,0 +1,3 @@
+crunch invalid_fma(a: f32s, b: f32s, c: f32s) -> f32s:
+  | result: f32s <| fma(a, b, true)
+  return result

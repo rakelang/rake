@@ -1,0 +1,3 @@
+crunch scale_and_add(values: f32s, <scale: f32>, offsets: f32s) -> f32s:
+  let scaled = values * <scale>
+  return scaled + offsets

@@ -1,179 +1,104 @@
-# Tines, Through Blocks, and Sweep
+# Tines, through regions, and sweeps
 
-This document specifies the semantics of Rake's control flow primitives for divergent execution: tines, through blocks, and sweep.
-
-## Overview
-
-Rake uses a declarative approach to express divergent control flow within SIMD lanes:
-
-1. **Tines** declare named boolean masks based on predicates
-2. **Through blocks** execute code under a specific mask, producing a result
-3. **Sweep** collects results from different tines into a single value
-
-This model allows the compiler to emit efficient vectorized code while giving programmers a clear mental model for lane-divergent behavior.
+Rake makes lane-dependent control explicit. A tine names a Boolean mask, a
+through region computes one candidate under that mask, and a sweep chooses one
+defined result for every lane.
 
 ## Tines
 
-A tine declares a named mask (boolean vector) based on a predicate:
+A tine declaration reads as a sentence:
 
+```text
+tine #valid when values >= <0.0>
+```
+
+`#valid` contains one Boolean decision per lane. The `#` is deliberately
+visual: like a perforated mask or the tines of a rake, it suggests that some
+values fall through its holes while others are held back. Because `#` always
+means a mask, the distinction remains visible everywhere that mask is used.
+
+Predicates evaluate lane by lane. They may combine comparisons, named tines,
+and `not`, `and`, and `or`. A tine name refers only to its mask; it neither
+executes nor stores a candidate computation.
+
+## Through regions
+
+A through region selects a tine, supplies safe inactive operands, and binds one
+candidate result:
+
+```text
+through #valid else <0.0> into rooted:
+  sqrt(values)
+```
+
+The header reads in semantic order: values pass `through #valid`; inactive
+lanes receive the uniform scalar `<0.0>`; and the candidate flows `into
+rooted`. The `else` clause is required whenever an inactive lane needs a safe
+operand or passthrough.
+
+For a lane where the tine is true, the body is semantically evaluated. For an
+inactive lane it is not: the body must not consume an invalid operand, raise a
+floating-point exception, access memory, or perform another side effect. The
+passthrough is evaluated outside the masked body and supplies inactive lanes.
+
+An implementation may speculate a pure, total operation only when speculation
+is observably equivalent to skipping the inactive lane. Selecting the final
+value after an unsafe operation does not satisfy this rule.
+
+### Executable semantics
+
+The scalar interpreter skips inactive lanes and supplies the passthrough. A
+vector backend replaces inactive inputs with benign operands before every
+operation that is safe to sanitize. It may supply `0.0` before `sqrt`, for
+example, or numerator `0.0` and denominator `1.0` before division. A final
+vector selection chooses the active result or passthrough. Targets with native
+masked operations may use them when they preserve the same semantics.
+
+Typed native IR records each benign substitution. Verification rejects an
+exception-capable masked instruction whose operands bypass sanitization.
+Operations without a call-free masked lowering remain unavailable on that
+target rather than falling back to scalar lane work.
+
+## Sweeps
+
+A sweep lists tine arms in source-priority order and ends with one catch-all:
+
+```text
+return sweep:
+  | #first  => first_value
+  | #second => second_value
+  | _       => fallback
+```
+
+The first matching named arm wins when masks overlap. `_` supplies every lane
+that matched no named arm. Every sweep has exactly one final catch-all; the
+checker rejects a missing catch-all, duplicate tine, or arm after `_`.
+
+The leading bars align the alternatives as one selection surface. `=>` points
+from a lane condition to the value chosen for those lanes. `return sweep:`
+makes clear that this total selection is the rake's result, rather than another
+intermediate mask.
+
+Semantic evaluation begins with the catch-all value and applies named arms
+from last to first. Native lowering implements the same priority with vector
+selection or target mask instructions. It may introduce neither an undefined
+lane nor a synthetic default absent from the source.
+
+## Complete example
+
+<!-- rake-example:safe-through:start -->
 ```rake
-| tine name := predicate
+rake safe_root(values: f32s) -> f32s:
+  tine #valid when values >= <0.0>
+
+  through #valid else <0.0> into rooted:
+    sqrt(values)
+
+  return sweep:
+    | #valid => rooted
+    | _      => <0.0>
 ```
+<!-- rake-example:safe-through:end -->
 
-The predicate evaluates to a mask where each lane is `true` if the condition holds for that lane's data.
-
-### Tine Evaluation Order and Priority
-
-**Important**: Tines are evaluated and applied in declaration order. When multiple tines could match a lane, the **first declared tine wins**.
-
-This priority rule affects sweep blocks (see below) where the select chain is built in declaration order. For example:
-
-```rake
-| tine positive := x > 0.0
-| tine small := x < 10.0
-```
-
-For a value `x = 5.0`:
-- Both `positive` and `small` would match
-- In a sweep, `positive` takes precedence because it was declared first
-
-### Predicate Composition
-
-Tines can reference other tines to build composed predicates:
-
-```rake
-| tine hot := temp > 100.0
-| tine wet := humidity > 0.8
-| tine steam := #hot && #wet
-```
-
-The `#name` syntax references another tine's mask value.
-
-## Through Blocks
-
-A through block executes statements under a mask and produces a result:
-
-```rake
-through tine_name [else passthru]:
-    statements...
--> result_binding
-```
-
-### Masked Execution Semantics
-
-Through blocks use `arith.select` to implement masked execution. This means:
-
-1. The body is **always evaluated** for all lanes
-2. The final result is selected between the computed value (where mask is true) and the passthrough value (where mask is false)
-
-This approach is correct and efficient for **side-effect-free** code, which is enforced for all rake/crunch functions (they must be pure).
-
-### Implementation: arith.select vs vector.mask
-
-The current implementation uses `arith.select` rather than `vector.mask` for through blocks:
-
-```mlir
-// Through block emission
-%result = arith.select %mask, %computed, %passthru : vector<8xi1>, vector<8xf32>
-```
-
-**Rationale**:
-- `arith.select` is simpler and sufficient for pure computations
-- Since rake/crunch functions cannot have side effects, there is no observable difference between "computing but not using" versus "not computing"
-- LLVM can often optimize away unused computations
-
-**When vector.mask would be needed**:
-- If Rake ever supports side-effecting operations inside through blocks (e.g., memory writes, I/O)
-- For operations where computation itself has costs even if result is discarded (though LLVM handles this for most cases)
-
-### GPU Mode
-
-In GPU scalar mode, through blocks may emit `scf.if` instead of `arith.select`, allowing actual branch divergence. This is handled automatically by the emitter based on the emission mode.
-
-## Sweep
-
-A sweep block collects results from multiple tines into a single value:
-
-```rake
-sweep:
-    | tine1 -> value1
-    | tine2 -> value2
-    | _ -> default_value
--> result_binding
-```
-
-### Sweep Arm Priority (First Match Wins)
-
-Sweep arms are evaluated in **declaration order**, and the first matching tine determines the value for each lane. This is implemented as a nested `arith.select` chain:
-
-```mlir
-// For sweep with arms: positive -> a, negative -> b, _ -> c
-%sel0 = arith.select %negative_mask, %b, %c : ...
-%result = arith.select %positive_mask, %a, %sel0 : ...
-```
-
-The chain is built from last-to-first, so earlier-declared arms take priority.
-
-### Catch-All Arm (`_`)
-
-The catch-all arm (`| _ -> value`) provides a default for lanes that don't match any named tine.
-
-**Warning**: If no catch-all arm is present, lanes not matching any tine will have **undefined values** (initialized to zero in the current implementation, but this should not be relied upon). The type checker emits a warning when a sweep lacks a catch-all arm.
-
-### Type Consistency
-
-All sweep arms must produce values of compatible types. The type checker enforces that arm types match, with appropriate scalar-to-rack broadcasting.
-
-## Example: Ray-Sphere Intersection
-
-```rake
-rake intersect ray <sphere> -> hit:
-    // Setup
-    let oc = ray.origin - sphere.center
-    let a = dot(ray.dir, ray.dir)
-    let b = 2.0 * dot(oc, ray.dir)
-    let c = dot(oc, oc) - sphere.radius * sphere.radius
-    let disc = b * b - 4.0 * a * c
-
-    // Tines declare masks
-    | tine miss := disc < 0.0
-    | tine hit := disc >= 0.0
-
-    // Through blocks compute per-tine results
-    through hit:
-        let t = (-b - sqrt(disc)) / (2.0 * a)
-        let point = ray.origin + t * ray.dir
-        let normal = (point - sphere.center) / sphere.radius
-    -> intersection
-
-    // Sweep collects results
-    sweep:
-        | hit -> Hit { t := t, point := point, normal := normal }
-        | miss -> Miss {}
-        | _ -> Miss {}  // Explicit catch-all (optional but recommended)
-    -> hit
-```
-
-## Design Notes
-
-### Why First-Match Semantics?
-
-The first-match-wins rule was chosen for several reasons:
-
-1. **Predictability**: Programmers can reason about priority by reading top-to-bottom
-2. **Efficiency**: Generates a linear select chain, no need for mutual exclusivity checks
-3. **Flexibility**: Allows overlapping conditions when useful
-
-If you need mutually exclusive conditions, structure your predicates accordingly:
-
-```rake
-| tine cold := temp < 32.0
-| tine warm := temp >= 32.0 && temp < 80.0  // Explicitly exclude cold
-| tine hot := temp >= 80.0
-```
-
-### Future Considerations
-
-- **Mutual exclusivity checking**: Could add an optional lint/check for overlapping tines
-- **Parallel tine evaluation**: Current semantics allow but don't require short-circuit evaluation
-- **Nested tines**: Currently through blocks cannot contain new tine declarations
+Tines need not be mutually exclusive. Source order is the explicit priority
+mechanism; the final `_` makes the result total.

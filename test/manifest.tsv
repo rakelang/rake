@@ -1,0 +1,45 @@
+path	category	targets	widths	stage	outcome	diagnostic
+test/frontend/byte_domain.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/docs_pack_over.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/docs_safe_root.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/predicated_select.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/masked_partial_ops.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/mixed_storage_widen.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/over_loop.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/rake_with_tines.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/supported_run_int.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/supported_run_int64.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/sweep_overlap_priority.rk	frontend	x86-avx2	8	frontend	pass	-
+test/native/capability_fused.rk	native	x86-avx2	8	native-object	pass	-
+test/native/contracted_fma.rk	native	x86-avx2	8	native-object	pass	-
+test/native/docs_crunch.rk	native	x86-avx2	8	native-object	pass	-
+test/native/fused_contract.rk	native	x86-avx2	8	native-object	pass	-
+test/native/fused_fma.rk	native	x86-avx2	8	native-object	pass	-
+test/native/identity.rk	native	x86-avx2	8	native-object	pass	-
+test/native/add.rk	native	x86-avx2	8	native-object	pass	-
+test/native/simple_crunch.rk	native	x86-avx2	8	native-object	pass	-
+test/native/select.rk	native	x86-avx2	8	native-object	pass	-
+test/native/scalar_parameter.rk	native	x86-avx2	8	native-object	pass	-
+test/native/predication.rk	native	x86-avx2	8	native-object	pass	-
+test/native/supported_float_rack.rk	native	x86-avx2	8	native-object	pass	-
+test/native/reductions_scans.rk	native	x86-avx2	8	native-object	pass	-
+test/reject/fused_user_call.rk	reject	x86-avx2	8	frontend	reject	Fused binding contract for 'result' rejected: call to 'helper' is not a compiler-known pure built-in
+test/reject/fused_annotation_mismatch.rk	reject	x86-avx2	8	frontend	reject	Fused binding 'result' type mismatch: expected i32s, got f32s
+test/reject/fma_requires_float_racks.rk	reject	x86-avx2	8	frontend	reject	fma requires exactly three equal float rack operands
+test/reject/masked_modulo.rk	reject	x86-avx2	8	frontend	reject	feature 'masked.modulo'
+test/reject/masked_user_call.rk	reject	x86-avx2	8	frontend	reject	feature 'masked.user-call'
+test/reject/masked_cross_lane.rk	reject	x86-avx2	8	frontend	reject	feature 'masked.cross-lane'
+test/reject/narrow_column_requires_widen.rk	reject	x86-avx2	8	frontend	reject	call widen(column) explicitly
+test/reject/sweep_arm_after_catchall.rk	reject	x86-avx2	8	frontend	reject	Sweep arm after catch-all (_) is unreachable
+test/reject/sweep_duplicate_tine.rk	reject	x86-avx2	8	frontend	reject	Duplicate tine arm in sweep: #active
+test/reject/sweep_missing_catchall.rk	reject	x86-avx2	8	frontend	reject	Sweep must end with a catch-all (_) arm
+test/reject/tine_forward_reference.rk	reject	x86-avx2	8	frontend	reject	Reference to undefined tine: #later
+test/reject/tine_duplicate.rk	reject	x86-avx2	8	frontend	reject	Duplicate tine declaration: #active
+test/reject/reduction_requires_float_rack.rk	reject	x86-avx2	8	frontend	reject	Floating-point reduction requires float rack
+test/reject/fused_reduction.rk	reject	x86-avx2	8	frontend	reject	Fused binding contract for 'result' rejected: reduction is not an inlineable expression shape
+examples/future/demo.rk	future	-	-	design	excluded	Uses unavailable single definitions
+examples/future/broadcasting.rk	future	-	-	design	excluded	Uses proposed angle-bracket literal syntax and implicit results
+examples/future/field_access.rk	future	-	-	design	excluded	Uses unavailable single definitions
+examples/future/lane_insertion.rk	future	-	-	design	excluded	Uses unavailable lane insertion
+examples/future/reductions.rk	future	-	-	design	excluded	Uses unavailable reductions and scans
+examples/future/rearrangements.rk	future	-	-	design	excluded	Uses unavailable static lane rearrangements

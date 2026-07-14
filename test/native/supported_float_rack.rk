@@ -1,0 +1,2 @@
+crunch add(a: f32s, b: f32s) -> f32s:
+  return a + b

@@ -1,4 +1,4 @@
-(** Rake 0.2.0 Abstract Syntax Tree
+(** Rake abstract syntax tree
 
     Core design: Tines declare masks, Through executes under masks,
     Sweep collects results. Data "rakes through" tine patterns.
@@ -67,10 +67,17 @@ type binop =
   | And | Or
   (* Pipeline *)
   | Pipe
-  (* Shifts and rotates *)
+  (** Legacy representation retained while downstream semantic passes migrate.
+      The parser never produces these constructors; lane shifts and rotates
+      use [EShift] and [ERotate]. *)
   | Shl | Shr | Rol | Ror
-  (* Interleave *)
+  (** Low-half lane zip. Unlike shifts and rotates, interleave is an ordinary
+      two-rack binary form. *)
   | Interleave
+[@@deriving show]
+
+(** Direction in which lane values move within a rack. *)
+type lane_direction = Left | Right
 [@@deriving show]
 
 (** Unary operators *)
@@ -105,7 +112,7 @@ and expr_kind =
   | ECall of ident * expr list         (** f(a, b, c) *)
   | ELambda of param list * expr       (** fun x y -> body *)
   | EPipe of expr * expr               (** x |> f *)
-  | EFusedPipe of expr * expr          (** x <| f (right-to-left, must fuse) *)
+  | EFusedPipe of expr * expr          (** x <| f (reserved optimization contract) *)
 
   (* Bindings *)
   | ELet of binding * expr             (** let x = e1 in e2 *)
@@ -125,10 +132,10 @@ and expr_kind =
   | EReduce of reduceop * expr         (** x \+/ *)
   | EScan of reduceop * expr           (** x \+\ *)
 
-  (* Shuffle *)
+  (* Static lane rearrangement *)
   | EShuffle of expr * int list        (** v ~> [3,2,1,0] *)
-  | EShift of expr * int * bool        (** v >> 2, v << 2 (bool = right) *)
-  | ERotate of expr * int * bool       (** v >>> 2, v <<< 2 *)
+  | EShift of expr * int * lane_direction  (** v << 2, v >> 2 *)
+  | ERotate of expr * int * lane_direction (** v <<< 2, v >>> 2 *)
 
   (* Memory *)
   | EGather of expr * expr             (** base[offsets] *)
@@ -195,10 +202,9 @@ and predicate_kind =
 
 and cmp_op = CLt | CLe | CGt | CGe | CEq | CNe
 
-(** Through block: execute under a mask
-    through tine [else passthru]:
+(** Through block: execute under a mask.
+    through #tine else <passthrough> into result_binding:
       body
-    -> result_binding
 *)
 and through = {
   through_tine: tine_ref;              (** which tine(s) to use *)
@@ -212,11 +218,10 @@ and tine_ref =
   | TRSingle of ident                  (** through tine_name *)
   | TRComposed of predicate            (** through (a && b) *)
 
-(** Sweep block: collect results from tines
-    sweep:
-      | tine -> value
-      ...
-    -> result
+(** Sweep block: collect results from tines.
+    return sweep:
+      | #tine => value
+      | _     => fallback
 *)
 and sweep = {
   sweep_arms: sweep_arm list;
@@ -235,9 +240,10 @@ and loc_binding = {
   loc_expr: expr;
 }
 
-(** Fused binding: must fuse, no intermediate storage *)
+(** Fused binding: pure expression subject to the inlineable-SSA contract *)
 and fused_binding = {
   fused_name: ident;
+  fused_type: typ option;
   fused_expr: expr;
 }
 
@@ -247,13 +253,13 @@ and stmt_kind =
   | SLet of binding                    (** let x = e (SSA, immutable) *)
   | SLocBind of loc_binding            (** x := e (introduces mutable storage) *)
   | SAssign of ident * expr            (** x <- e (mutates existing location) *)
-  | SFused of fused_binding            (** | x <| e (must fuse, no intermediate) *)
+  | SFused of fused_binding            (** | x <| e (verified inlineable SSA) *)
   | SExpr of expr                      (** expression statement *)
-  | SOver of over_loop                 (** over pack, count |> chunk: body *)
+  | SOver of over_loop                 (** for chunk in pack using f32s up to <count> *)
 
-(** Over loop: iterate over pack in stack-sized chunks
-    over pack, count |> chunk:
-      body
+(** Pack traversal: iterate over storage in target-native rack chunks.
+    for chunk in pack using f32s up to <count>:
+      yield expression
 
     Expands to:
       for i = 0 to ceil(count / lanes):
@@ -262,6 +268,7 @@ and stmt_kind =
 *)
 and over_loop = {
   over_pack: ident;                    (** pack variable to iterate *)
+  over_domain: prim;                   (** physical rack type fixing logical lanes *)
   over_count: expr;                    (** element count expression *)
   over_chunk: ident;                   (** binding for each stack chunk *)
   over_body: stmt list;                (** body executed per chunk *)
@@ -286,7 +293,7 @@ and def_kind =
 
   (* Function definitions *)
   | DCrunch of ident * param list * result_spec * stmt list
-      (** crunch name params -> result: body *)
+      (** crunch name(parameters) -> type: body return expression *)
   | DRake of ident * param list * result_spec * stmt list * tine list * through list * sweep
       (** rake name params -> result: setup tines through* sweep *)
   | DRun of ident * param list * result_spec * stmt list

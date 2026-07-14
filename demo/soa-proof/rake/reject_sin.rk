@@ -1,0 +1,6 @@
+~~ Primary fail-closed proof: `sin` is a frontend-known pure rack operation,
+~~ but no current native profile owns a compliant inline vector-sine sequence.
+~~ Rake must reject this kernel before assembly rather than call a helper or
+~~ scalarize the rack lane by lane.
+crunch reject_sin values -> result:
+  | result <| sin(values)

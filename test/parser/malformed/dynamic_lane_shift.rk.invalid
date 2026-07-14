@@ -1,0 +1,2 @@
+crunch dynamic_lane_shift(values: f32s, amount: i32s) -> f32s:
+  return shift_left(values, amount)

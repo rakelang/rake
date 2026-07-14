@@ -1,4 +1,4 @@
-(** Rake 0.2.0 Parser
+(** Rake parser
 
     Grammar for the tine/through/sweep execution model.
 
@@ -21,46 +21,70 @@ let mk_loc startpos _endpos = {
 }
 
 let mk_node v startpos endpos = { v; loc = mk_loc startpos endpos }
+
+(* This name cannot be written by a Rake program, so an explicit return can be
+   represented by the existing named-result lowering without a collision. *)
+let canonical_result_name = "$return"
+
+let result_of_type ty = {
+  result_name = canonical_result_name;
+  result_type = Some ty;
+}
+
+let return_binding expression startpos endpos =
+  mk_node (SLet {
+    bind_name = canonical_result_name;
+    bind_type = None;
+    bind_expr = expression;
+  }) startpos endpos
+
+let named_call name arguments =
+  match name, arguments with
+  | "sum", [operand] -> EReduce (RAdd, operand)
+  | "product", [operand] -> EReduce (RMul, operand)
+  | "minimum", [operand] -> EReduce (RMin, operand)
+  | "maximum", [operand] -> EReduce (RMax, operand)
+  | "all", [operand] -> EReduce (RAnd, operand)
+  | "any", [operand] -> EReduce (ROr, operand)
+  | "scan_sum", [operand] -> EScan (RAdd, operand)
+  | "scan_product", [operand] -> EScan (RMul, operand)
+  | "scan_minimum", [operand] -> EScan (RMin, operand)
+  | "scan_maximum", [operand] -> EScan (RMax, operand)
+  | "zip_low", [left; right] -> EBinop (left, Interleave, right)
+  | _ -> ECall (name, arguments)
+
 %}
 
 (* Tokens: Types *)
-%token FLOAT DOUBLE INT INT8 INT16 INT64 UINT UINT8 UINT16 UINT64 BOOL
-%token VEC2 VEC3 VEC4 MAT3 MAT4
-%token RACK MASK STACK SINGLE PACK TYPE
+%token BOOL
+%token F32 F64 I32 I8 I16 I64 U32 U8 U16 U64
+%token F32S F64S I32S I8S I16S I64S U32S U8S U16S U64S BOOLS
+%token MASK STACK PACK
 
 (* Tokens: Functions *)
 %token CRUNCH RAKE RUN
 
 (* Tokens: Tines and control *)
 %token <string> TINE_REF
-%token THROUGH SWEEP ELSE RESULTS IN
+%token TINE WHEN THROUGH SWEEP ELSE INTO RETURN YIELD IN
 
 (* Tokens: Iteration *)
-%token OVER REPEAT TIMES UNTIL
+%token FOR USING UP TO
 
 (* Tokens: Bindings *)
-%token LET FUN WITH AS
+%token LET
 
 (* Tokens: Lane operations *)
-%token LANES FMA OUTER COMPRESS EXPAND BROADCAST
+%token LANES FMA SHUFFLE_FN SHIFT_LEFT_FN SHIFT_RIGHT_FN
+%token ROTATE_LEFT_FN ROTATE_RIGHT_FN
 
 (* Tokens: Boolean *)
-%token TRUE FALSE IS NOT AND OR
+%token TRUE FALSE NOT AND OR
 
 (* Tokens: Operators *)
 %token PLUS MINUS STAR SLASH PERCENT
 %token LT LE GT GE EQ NE
-%token AMPAMP PIPEPIPE BANG
-%token PIPE FUSED_LEFT ARROW ASSIGN COLONEQ
-%token SHUFFLE INTERLEAVE
-%token SHL SHR ROL ROR
-%token COMPRESS_STORE EXPAND_LOAD
-
-(* Tokens: Reduction ligatures *)
-%token REDUCE_ADD REDUCE_MUL REDUCE_MIN REDUCE_MAX REDUCE_OR REDUCE_AND
-
-(* Tokens: Scan ligatures *)
-%token SCAN_ADD SCAN_MUL SCAN_MIN SCAN_MAX
+%token FUSED_LEFT ARROW FAT_ARROW ASSIGN COLONEQ
 
 (* Tokens: Delimiters *)
 %token LPAREN RPAREN LBRACE RBRACE LBRACKET RBRACKET
@@ -69,28 +93,13 @@ let mk_node v startpos endpos = { v; loc = mk_loc startpos endpos }
 (* Tokens: Literals *)
 %token <int64> INT_LIT
 %token <float> FLOAT_LIT
-%token <string> STRING_LIT
+%token <float> SCALAR_FLOAT_LIT
+%token <int64> SCALAR_INT_LIT
 %token <string> IDENT
+%token <string> TYPE_IDENT
 %token <string> SCALAR_IDENT
 
 %token EOF
-
-(* Precedence: lowest to highest *)
-%right ARROW
-%left PIPE FUSED_LEFT
-%left PIPEPIPE OR
-%left AMPAMP AND
-%left EQ NE
-%left LT LE GT GE IS
-%left PLUS MINUS
-%left STAR SLASH PERCENT
-%left SHL SHR ROL ROR
-%left INTERLEAVE
-%right SHUFFLE
-%nonassoc BANG NOT
-%nonassoc REDUCE_ADD REDUCE_MUL REDUCE_MIN REDUCE_MAX REDUCE_OR REDUCE_AND
-%nonassoc SCAN_ADD SCAN_MUL SCAN_MIN SCAN_MAX
-%left DOT AT
 
 %start <Ast.program> program
 
@@ -101,11 +110,8 @@ let mk_node v startpos endpos = { v; loc = mk_loc startpos endpos }
 (* ═══════════════════════════════════════════════════════════════════ *)
 
 program:
-  | ms = list(module_) EOF { ms }
-
-module_:
-  | ds = nonempty_list(definition) {
-      { mod_name = "main"; mod_defs = ds }
+  | ds = nonempty_list(definition) EOF {
+      [ { mod_name = "main"; mod_defs = ds } ]
     }
 
 (* ═══════════════════════════════════════════════════════════════════ *)
@@ -114,92 +120,56 @@ module_:
 
 definition:
   | d = stack_def { d }
-  | d = single_def { d }
-  | d = type_def { d }
   | d = crunch_def { d }
   | d = rake_def { d }
   | d = run_def { d }
 
-(* stack Particle { pos: vec3 rack, vel: vec3 rack } *)
+(* stack Particle { f32: position, velocity; u8: age; } *)
 stack_def:
-  | STACK name = IDENT LBRACE fs = separated_list(COMMA, field) RBRACE {
-      mk_node (DStack (name, fs)) $startpos $endpos
+  | STACK name = TYPE_IDENT LBRACE groups = nonempty_list(field_group) RBRACE {
+      mk_node (DStack (name, List.concat groups)) $startpos $endpos
     }
 
-(* single Config { dt: float, gravity: float } *)
-single_def:
-  | SINGLE name = IDENT LBRACE fs = separated_list(COMMA, field) RBRACE {
-      mk_node (DSingle (name, fs)) $startpos $endpos
+field_group:
+  | p = storage_type COLON names = separated_nonempty_list(COMMA, IDENT) SEMICOLON {
+      List.map (fun name ->
+        { field_name = name; field_type = mk_node (TScalar p) $startpos $endpos }) names
     }
 
-(* type alias = existing_type *)
-type_def:
-  | TYPE name = IDENT EQ t = typ {
-      mk_node (DType (name, t)) $startpos $endpos
-    }
+storage_type:
+  | p = prim_type { p }
 
-field:
-  | name = IDENT COLON t = typ {
-      { field_name = name; field_type = t }
-    }
-
-(* crunch name params -> result: body
-   Supports three forms:
-   1. Bare params:    crunch dot ax ay az -> d:
-   2. Parenthesized:  crunch dot (ax, ay, az) -> d:
-   3. Type spreading: crunch dot (Vec3 as ax ay az) -> d:
-*)
+(* crunch name(parameters) -> result-type: body return expression *)
 crunch_def:
-  (* Original: bare space-separated params *)
-  | CRUNCH name = IDENT ps = list(param) ARROW r = result_spec COLON
-    body = stmt_list {
-      mk_node (DCrunch (name, ps, r, body)) $startpos $endpos
+  (* Canonical: crunch name(parameters) -> result-type: ... return expression *)
+  | CRUNCH name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+    ARROW result_type = typ COLON body = list(stmt) RETURN value = expr {
+      let result = result_of_type result_type in
+      let returned = return_binding value $startpos(value) $endpos(value) in
+      mk_node (DCrunch (name, List.concat ps, result, body @ [returned]))
+        $startpos $endpos
     }
-  (* New: comma-separated params in parens, with optional type spreading *)
-  | CRUNCH name = IDENT LPAREN ps = separated_nonempty_list(COMMA, crunch_param) RPAREN ARROW r = result_spec COLON
-    body = stmt_list {
-      mk_node (DCrunch (name, List.concat ps, r, body)) $startpos $endpos
-    }
-
 (* Parameters inside parenthesized crunch definition *)
 crunch_param:
-  (* Single untyped rack param: ax *)
-  | name = IDENT { [PRack (name, None)] }
-  (* Single typed param: ax : float rack *)
+  (* Typed rack or pack parameter. *)
   | name = IDENT COLON t = typ { [PRack (name, Some t)] }
-  (* Single scalar param: <x> *)
-  | name = SCALAR_IDENT { [PScalar (name, None)] }
-  (* Single typed scalar: <x> : float *)
-  | name = SCALAR_IDENT COLON t = typ { [PScalar (name, Some t)] }
-  (* Type spreading: Vec3 as ax ay az *)
-  | tname = IDENT AS names = nonempty_list(IDENT) { [PSpread (names, tname)] }
+  (* Canonical typed scalar: <name: type> *)
+  | LT name = IDENT COLON t = typ GT { [PScalar (name, Some t)] }
 
-(* ═══════════════════════════════════════════════════════════════════ *)
-(* Rake definition with tine/through/sweep                              *)
-(*                                                                       *)
-(* rake name params -> result:                                           *)
-(*   let disc = ...           ~~ optional setup                          *)
-(*                                                                       *)
-(*   | #miss  := (disc < <0.0>)                                          *)
-(*   | #maybe := (!#miss)                                                *)
-(*   | #hit   := (#maybe && t > <epsilon>)                               *)
-(*                                                                       *)
-(*   through #maybe: ...computation... -> t_value                        *)
-(*   through #hit:   ...computation... -> hit_result                     *)
-(*                                                                       *)
-(*   sweep:                                                              *)
-(*     | #miss -> miss_value                                             *)
-(*     | #hit  -> hit_result                                             *)
-(*   -> result                                                           *)
-(* ═══════════════════════════════════════════════════════════════════ *)
+(* Rake definitions add source-ordered tines, guarded through regions,
+   and a total priority sweep to the typed parameter/result form. *)
 
 rake_def:
-  | RAKE name = IDENT ps = list(param) ARROW r = result_spec COLON
+  | RAKE name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+    ARROW result_type = typ COLON
     setup = rake_setup
-    ts = nonempty_list(tine_decl)
-    ths = nonempty_list(through_block)
-    sw = sweep_block {
-      mk_node (DRake (name, ps, r, setup, ts, ths, sw)) $startpos $endpos
+    ts = nonempty_list(canonical_tine_decl)
+    ths = nonempty_list(canonical_through_block)
+    RETURN SWEEP COLON arms = nonempty_list(canonical_sweep_arm) {
+      let result = result_of_type result_type in
+      let sweep = { sweep_arms = arms; sweep_binding = canonical_result_name } in
+      mk_node (DRake (name, List.concat ps, result, setup, ts, ths, sweep))
+        $startpos $endpos
     }
 
 (* Setup statements before tines (let bindings for computation shared by all tines) *)
@@ -211,71 +181,42 @@ rake_setup_stmt:
 
 (* run name params -> result: body *)
 run_def:
-  | RUN name = IDENT ps = list(param) ARROW r = result_spec COLON
-    body = stmt_list {
-      mk_node (DRun (name, ps, r, body)) $startpos $endpos
+  | RUN name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+    ARROW result_type = typ COLON traversal = canonical_traversal {
+      mk_node (DRun
+        (name, List.concat ps, result_of_type result_type, [traversal]))
+        $startpos $endpos
     }
-
-result_spec:
-  | name = IDENT { { result_name = name; result_type = None } }
-  | LPAREN name = IDENT COLON t = typ RPAREN {
-      { result_name = name; result_type = Some t }
-    }
-  | LPAREN names = separated_nonempty_list(COMMA, IDENT) RPAREN {
-      (* Tuple result - use first name, type inferred *)
-      { result_name = List.hd names; result_type = None }
-    }
-
-(* ═══════════════════════════════════════════════════════════════════ *)
-(* Parameters                                                           *)
-(* ═══════════════════════════════════════════════════════════════════ *)
-
-param:
-  | name = IDENT { PRack (name, None) }
-  | LPAREN name = IDENT COLON t = typ RPAREN { PRack (name, Some t) }
-  | name = SCALAR_IDENT { PScalar (name, None) }
-  | LPAREN name = SCALAR_IDENT COLON t = typ RPAREN { PScalar (name, Some t) }
 
 (* ═══════════════════════════════════════════════════════════════════ *)
 (* Types                                                                *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
 typ:
-  | t = prim_type RACK { mk_node (TRack t) $startpos $endpos }
-  | t = compound_type RACK { mk_node (TCompoundRack t) $startpos $endpos }
+  | t = rack_prim_type { mk_node (TRack t) $startpos $endpos }
   | t = prim_type { mk_node (TScalar t) $startpos $endpos }
-  | t = compound_type { mk_node (TCompoundScalar t) $startpos $endpos }
-  | name = IDENT STACK { mk_node (TStack name) $startpos $endpos }
-  | name = IDENT PACK { mk_node (TPack name) $startpos $endpos }
-  | name = IDENT SINGLE { mk_node (TSingle name) $startpos $endpos }
+  | STACK name = TYPE_IDENT { mk_node (TStack name) $startpos $endpos }
+  | PACK name = TYPE_IDENT { mk_node (TPack name) $startpos $endpos }
   | MASK { mk_node TMask $startpos $endpos }
-  | LPAREN ts = separated_list(COMMA, typ) RPAREN ARROW r = typ {
-      mk_node (TFun (ts, r)) $startpos $endpos
-    }
-  | LPAREN ts = separated_nonempty_list(COMMA, typ) RPAREN {
-      mk_node (TTuple ts) $startpos $endpos
-    }
-  | LPAREN RPAREN { mk_node TUnit $startpos $endpos }
 
 prim_type:
-  | FLOAT { PFloat }
-  | DOUBLE { PDouble }
-  | INT { PInt }
-  | INT8 { PInt8 }
-  | INT16 { PInt16 }
-  | INT64 { PInt64 }
-  | UINT { PUint }
-  | UINT8 { PUint8 }
-  | UINT16 { PUint16 }
-  | UINT64 { PUint64 }
+  | F32 { PFloat }
+  | F64 { PDouble }
+  | I32 { PInt }
+  | I8 { PInt8 }
+  | I16 { PInt16 }
+  | I64 { PInt64 }
+  | U32 { PUint }
+  | U8 { PUint8 }
+  | U16 { PUint16 }
+  | U64 { PUint64 }
   | BOOL { PBool }
 
-compound_type:
-  | VEC2 { CVec2 }
-  | VEC3 { CVec3 }
-  | VEC4 { CVec4 }
-  | MAT3 { CMat3 }
-  | MAT4 { CMat4 }
+rack_prim_type:
+  | F32S { PFloat } | F64S { PDouble }
+  | I32S { PInt } | I8S { PInt8 } | I16S { PInt16 } | I64S { PInt64 }
+  | U32S { PUint } | U8S { PUint8 } | U16S { PUint16 } | U64S { PUint64 }
+  | BOOLS { PBool }
 
 (* ═══════════════════════════════════════════════════════════════════ *)
 (* Tine declarations                                                    *)
@@ -289,8 +230,8 @@ compound_type:
 (*   | #hit   := (#maybe && t > <sphere.radius>)                         *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-tine_decl:
-  | PIPE_CHAR name = TINE_REF COLONEQ LPAREN p = predicate RPAREN {
+canonical_tine_decl:
+  | TINE name = TINE_REF WHEN p = predicate {
       { tine_name = name; tine_pred = p }
     }
 
@@ -311,25 +252,18 @@ predicate:
   | p = pred_or { p }
 
 pred_or:
-  | l = pred_or PIPEPIPE r = pred_and {
-      mk_node (POr (l, r)) $startpos $endpos
-    }
   | l = pred_or OR r = pred_and {
       mk_node (POr (l, r)) $startpos $endpos
     }
   | p = pred_and { p }
 
 pred_and:
-  | l = pred_and AMPAMP r = pred_not {
-      mk_node (PAnd (l, r)) $startpos $endpos
-    }
   | l = pred_and AND r = pred_not {
       mk_node (PAnd (l, r)) $startpos $endpos
     }
   | p = pred_not { p }
 
 pred_not:
-  | BANG p = pred_not { mk_node (PNot p) $startpos $endpos }
   | NOT p = pred_not { mk_node (PNot p) $startpos $endpos }
   | p = pred_cmp { p }
 
@@ -341,8 +275,6 @@ pred_cmp:
   | l = pred_expr GE r = pred_expr { mk_node (PCmp (l, CGe, r)) $startpos $endpos }
   | l = pred_expr EQ r = pred_expr { mk_node (PCmp (l, CEq, r)) $startpos $endpos }
   | l = pred_expr NE r = pred_expr { mk_node (PCmp (l, CNe, r)) $startpos $endpos }
-  | l = pred_expr IS r = pred_expr { mk_node (PIs (l, r)) $startpos $endpos }
-  | l = pred_expr IS NOT r = pred_expr { mk_node (PIsNot (l, r)) $startpos $endpos }
   (* Tine reference with # - unambiguous! *)
   | name = TINE_REF { mk_node (PTineRef name) $startpos $endpos }
   (* Parenthesized predicate for grouping: (#a && #b) *)
@@ -374,6 +306,12 @@ pred_atom:
   | f = FLOAT_LIT { mk_node (EFloat f) $startpos $endpos }
   | TRUE { mk_node (EBool true) $startpos $endpos }
   | FALSE { mk_node (EBool false) $startpos $endpos }
+  | n = SCALAR_INT_LIT {
+      mk_node (EBroadcast (mk_node (EInt n) $startpos $endpos)) $startpos $endpos
+    }
+  | f = SCALAR_FLOAT_LIT {
+      mk_node (EBroadcast (mk_node (EFloat f) $startpos $endpos)) $startpos $endpos
+    }
   | e = pred_atom DOT name = IDENT { mk_node (EField (e, name)) $startpos $endpos }
   (* Broadcast with field access: <sphere.radius> *)
   | LT e = broadcast_inner GT { mk_node (EBroadcast e) $startpos $endpos }
@@ -407,13 +345,12 @@ broadcast_inner:
 (*   through #maybe else <0.0>: ... -> result                            *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-through_block:
-  | THROUGH tr = tine_ref pt = option(else_clause) COLON
-    body = through_body
-    result = expr ARROW binding = IDENT {
+canonical_through_block:
+  | THROUGH tr = tine_ref ELSE pt = simple_expr INTO binding = IDENT COLON
+    body = list(through_stmt) result = expr {
       {
         through_tine = tr;
-        through_passthru = pt;
+        through_passthru = Some pt;
         through_body = body;
         through_result = result;
         through_binding = binding;
@@ -424,15 +361,16 @@ tine_ref:
   | name = TINE_REF { TRSingle name }
   | LPAREN p = predicate RPAREN { TRComposed p }
 
-else_clause:
-  | ELSE e = simple_expr { e }
-
-(* Through body: sequence of let bindings *)
-through_body:
-  | ss = list(through_stmt) { ss }
-
 through_stmt:
   | LET b = binding { mk_node (SLet b) $startpos $endpos }
+  | PIPE_CHAR name = IDENT annotation = option(type_annotation)
+    FUSED_LEFT e = expr {
+      mk_node (SFused {
+        fused_name = name;
+        fused_type = annotation;
+        fused_expr = e;
+      }) $startpos $endpos
+    }
 
 (* Simple expression for else clause (no ambiguity with through body) *)
 simple_expr:
@@ -441,6 +379,12 @@ simple_expr:
   | f = FLOAT_LIT { mk_node (EFloat f) $startpos $endpos }
   | TRUE { mk_node (EBool true) $startpos $endpos }
   | FALSE { mk_node (EBool false) $startpos $endpos }
+  | n = SCALAR_INT_LIT {
+      mk_node (EBroadcast (mk_node (EInt n) $startpos $endpos)) $startpos $endpos
+    }
+  | f = SCALAR_FLOAT_LIT {
+      mk_node (EBroadcast (mk_node (EFloat f) $startpos $endpos)) $startpos $endpos
+    }
   | LT e = broadcast_inner GT { mk_node (EBroadcast e) $startpos $endpos }
 
 (* ═══════════════════════════════════════════════════════════════════ *)
@@ -455,16 +399,11 @@ simple_expr:
 (*   -> final_result                                                     *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-sweep_block:
-  | SWEEP COLON arms = nonempty_list(sweep_arm) ARROW binding = IDENT {
-      { sweep_arms = arms; sweep_binding = binding }
-    }
-
-sweep_arm:
-  | PIPE_CHAR name = TINE_REF ARROW e = expr {
+canonical_sweep_arm:
+  | PIPE_CHAR name = TINE_REF FAT_ARROW e = expr {
       { arm_tine = Some name; arm_value = e }
     }
-  | PIPE_CHAR UNDERSCORE ARROW e = expr {
+  | PIPE_CHAR UNDERSCORE FAT_ARROW e = expr {
       { arm_tine = None; arm_value = e }
     }
 
@@ -472,22 +411,24 @@ sweep_arm:
 (* Statements                                                           *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-stmt_list:
-  | ss = list(stmt) { ss }
-
 stmt:
   | LET b = binding { mk_node (SLet b) $startpos $endpos }
   | name = IDENT ASSIGN e = expr { mk_node (SAssign (name, e)) $startpos $endpos }
   (* Location binding: x := e (introduces mutable storage) *)
   | name = IDENT COLONEQ e = expr { mk_node (SLocBind { loc_name = name; loc_type = None; loc_expr = e }) $startpos $endpos }
+  | name = IDENT COLON t = typ COLONEQ e = expr {
+      mk_node (SLocBind { loc_name = name; loc_type = Some t; loc_expr = e }) $startpos $endpos
+    }
   | LPAREN name = IDENT COLON t = typ RPAREN COLONEQ e = expr {
       mk_node (SLocBind { loc_name = name; loc_type = Some t; loc_expr = e }) $startpos $endpos
     }
-  (* Fused binding: | x <| e (must fuse, no intermediate storage) *)
+  (* Fused binding: | x <| e (verified inlineable-SSA contract) *)
   | PIPE_CHAR name = IDENT FUSED_LEFT e = expr {
-      mk_node (SFused { fused_name = name; fused_expr = e }) $startpos $endpos
+      mk_node (SFused { fused_name = name; fused_type = None; fused_expr = e }) $startpos $endpos
     }
-  | o = over_stmt { o }
+  | PIPE_CHAR name = IDENT COLON t = typ FUSED_LEFT e = expr {
+      mk_node (SFused { fused_name = name; fused_type = Some t; fused_expr = e }) $startpos $endpos
+    }
   | e = expr { mk_node (SExpr e) $startpos $endpos }
 
 (* ═══════════════════════════════════════════════════════════════════ *)
@@ -501,29 +442,20 @@ stmt:
 (* Tail iteration is automatically masked for count % lanes != 0.       *)
 (* ═══════════════════════════════════════════════════════════════════ *)
 
-over_stmt:
-  | OVER pack = IDENT COMMA count = over_count_expr PIPE chunk = IDENT COLON
-    body = over_body {
+canonical_traversal:
+  | FOR chunk = IDENT IN pack = IDENT USING domain = rack_prim_type
+    UP TO count = simple_expr COLON body = list(stmt) YIELD value = expr {
       mk_node (SOver {
         over_pack = pack;
+        over_domain = domain;
         over_count = count;
         over_chunk = chunk;
-        over_body = body;
+        over_body = body @ [mk_node (SExpr value) $startpos(value) $endpos(value)];
       }) $startpos $endpos
     }
 
-over_count_expr:
-  | name = IDENT { mk_node (EVar name) $startpos $endpos }
-  | name = SCALAR_IDENT { mk_node (EScalarVar name) $startpos $endpos }
-  | n = INT_LIT { mk_node (EInt n) $startpos $endpos }
-
-over_body:
-  | ss = nonempty_list(over_body_stmt) { ss }
-
-over_body_stmt:
-  | LET b = binding { mk_node (SLet b) $startpos $endpos }
-  | name = IDENT ASSIGN e = expr { mk_node (SAssign (name, e)) $startpos $endpos }
-  | e = expr { mk_node (SExpr e) $startpos $endpos }
+type_annotation:
+  | COLON t = typ { t }
 
 binding:
   | name = IDENT EQ e = expr {
@@ -538,25 +470,16 @@ binding:
 (* ═══════════════════════════════════════════════════════════════════ *)
 
 expr:
-  | e = expr_pipe { e }
-
-expr_pipe:
-  | l = expr_pipe PIPE r = expr_or {
-      mk_node (EPipe (l, r)) $startpos $endpos
-    }
-  | l = expr_pipe FUSED_LEFT r = expr_or {
-      mk_node (EFusedPipe (l, r)) $startpos $endpos
-    }
   | e = expr_or { e }
 
 expr_or:
-  | l = expr_or PIPEPIPE r = expr_and {
+  | l = expr_or OR r = expr_and {
       mk_node (EBinop (l, Or, r)) $startpos $endpos
     }
   | e = expr_and { e }
 
 expr_and:
-  | l = expr_and AMPAMP r = expr_cmp {
+  | l = expr_and AND r = expr_cmp {
       mk_node (EBinop (l, And, r)) $startpos $endpos
     }
   | e = expr_cmp { e }
@@ -576,49 +499,18 @@ expr_add:
   | e = expr_mul { e }
 
 expr_mul:
-  | l = expr_mul STAR r = expr_shift { mk_node (EBinop (l, Mul, r)) $startpos $endpos }
-  | l = expr_mul SLASH r = expr_shift { mk_node (EBinop (l, Div, r)) $startpos $endpos }
-  | l = expr_mul PERCENT r = expr_shift { mk_node (EBinop (l, Mod, r)) $startpos $endpos }
-  | e = expr_shift { e }
-
-expr_shift:
-  | l = expr_shift SHL r = expr_interleave { mk_node (EBinop (l, Shl, r)) $startpos $endpos }
-  | l = expr_shift SHR r = expr_interleave { mk_node (EBinop (l, Shr, r)) $startpos $endpos }
-  | l = expr_shift ROL r = expr_interleave { mk_node (EBinop (l, Rol, r)) $startpos $endpos }
-  | l = expr_shift ROR r = expr_interleave { mk_node (EBinop (l, Ror, r)) $startpos $endpos }
-  | e = expr_interleave { e }
-
-expr_interleave:
-  | l = expr_interleave INTERLEAVE r = expr_unary {
-      mk_node (EBinop (l, Interleave, r)) $startpos $endpos
-    }
+  | l = expr_mul STAR r = expr_unary { mk_node (EBinop (l, Mul, r)) $startpos $endpos }
+  | l = expr_mul SLASH r = expr_unary { mk_node (EBinop (l, Div, r)) $startpos $endpos }
+  | l = expr_mul PERCENT r = expr_unary { mk_node (EBinop (l, Mod, r)) $startpos $endpos }
   | e = expr_unary { e }
 
 expr_unary:
   | MINUS e = expr_unary { mk_node (EUnop (Neg, e)) $startpos $endpos }
-  | BANG e = expr_unary { mk_node (EUnop (Not, e)) $startpos $endpos }
   | NOT e = expr_unary { mk_node (EUnop (Not, e)) $startpos $endpos }
-  | e = expr_reduce { e }
-
-expr_reduce:
-  | e = expr_postfix REDUCE_ADD { mk_node (EReduce (RAdd, e)) $startpos $endpos }
-  | e = expr_postfix REDUCE_MUL { mk_node (EReduce (RMul, e)) $startpos $endpos }
-  | e = expr_postfix REDUCE_MIN { mk_node (EReduce (RMin, e)) $startpos $endpos }
-  | e = expr_postfix REDUCE_MAX { mk_node (EReduce (RMax, e)) $startpos $endpos }
-  | e = expr_postfix REDUCE_OR { mk_node (EReduce (ROr, e)) $startpos $endpos }
-  | e = expr_postfix REDUCE_AND { mk_node (EReduce (RAnd, e)) $startpos $endpos }
-  | e = expr_postfix SCAN_ADD { mk_node (EScan (RAdd, e)) $startpos $endpos }
-  | e = expr_postfix SCAN_MUL { mk_node (EScan (RMul, e)) $startpos $endpos }
-  | e = expr_postfix SCAN_MIN { mk_node (EScan (RMin, e)) $startpos $endpos }
-  | e = expr_postfix SCAN_MAX { mk_node (EScan (RMax, e)) $startpos $endpos }
   | e = expr_postfix { e }
 
 expr_postfix:
   | e = expr_postfix DOT name = IDENT { mk_node (EField (e, name)) $startpos $endpos }
-  | e = expr_postfix AT i = expr_primary { mk_node (EExtract (e, i)) $startpos $endpos }
-  | e = expr_postfix SHUFFLE LBRACKET is = separated_list(COMMA, int_lit) RBRACKET {
-      mk_node (EShuffle (e, is)) $startpos $endpos
-    }
   | e = expr_primary { e }
 
 expr_primary:
@@ -627,6 +519,12 @@ expr_primary:
   | f = FLOAT_LIT { mk_node (EFloat f) $startpos $endpos }
   | TRUE { mk_node (EBool true) $startpos $endpos }
   | FALSE { mk_node (EBool false) $startpos $endpos }
+  | n = SCALAR_INT_LIT {
+      mk_node (EBroadcast (mk_node (EInt n) $startpos $endpos)) $startpos $endpos
+    }
+  | f = SCALAR_FLOAT_LIT {
+      mk_node (EBroadcast (mk_node (EFloat f) $startpos $endpos)) $startpos $endpos
+    }
 
   (* Variables *)
   | name = IDENT { mk_node (EVar name) $startpos $endpos }
@@ -643,7 +541,25 @@ expr_primary:
 
   (* Function calls *)
   | name = IDENT LPAREN args = separated_list(COMMA, expr) RPAREN {
-      mk_node (ECall (name, args)) $startpos $endpos
+      mk_node (named_call name args) $startpos $endpos
+    }
+
+  (* Static shuffle lists remain syntax, not runtime values. *)
+  | SHUFFLE_FN LPAREN value = expr COMMA LBRACKET
+    indices = separated_nonempty_list(COMMA, int_lit) RBRACKET RPAREN {
+      mk_node (EShuffle (value, indices)) $startpos $endpos
+    }
+  | SHIFT_LEFT_FN LPAREN value = expr COMMA amount = int_lit RPAREN {
+      mk_node (EShift (value, amount, Left)) $startpos $endpos
+    }
+  | SHIFT_RIGHT_FN LPAREN value = expr COMMA amount = int_lit RPAREN {
+      mk_node (EShift (value, amount, Right)) $startpos $endpos
+    }
+  | ROTATE_LEFT_FN LPAREN value = expr COMMA amount = int_lit RPAREN {
+      mk_node (ERotate (value, amount, Left)) $startpos $endpos
+    }
+  | ROTATE_RIGHT_FN LPAREN value = expr COMMA amount = int_lit RPAREN {
+      mk_node (ERotate (value, amount, Right)) $startpos $endpos
     }
 
   (* FMA *)
@@ -651,48 +567,9 @@ expr_primary:
       mk_node (EFma (a, b, c)) $startpos $endpos
     }
 
-  (* Outer product *)
-  | a = expr_primary OUTER b = expr_primary {
-      mk_node (EOuter (a, b)) $startpos $endpos
-    }
-
   (* Broadcast with field access: <sphere.cx> *)
   | LT e = broadcast_inner GT { mk_node (EBroadcast e) $startpos $endpos }
-  | BROADCAST e = expr_primary { mk_node (EBroadcast e) $startpos $endpos }
-
-  (* Record construction *)
-  | name = IDENT LBRACE fs = separated_list(COMMA, field_init) RBRACE {
-      mk_node (ERecord (name, fs)) $startpos $endpos
-    }
-
-  (* Record update *)
-  | LBRACE e = expr WITH fs = separated_nonempty_list(COMMA, field_init) RBRACE {
-      mk_node (EWith (e, fs)) $startpos $endpos
-    }
-
-  (* Tuple *)
-  | LPAREN es = separated_nonempty_list(COMMA, expr) RPAREN {
-      if List.length es = 1 then List.hd es
-      else mk_node (ETuple es) $startpos $endpos
-    }
-
-  (* Unit *)
-  | LPAREN RPAREN { mk_node EUnit $startpos $endpos }
-
-  (* Lambda *)
-  | FUN ps = nonempty_list(param) ARROW body = expr {
-      mk_node (ELambda (ps, body)) $startpos $endpos
-    }
-
-  (* Let expression *)
-  | LET b = binding IN body = expr {
-      mk_node (ELet (b, body)) $startpos $endpos
-    }
-
-field_init:
-  | name = IDENT COLONEQ e = expr {
-      { init_field = name; init_value = e }
-    }
+  | LPAREN e = expr RPAREN { e }
 
 int_lit:
   | n = INT_LIT { Int64.to_int n }

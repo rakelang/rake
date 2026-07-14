@@ -1,0 +1,2 @@
+crunch malformed_scalar_whitespace(values: f32s, < scale >) -> f32s:
+  return values

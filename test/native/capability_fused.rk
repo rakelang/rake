@@ -1,0 +1,3 @@
+crunch fused_add(a: f32s, b: f32s) -> f32s:
+  | result: f32s <| a + b
+  return result

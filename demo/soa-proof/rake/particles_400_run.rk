@@ -1,0 +1,16 @@
+~~ Canonical SoA kernel for the 400-particle proof harness.
+~~
+~~ The caller supplies count at runtime (400 in the demo) and owns two
+~~ contiguous float columns. The `for` traversal visits them one target-native
+~~ rack at a time and handles a final partial rack when required.
+stack Particles {
+  f32: position_x, velocity_x;
+}
+
+run advance_x(
+  particles: pack Particles,
+  <count: i64>,
+  <dt: f32>
+) -> f32:
+  for particle in particles using f32s up to <count>:
+    yield particle.position_x + particle.velocity_x * <dt>

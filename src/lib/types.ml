@@ -1,4 +1,4 @@
-(** Rake 0.2.0 Type System
+(** Rake type system
 
     Runtime type representation and operations.
 *)
@@ -27,6 +27,7 @@ and t =
   | Rack of scalar                     (** vector<N x scalar> *)
   | CompoundRack of compound           (** vector of compound *)
   | Scalar of scalar                   (** single scalar value *)
+  | StorageSlice of scalar * scalar    (** stored element, traversal rack domain *)
   | CompoundScalar of compound         (** single compound value *)
   | Stack of ident * field list        (** SoA struct type *)
   | Pack of ident * field list         (** collection of stacks *)
@@ -119,9 +120,19 @@ let cmp_result _t1 _t2 = Mask
 
 (** Pretty-print type *)
 let rec show_concise = function
-  | Rack s -> show_scalar s ^ " rack"
+  | Rack s -> (match s with
+      | SFloat -> "f32s" | SDouble -> "f64s"
+      | SInt -> "i32s" | SInt8 -> "i8s" | SInt16 -> "i16s" | SInt64 -> "i64s"
+      | SUint -> "u32s" | SUint8 -> "u8s" | SUint16 -> "u16s" | SUint64 -> "u64s"
+      | SBool -> "bools")
   | CompoundRack c -> show_compound c ^ " rack"
-  | Scalar s -> show_scalar s
+  | Scalar s -> (match s with
+      | SFloat -> "f32" | SDouble -> "f64"
+      | SInt -> "i32" | SInt8 -> "i8" | SInt16 -> "i16" | SInt64 -> "i64"
+      | SUint -> "u32" | SUint8 -> "u8" | SUint16 -> "u16" | SUint64 -> "u64"
+      | SBool -> "bool")
+  | StorageSlice (stored, domain) ->
+      show_concise (Scalar stored) ^ " storage viewed by " ^ show_concise (Rack domain)
   | CompoundScalar c -> show_compound c
   | Stack (name, _) -> name ^ " stack"
   | Pack (name, _) -> name ^ " pack"

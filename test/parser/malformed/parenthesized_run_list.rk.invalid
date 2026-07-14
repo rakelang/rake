@@ -1,0 +1,3 @@
+run malformed_parameters(a: f32s b: f32s) -> f32:
+  for chunk in a using f32s up to <1>:
+    yield chunk

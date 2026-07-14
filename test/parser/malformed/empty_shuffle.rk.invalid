@@ -1,0 +1,2 @@
+crunch empty_shuffle(values: f32s) -> f32s:
+  return shuffle(values, [])

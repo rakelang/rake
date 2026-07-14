@@ -14,6 +14,7 @@
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = nixpkgs.legacyPackages.${system};
       ocamlPackages = pkgs.ocamlPackages;
+      aarch64Cross = pkgs.pkgsCross.aarch64-multiplatform;
     in {
       devShells.default = pkgs.mkShell {
         buildInputs = with ocamlPackages;
@@ -36,31 +37,33 @@
             ocamlformat
           ]
           ++ (with pkgs; [
-            # MLIR/LLVM toolchain for compilation pipeline
-            llvmPackages.mlir
-            llvmPackages.llvm
+            # Native object assembly, C harnesses, and object verification
+            binutils
+            gcc
+            qemu
 
-            # GPU/Graphics for demos
-            SDL2
-            vulkan-headers
-            vulkan-loader
-            vulkan-tools
-            shaderc        # glslc for SPIR-V compilation
-            spirv-tools    # spirv-dis for inspection
+            # Differential parser workflow
+            tree-sitter
 
             # Benchmarking tools
             hyperfine
             time
 
             # Competitor compilers (optional, for eval arena)
-            gcc
             rustc
             cargo
             zig
             # mojo  # Not in nixpkgs yet
             # bend  # Not in nixpkgs yet
             odin
-          ]);
+          ])
+          ++ [
+            aarch64Cross.buildPackages.binutils
+            aarch64Cross.stdenv.cc
+          ];
+        RAKE_AARCH64_LIBC = "${aarch64Cross.glibc}";
+        RAKE_AARCH64_LIBC_DEV = "${aarch64Cross.glibc.dev}";
+        RAKE_AARCH64_LIBC_STATIC = "${aarch64Cross.glibc.static}";
       };
     });
 }

@@ -1,14 +1,11 @@
-(** Rake 0.2.0 Lexer
+(** Rake lexer
 
     Tokenizes rake source with:
     - Tine references: #name (grid-line evokes SIMD lanes)
-    - Tine declarations: | #name := (predicate)
-    - Through blocks: through #tine ... -> binding
-    - Sweep blocks: sweep: | #tine -> value
-    - Reduction ligatures: \+/ \*/ \min/ \max/ \|/ \&/
-    - Scan ligatures: \+\ \*\ \min\ \max\
-    - Shuffle: ~>
-    - Interleave: ><
+    - Tine declarations: tine #name when predicate
+    - Through blocks: through #tine else <value> into binding:
+    - Sweep blocks: return sweep: | #tine => value
+    - Named reductions, scans, shuffles, shifts, and rotations
     - Lane access: @
     - Scalar markers: <name> or <expr.field>
     - Comments: ~~ (evokes rake marks in sand)
@@ -23,40 +20,44 @@ exception LexError of string * Lexing.position
 let keywords = Hashtbl.create 64
 let () = List.iter (fun (k, v) -> Hashtbl.add keywords k v) [
   (* Types *)
-  ("float", FLOAT); ("double", DOUBLE);
-  ("int", INT); ("int8", INT8); ("int16", INT16); ("int64", INT64);
-  ("uint", UINT); ("uint8", UINT8); ("uint16", UINT16); ("uint64", UINT64);
   ("bool", BOOL);
-  ("vec2", VEC2); ("vec3", VEC3); ("vec4", VEC4);
-  ("mat3", MAT3); ("mat4", MAT4);
-  ("rack", RACK); ("mask", MASK);
+  ("f32", F32); ("f64", F64);
+  ("i32", I32); ("i8", I8); ("i16", I16); ("i64", I64);
+  ("u32", U32); ("u8", U8); ("u16", U16); ("u64", U64);
+  ("f32s", F32S); ("f64s", F64S);
+  ("i32s", I32S); ("i8s", I8S); ("i16s", I16S); ("i64s", I64S);
+  ("u32s", U32S); ("u8s", U8S); ("u16s", U16S); ("u64s", U64S);
+  ("bools", BOOLS);
+  ("mask", MASK);
 
   (* Type constructors *)
-  ("stack", STACK); ("single", SINGLE); ("pack", PACK);
-  ("type", TYPE);
+  ("stack", STACK); ("pack", PACK);
 
   (* Functions *)
   ("crunch", CRUNCH); ("rake", RAKE); ("run", RUN);
 
   (* Tines and control *)
+  ("tine", TINE); ("when", WHEN);
   ("through", THROUGH); ("sweep", SWEEP);
-  ("else", ELSE); ("results", RESULTS); ("in", IN);
+  ("else", ELSE); ("into", INTO); ("return", RETURN); ("yield", YIELD);
+  ("in", IN);
 
   (* Iteration *)
-  ("over", OVER); ("repeat", REPEAT); ("times", TIMES); ("until", UNTIL);
+  ("for", FOR); ("using", USING);
+  ("up", UP); ("to", TO);
 
   (* Bindings *)
-  ("let", LET); ("fun", FUN); ("with", WITH); ("as", AS);
+  ("let", LET);
 
   (* Lane operations *)
   ("lanes", LANES);
-  ("fma", FMA); ("outer", OUTER);
-  ("compress", COMPRESS); ("expand", EXPAND);
-  ("broadcast", BROADCAST);
+  ("fma", FMA); ("shuffle", SHUFFLE_FN);
+  ("shift_left", SHIFT_LEFT_FN); ("shift_right", SHIFT_RIGHT_FN);
+  ("rotate_left", ROTATE_LEFT_FN); ("rotate_right", ROTATE_RIGHT_FN);
 
   (* Boolean *)
   ("true", TRUE); ("false", FALSE);
-  ("is", IS); ("not", NOT); ("and", AND); ("or", OR);
+  ("not", NOT); ("and", AND); ("or", OR);
 ]
 
 (** Update lexer position on newline *)
@@ -78,6 +79,7 @@ let hex = ['0'-'9' 'a'-'f' 'A'-'F']
 let alpha = ['a'-'z' 'A'-'Z']
 let alphanum = alpha | digit | '_'
 let ident = (alpha | '_') alphanum*
+let type_ident = ['A'-'Z'] alphanum*
 let whitespace = [' ' '\t']+
 let newline = '\r'? '\n'
 
@@ -96,39 +98,20 @@ rule token = parse
   | "~~" { line_comment lexbuf }
   | "(*" { block_comment 1 lexbuf }
 
-  (* Reduction ligatures: \+/ \*/ \min/ \max/ \|/ \&/ *)
-  | "\\+/" { REDUCE_ADD }
-  | "\\*/" { REDUCE_MUL }
-  | "\\min/" { REDUCE_MIN }
-  | "\\max/" { REDUCE_MAX }
-  | "\\|/" { REDUCE_OR }
-  | "\\&/" { REDUCE_AND }
-
-  (* Scan ligatures: \+\ \*\ \min\ \max\ *)
-  | "\\+\\" { SCAN_ADD }
-  | "\\*\\" { SCAN_MUL }
-  | "\\min\\" { SCAN_MIN }
-  | "\\max\\" { SCAN_MAX }
+  (* Numeric scalar markers are single lexical units. This keeps <-1.0>
+     distinct from the location-assignment operator <-. *)
+  | '<' (float_lit as f) '>' { SCALAR_FLOAT_LIT (float_of_string f) }
+  | '<' (int_lit as i) '>' { SCALAR_INT_LIT (Int64.of_string i) }
 
   (* Multi-character operators *)
-  | "|>" { PIPE }
   | "<|" { FUSED_LEFT }
+  | "=>" { FAT_ARROW }
   | "->" { ARROW }
   | "<-" { ASSIGN }
   | ":=" { COLONEQ }
-  | "~>" { SHUFFLE }
-  | "><" { INTERLEAVE }
-  | "<-|" { COMPRESS_STORE }
-  | "|->" { EXPAND_LOAD }
-  | ">>" { SHR }
-  | "<<" { SHL }
-  | ">>>" { ROR }
-  | "<<<" { ROL }
   | ">=" { GE }
   | "<=" { LE }
   | "!=" { NE }
-  | "&&" { AMPAMP }
-  | "||" { PIPEPIPE }
 
   (* Tine reference: #name (grid-line evokes SIMD lanes) *)
   | '#' (ident as id) { TINE_REF id }
@@ -155,7 +138,6 @@ rule token = parse
   | '/' { SLASH }
   | '%' { PERCENT }
   | '=' { EQ }
-  | '!' { BANG }
   | '>' { GT }
   | '<' { LT }
   | '_' { UNDERSCORE }
@@ -166,13 +148,11 @@ rule token = parse
   | int_lit as i { INT_LIT (Int64.of_string i) }
 
   (* Identifiers and keywords *)
+  | type_ident as id { TYPE_IDENT id }
   | ident as id {
       try Hashtbl.find keywords id
       with Not_found -> IDENT id
     }
-
-  (* String literals *)
-  | '"' { string_lit (Buffer.create 32) lexbuf }
 
   (* End of file *)
   | eof { EOF }
@@ -199,50 +179,33 @@ and line_comment = parse
   | eof { EOF }
   | _ { line_comment lexbuf }
 
-(* String literals: "..." *)
-and string_lit buf = parse
-  | '"' { STRING_LIT (Buffer.contents buf) }
-  | "\\n" { Buffer.add_char buf '\n'; string_lit buf lexbuf }
-  | "\\t" { Buffer.add_char buf '\t'; string_lit buf lexbuf }
-  | "\\r" { Buffer.add_char buf '\r'; string_lit buf lexbuf }
-  | "\\\\" { Buffer.add_char buf '\\'; string_lit buf lexbuf }
-  | "\\\"" { Buffer.add_char buf '"'; string_lit buf lexbuf }
-  | newline { raise (LexError ("Newline in string literal", get_pos lexbuf)) }
-  | eof { raise (LexError ("Unterminated string", get_pos lexbuf)) }
-  | _ as c { Buffer.add_char buf c; string_lit buf lexbuf }
-
 {
 let show_token = function
-  | FLOAT -> "FLOAT" | DOUBLE -> "DOUBLE" | INT -> "INT" | INT8 -> "INT8"
-  | INT16 -> "INT16" | INT64 -> "INT64" | UINT -> "UINT" | UINT8 -> "UINT8"
-  | UINT16 -> "UINT16" | UINT64 -> "UINT64" | BOOL -> "BOOL"
-  | VEC2 -> "VEC2" | VEC3 -> "VEC3" | VEC4 -> "VEC4"
-  | MAT3 -> "MAT3" | MAT4 -> "MAT4"
-  | RACK -> "RACK" | MASK -> "MASK" | STACK -> "STACK" | SINGLE -> "SINGLE"
-  | PACK -> "PACK" | TYPE -> "TYPE"
+  | BOOL -> "BOOL" | F32 -> "F32" | F64 -> "F64" | I32 -> "I32" | I8 -> "I8"
+  | I16 -> "I16" | I64 -> "I64" | U32 -> "U32" | U8 -> "U8"
+  | U16 -> "U16" | U64 -> "U64"
+  | F32S -> "F32S" | F64S -> "F64S" | I32S -> "I32S" | I8S -> "I8S"
+  | I16S -> "I16S" | I64S -> "I64S" | U32S -> "U32S" | U8S -> "U8S"
+  | U16S -> "U16S" | U64S -> "U64S" | BOOLS -> "BOOLS"
+  | MASK -> "MASK" | STACK -> "STACK" | PACK -> "PACK"
   | CRUNCH -> "CRUNCH" | RAKE -> "RAKE" | RUN -> "RUN"
   | TINE_REF s -> Printf.sprintf "TINE_REF(%s)" s
-  | THROUGH -> "THROUGH" | SWEEP -> "SWEEP" | ELSE -> "ELSE"
-  | RESULTS -> "RESULTS" | IN -> "IN"
-  | OVER -> "OVER" | REPEAT -> "REPEAT" | TIMES -> "TIMES" | UNTIL -> "UNTIL"
-  | LET -> "LET" | FUN -> "FUN" | WITH -> "WITH" | AS -> "AS"
-  | LANES -> "LANES" | FMA -> "FMA" | OUTER -> "OUTER"
-  | COMPRESS -> "COMPRESS" | EXPAND -> "EXPAND" | BROADCAST -> "BROADCAST"
+  | TINE -> "TINE" | WHEN -> "WHEN"
+  | THROUGH -> "THROUGH" | SWEEP -> "SWEEP" | ELSE -> "ELSE" | INTO -> "INTO"
+  | RETURN -> "RETURN" | YIELD -> "YIELD"
+  | IN -> "IN" | FOR -> "FOR" | USING -> "USING"
+  | UP -> "UP" | TO -> "TO"
+  | LET -> "LET"
+  | LANES -> "LANES" | FMA -> "FMA" | SHUFFLE_FN -> "SHUFFLE_FN"
+  | SHIFT_LEFT_FN -> "SHIFT_LEFT_FN" | SHIFT_RIGHT_FN -> "SHIFT_RIGHT_FN"
+  | ROTATE_LEFT_FN -> "ROTATE_LEFT_FN" | ROTATE_RIGHT_FN -> "ROTATE_RIGHT_FN"
   | TRUE -> "TRUE" | FALSE -> "FALSE"
-  | IS -> "IS" | NOT -> "NOT" | AND -> "AND" | OR -> "OR"
+  | NOT -> "NOT" | AND -> "AND" | OR -> "OR"
   | PLUS -> "PLUS" | MINUS -> "MINUS" | STAR -> "STAR" | SLASH -> "SLASH"
   | PERCENT -> "PERCENT" | LT -> "LT" | LE -> "LE" | GT -> "GT" | GE -> "GE"
-  | EQ -> "EQ" | NE -> "NE" | AMPAMP -> "AMPAMP" | PIPEPIPE -> "PIPEPIPE"
-  | BANG -> "BANG" | PIPE -> "PIPE" | FUSED_LEFT -> "FUSED_LEFT"
-  | ARROW -> "ARROW" | ASSIGN -> "ASSIGN"
-  | COLONEQ -> "COLONEQ" | SHUFFLE -> "SHUFFLE" | INTERLEAVE -> "INTERLEAVE"
-  | SHL -> "SHL" | SHR -> "SHR" | ROL -> "ROL" | ROR -> "ROR"
-  | COMPRESS_STORE -> "COMPRESS_STORE" | EXPAND_LOAD -> "EXPAND_LOAD"
-  | REDUCE_ADD -> "REDUCE_ADD" | REDUCE_MUL -> "REDUCE_MUL"
-  | REDUCE_MIN -> "REDUCE_MIN" | REDUCE_MAX -> "REDUCE_MAX"
-  | REDUCE_OR -> "REDUCE_OR" | REDUCE_AND -> "REDUCE_AND"
-  | SCAN_ADD -> "SCAN_ADD" | SCAN_MUL -> "SCAN_MUL"
-  | SCAN_MIN -> "SCAN_MIN" | SCAN_MAX -> "SCAN_MAX"
+  | EQ -> "EQ" | NE -> "NE" | FUSED_LEFT -> "FUSED_LEFT"
+  | ARROW -> "ARROW" | FAT_ARROW -> "FAT_ARROW" | ASSIGN -> "ASSIGN"
+  | COLONEQ -> "COLONEQ"
   | LPAREN -> "LPAREN" | RPAREN -> "RPAREN" | LBRACE -> "LBRACE"
   | RBRACE -> "RBRACE" | LBRACKET -> "LBRACKET" | RBRACKET -> "RBRACKET"
   | COMMA -> "COMMA" | COLON -> "COLON" | SEMICOLON -> "SEMICOLON"
@@ -250,8 +213,10 @@ let show_token = function
   | UNDERSCORE -> "UNDERSCORE"
   | INT_LIT n -> Printf.sprintf "INT_LIT(%Ld)" n
   | FLOAT_LIT f -> Printf.sprintf "FLOAT_LIT(%g)" f
-  | STRING_LIT s -> Printf.sprintf "STRING_LIT(%S)" s
+  | SCALAR_FLOAT_LIT f -> Printf.sprintf "SCALAR_FLOAT_LIT(%g)" f
+  | SCALAR_INT_LIT n -> Printf.sprintf "SCALAR_INT_LIT(%Ld)" n
   | IDENT s -> Printf.sprintf "IDENT(%s)" s
+  | TYPE_IDENT s -> Printf.sprintf "TYPE_IDENT(%s)" s
   | SCALAR_IDENT s -> Printf.sprintf "SCALAR_IDENT(%s)" s
   | EOF -> "EOF"
 

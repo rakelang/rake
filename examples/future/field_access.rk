@@ -1,0 +1,43 @@
+~~ Future examples for stack and field access.
+
+stack Particle {
+  f32: x, y, z, mass;
+}
+
+crunch particle_energy(px: f32s, py: f32s, pz: f32s, mass: f32s) -> f32s:
+  let vx2 = px * px
+  let vy2 = py * py
+  let vz2 = pz * pz
+  let speed2 = vx2 + vy2 + vz2
+  return <0.5> * mass * speed2
+
+run compute_kinetic_energy(
+  particles: pack Particle,
+  <count: i64>
+) -> f32:
+  for particle in particles using f32s up to <count>:
+    let vx2 = particle.x * particle.x
+    let vy2 = particle.y * particle.y
+    let vz2 = particle.z * particle.z
+    let speed2 = vx2 + vy2 + vz2
+    yield <0.5> * particle.mass * speed2
+
+crunch apply_gravity(y: f32s, <dt: f32>, <gravity: f32>) -> f32s:
+  let velocity_delta = <gravity> * <dt>
+  return y + velocity_delta * <dt>
+
+stack Ray {
+  f32: ox, oy, oz, dx, dy, dz;
+}
+
+crunch ray_x_at_t(ox: f32s, dx: f32s, <t: f32>) -> f32s:
+  return ox + dx * <t>
+
+run march_rays(
+  rays: pack Ray,
+  <count: i64>,
+  <step: f32>
+) -> f32:
+  for ray in rays using f32s up to <count>:
+    let new_ox = ray.ox + ray.dx * <step>
+    yield new_ox

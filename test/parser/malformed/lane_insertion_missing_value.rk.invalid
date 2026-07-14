@@ -1,0 +1,3 @@
+crunch replace_lane(values: f32s, <replacement: f32>) -> f32s:
+  let result = values@3 :=
+  return result

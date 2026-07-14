@@ -1,0 +1,7 @@
+crunch helper(a: f32s, b: f32s) -> f32s:
+  | helper_result: f32s <| a + b
+  return helper_result
+
+crunch rejected_user_call(a: f32s, b: f32s) -> f32s:
+  | result: f32s <| helper(a, b)
+  return result

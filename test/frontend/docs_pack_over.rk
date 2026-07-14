@@ -1,0 +1,15 @@
+~~ docs:start pack-over
+stack Samples {
+  f32: value;
+  u8: quality;
+}
+
+run scale_values(
+  input: pack Samples,
+  <count: i64>,
+  <scale: f32>
+) -> f32:
+  for chunk in input using f32s up to <count>:
+    let quality: u32s = widen(chunk.quality)
+    yield chunk.value * <scale>
+~~ docs:end pack-over

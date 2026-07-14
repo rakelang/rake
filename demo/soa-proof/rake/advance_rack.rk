@@ -1,0 +1,9 @@
+~~ Executable register-only slice of particles_400_run.rk.
+~~
+~~ Each parameter is one target-native rack. The surrounding pack traversal is
+~~ deliberately absent because native `run`/`over` lowering is not available
+~~ yet; the current AVX2 backend can compile and verify this straight-line body.
+crunch advance_x(position_x: f32s, velocity_x: f32s, <dt: f32>) -> f32s:
+  | displacement: f32s <| velocity_x * <dt>
+  | result: f32s <| position_x + displacement
+  return result

@@ -1,7 +1,8 @@
 (library
  (name rake)
- (libraries str)
- (preprocess (pps ppx_deriving.show ppx_deriving.eq)))
+ (libraries str unix)
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.eq)))
 
 (ocamllex lexer)
 

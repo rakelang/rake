@@ -1,0 +1,38 @@
+rake guarded_partial(
+  selector: f32s,
+  x: f32s,
+  denominator: f32s,
+  multiplier: f32s,
+  addend: f32s
+) -> f32s:
+  tine #active when selector >= <0.0>
+
+  through #active else <-7.0> into computed:
+    let squared = x * x
+    let rooted = sqrt(x)
+    let quotient = rooted / denominator
+    let fused = fma(x, multiplier, addend)
+    squared + quotient + fused
+
+  return sweep:
+    | #active => computed
+    | _       => <-7.0>
+
+rake overlap_priority_native(values: f32s) -> f32s:
+  tine #first when values >= <0.0>
+  tine #second when values <= <0.0>
+  tine #not_first when not #first
+  tine #negative when #not_first and values < <0.0>
+  tine #classified when #first or #negative
+  tine #is_zero when values = <0.0>
+
+  through #first else <-1.0> into first_value:
+    <1.0>
+
+  through #second else <-2.0> into second_value:
+    <2.0>
+
+  return sweep:
+    | #first  => first_value
+    | #second => second_value
+    | _       => <3.0> / <1.0>

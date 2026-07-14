@@ -1,0 +1,59 @@
+(test
+ (name native_ir_test)
+ (libraries rake str))
+
+(test
+ (name layout_test)
+ (libraries rake))
+
+(test
+ (name native_semantics_test)
+ (libraries rake))
+
+(executable
+ (name native_expected)
+ (libraries rake))
+
+(test
+ (name native_toolchain_test)
+ (libraries rake str unix))
+
+(test
+ (name native_lower_test)
+ (libraries rake))
+
+(test
+ (name native_optimize_test)
+ (libraries rake))
+
+(test
+ (name x86_avx2_isel_test)
+ (libraries rake))
+
+(test
+ (name x86_avx2_regalloc_test)
+ (libraries rake))
+
+(test
+ (name x86_avx2_asm_test)
+ (libraries rake str unix))
+
+(test
+ (name native_verify_test)
+ (libraries rake str unix))
+
+(test
+ (name aarch64_neon_isel_test)
+ (libraries rake))
+
+(test
+ (name aarch64_neon_regalloc_test)
+ (libraries rake))
+
+(test
+ (name aarch64_neon_asm_test)
+ (libraries rake str))
+
+(executable
+ (name neon_expected)
+ (libraries rake))

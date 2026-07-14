@@ -1,0 +1,10 @@
+rake masked_reduce(values: f32s) -> f32s:
+  tine #active when values > <0.0>
+
+  through #active else <0.0> into candidate:
+    let reduced = sum(values)
+    values
+
+  return sweep:
+    | #active => candidate
+    | _       => <0.0>

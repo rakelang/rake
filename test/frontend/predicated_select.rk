@@ -1,0 +1,9 @@
+rake lowering_select(values: f32s) -> f32s:
+  tine #negative when values < <0.0>
+
+  through #negative else <0.0> into negated:
+    -values
+
+  return sweep:
+    | #negative => negated
+    | _         => values

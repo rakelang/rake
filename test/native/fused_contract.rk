@@ -1,0 +1,4 @@
+crunch fused_contract(a: f32s, b: f32s) -> f32s:
+  | sum: f32s <| a + b
+  | result: f32s <| sqrt(sum * sum)
+  return result

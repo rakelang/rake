@@ -1,0 +1,7 @@
+stack Ages {
+  u8: age;
+}
+
+run copy_ages(ages: pack Ages, <count: i64>) -> u8:
+  for chunk in ages using u8s up to <count>:
+    yield chunk.age

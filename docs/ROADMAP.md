@@ -1,239 +1,103 @@
-## Phase 1: Complete Core Emission
-
-### 1.1 Fix record emission
-
-Location: `lib/mlir.ml:323-337`
-
-Current just emits a comment. Options:
-
-**Option A**: Emit as separate SSA values (current implicit approach, make
-explicit)
-
-```ocaml
-(* Records decompose to individual field values in SSA *)
-(* Store field->value mappings for later field access *)
-```
-
-**Option B**: Use MLIR tuple type
-
-```mlir
-%rec = tuple.from_elements %field1, %field2 : tuple<f32, f32>
-```
-
-### 1.2 Fix hardcoded return types
-
-Location: `lib/mlir.ml:641` (`emit_crunch`)
-
-Current:
-
-```ocaml
-emit ctx "func.func @%s(%s) -> %s ..." name ... vec_f32;  (* always f32 *)
-```
-
-Fix: use the result type from the function signature:
-
-```ocaml
-let result_type = match result.result_type with
-  | Some ty -> mlir_type (typ_to_t ctx.type_env ty)
-  | None -> vec_f32  (* default *)
-in
-emit ctx "func.func @%s(%s) -> %s ..." name ... result_type;
-```
-
-### 1.3 Handle Unknown types in type checker
-
-Locations in `lib/typecheck.ml`:
-
-- `EOuter` (line 270): Outer product type is matrix — implement properly or
-  error
-- `EGather` (line 254): Should infer from base pointer type
-- `ELambda` (line 278): Should produce `Fun(param_types, body_type)`
-
-For now, convert `Unknown` returns to explicit errors:
-
-```ocaml
-| EOuter (_, _) ->
-    type_errorf expr.loc "Outer product not yet implemented"
-```
-
----
-
-## Phase 2: Semantic Completeness
-
-### 2.1 Sweep exhaustiveness check
-
-Add warning/error if sweep tines don't cover all cases and no catch-all `_`
-present.
-
-In `check_sweep`:
-
-```ocaml
-let has_catchall = List.exists (fun arm -> arm.arm_tine = None) sw.sweep_arms in
-if not has_catchall then
-  (* Could warn, or require explicit catch-all *)
-  ()
-```
-
-### 2.2 Document tine priority semantics
-
-Current: first matching tine wins (due to select chain order). Document this in
-spec or add mutual-exclusivity check.
-
-### 2.3 Update spec for `arith.select` vs `vector.mask`
-
-The current implementation uses `arith.select` for through blocks. This is
-correct for side-effect-free code. Update `docs/spec/03_tines_and_through.md` to
-reflect the actual implementation
-
----
-
-## Phase 3: Testing Infrastructure
-
-### 3.1 Build test harness
-
-Create `test/harness.c`:
-
-```c
-#include <stdio.h>
-#include <math.h>
-
-// Declare Rake functions (will be linked from compiled .o)
-extern void compute_distances(float* ox, float* oy, float* oz,
-                              float cx, float cy, float cz,
-                              long count, float* out);
-
-int main() {
-    float ox[] = {1, 2, 3, 4, 5, 6, 7, 8};
-    float oy[] = {0, 0, 0, 0, 0, 0, 0, 0};
-    float oz[] = {0, 0, 0, 0, 0, 0, 0, 0};
-    float out[8];
-
-    compute_distances(ox, oy, oz, 0, 0, 0, 8, out);
-
-    for (int i = 0; i < 8; i++) {
-        float expected = sqrtf(ox[i]*ox[i]);
-        if (fabsf(out[i] - expected) > 0.001f) {
-            printf("FAIL: out[%d] = %f, expected %f\n", i, out[i], expected);
-            return 1;
-        }
-    }
-    printf("PASS\n");
-    return 0;
-}
-```
-
-### 3.2 End-to-end test script
-
-```bash
-#!/bin/bash
-# test/run_tests.sh
-
-set -e
-
-for rk in examples/*.rk; do
-    echo "Testing $rk..."
-
-    # Compile Rake -> MLIR
-    ./rake --emit-mlir "$rk" > "${rk%.rk}.mlir"
-
-    # Lower to LLVM
-    mlir-opt "${rk%.rk}.mlir" \
-        --convert-scf-to-cf \
-        --convert-vector-to-llvm \
-        --convert-func-to-llvm \
-        --convert-arith-to-llvm \
-        --reconcile-unrealized-casts \
-        -o "${rk%.rk}.llvm.mlir"
-
-    # Translate to LLVM IR
-    mlir-translate --mlir-to-llvmir "${rk%.rk}.llvm.mlir" -o "${rk%.rk}.ll"
-
-    # Compile to object
-    llc -filetype=obj "${rk%.rk}.ll" -o "${rk%.rk}.o"
-
-    echo "  Generated ${rk%.rk}.o"
-done
-```
-
-### 3.3 Test cases to implement
-
-1. **Simple crunch** — arithmetic, verify vectorization
-2. **Rake with tines** — predicated execution
-3. **Over loop** — pack iteration, tail masking
-4. **Reductions** — `\+/`, `\*/`
-5. **Broadcasting** — scalar to rack promotion
-6. **Field access** — stack/single member access
-7. **Nested tines** — composed predicates
-
-IDEALLY: Use an actual code coverage tool (or create one for rake) to show
-coverage of unit tests over language grammar / features.
-
----
-
-## Phase 4: Quality of Life
-
-NOTE: For all controls, we must carefully consider where they should be
-permitted. For example, branching conditions inside a sweep could break
-vectorization. Validate through the test suite that vectorized code is always
-generated for rakes. If this can't be done with conditionals, the grammar should
-have a separate mode inside of rakes that does not allow the breaking
-constructs.
-
-### 4.1 Better error messages
-
-Include source location in all errors:
-
-```ocaml
-type_errorf expr.loc "Type mismatch at %s:%d:%d: ..."
-  loc.file loc.line loc.col
-```
-
-### 4.2 Add `if/else` expressions
-
-New AST node:
-
-```ocaml
-| EIf of expr * expr * expr  (* condition, then, else *)
-```
-
-Emit as `scf.if` (for scalar mode) or `arith.select` (for vector mode).
-
-### 4.3 Add basic `for` loop
-
-For fixed iteration counts (useful for unrolling):
-
-```rake
-for i in 0..4:
-    accumulate(i)
-```
-
-Emit as `scf.for` with known bounds.
-
-### 4.4 Complete math builtins
-
-Type checker lists: `sqrt`, `sin`, `cos`, `tan`, `exp`, `log`, `abs`, `floor`,
-`ceil`, `min`, `max`, `pow`, `atan2`
-
-Ensure emitter handles all of these (currently partial).
-
----
-
-## Deferred (Post-MVP)
-
-- Module/import system
-- Closures with variable capture
-- Strings and I/O
-- Memory management (GC or ownership)
-- Custom MLIR dialect for Rake-specific optimizations
-- GPU texture/image support
-- Warp-level primitives for GPU
-
----
-
-## Decision Log
-
-| Date    | Decision                                         | Rationale                                  |
-| ------- | ------------------------------------------------ | ------------------------------------------ |
-| 2024-12 | Use `arith.select` for through blocks            | Simpler emission, equivalent for pure code |
-| 2024-12 | Prioritize `scf.parallel` over fixing type holes | Enables GPU path, higher impact            |
-| TBD     | Scalar mode as default, vector as optimization   | Lets MLIR handle parallelization strategy  |
+# Rake implementation roadmap
+
+Rake's roadmap extends native production coverage until it matches the language
+goal contract. A feature becomes production-executable only when one compiler
+revision contains its type rules, typed-IR form, scalar-interpreter semantics,
+target legalization, allocation rules, assembly emission, disassembly checks,
+and conformance fixtures.
+
+Frontend acceptance records that a program has defined source semantics. It
+doesn't establish that a target can execute the program while preserving
+Rake's register and instruction guarantees.
+
+## Implemented native foundation
+
+The first `x86-avx2` slice provides:
+
+- target profiles with profile-derived rack widths;
+- typed rack and mask SSA with source locations and verification;
+- scalar f32 interpretation with explicit per-operation rounding and FMA;
+- uniform f32 crunch parameters, SysV SSE-class argument assignment, and
+  explicit `vbroadcastss` lowering;
+- straight-line arithmetic, fused-graph FMA contraction, comparison, selection,
+  square root, mask logic, broadcast, and source-required FMA lowering;
+- native tines, inactive-lane-safe through blocks, and total priority sweeps;
+- AVX2/FMA3 instruction selection and no-spill YMM allocation;
+- Intel-syntax assembly and system-assembler object creation; and
+- disassembly verification for calls, stack use, spills, scalarization,
+  register width, instruction allow-lists, and selected-FMA counts.
+
+## Implemented: predicated rake semantics
+
+Native AVX2 `rake`, `through`, and `sweep` preserve lane predication through:
+
+1. Lower tine declarations to typed mask SSA.
+2. Classify every through-body operation as total, sanitizable, mask-native, or
+   unsupported for each target profile.
+3. Sanitizing inactive operands before supported partial operations such as
+   division and square root. Logarithm remains rejected until it has a native,
+   no-call implementation.
+4. Lower total source-priority sweeps without per-lane branches.
+5. Interpret inactive-lane behavior, including floating-point exceptions.
+6. Reject calls, effects, or operations without a sound masked lowering.
+7. Verify the absence of scalar lane branches and unsafe inactive-lane memory.
+
+## Next: native memory traversal
+
+The Rake-owned binary and memory design for `stack`, `pack`, and `run` is now
+specified in [`spec/02_packs_and_run.md`](spec/02_packs_and_run.md). It fixes
+the descriptor field order, pointer and stride rules, ownership, permitted
+aliasing, count behavior, implicit output stream, symbol, and first Linux
+x86-64 System V classifier. Full racks use native vector loads and stores.
+Tails use masked memory and sanitized inactive arithmetic so that they neither
+cross the logical bound nor raise inactive-lane floating-point exceptions.
+
+The implementation must keep traversal structure in typed IR, make
+the loop and tail mask visible in MIR, execute boundary sizes in semantic
+tests, and inspect disassembly for vector memory operations and the absence of
+scalar cleanup loops. `run` remains production-unavailable until those gates
+pass.
+
+## Next: complete vector vocabulary
+
+Each core vector operation needs one end-to-end contract:
+
+- lane count, lane indices, extraction, and insertion;
+- logical mask reductions and strict reductions or prefix scans on profiles
+  other than AVX2;
+- shuffles, interleaves, shifts, and rotates;
+- gather and scatter;
+- compression and expansion; and
+- the remaining arithmetic and mathematical primitives.
+
+An operation may lower to several native vector instructions when its published
+profile contract permits that sequence. It may not lower to scalar lanes,
+helper calls, split racks, or memory temporaries. The capability report names
+unsupported profile/operation pairs.
+
+## Next: additional profiles
+
+`x86-avx512` and `x86-sse2` each need their own legalization,
+instruction selection, allocator constraints, assembly syntax, ABI variant,
+object verification, and target-specific runtime fixtures. Shared typed IR and
+semantic interpretation remain profile-independent.
+
+AVX-512 should use native mask registers where they strengthen predication and
+tail handling. SSE2 support must reject operations whose only implementation
+would violate the no-split, no-call, or no-spill contract.
+
+## Release gates
+
+A release capability changes from unavailable to supported only when:
+
+- the normative specification gives the operation's types and semantics;
+- malformed and unavailable uses have source-located diagnostics;
+- the scalar interpreter covers ordinary, boundary, and exceptional inputs;
+- native runtime output matches the interpreter;
+- allocation and disassembly establish the target contract;
+- documentation labels frontend-only and production-executable examples; and
+- the capability catalog, tests, release notes, and website agree.
+
+Representative benchmarks remain a separate gate. Every published result must
+record the source, compiler version, target profile, command, input size,
+machine, and comparison baseline.

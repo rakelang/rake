@@ -1,0 +1,18 @@
+[package]
+name = "soa-proof-rust"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "soa_proof_rust"
+path = "src/lib.rs"
+
+[[bin]]
+name = "soa-proof-rust"
+path = "src/main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = false
+panic = "abort"

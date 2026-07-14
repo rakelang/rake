@@ -5,7 +5,7 @@
  * with interactive real-time rendering.
  *
  * Build:
- *   clang -O3 -flto -mavx2 sdl_demo.c raytracer_rake_lto.o -o sdl_demo -lSDL2 -lm
+ *   cc -O3 -flto -mavx2 sdl_demo.c raytracer_rake_lto.o -o sdl_demo -lSDL2 -lm
  */
 
 #include <stdio.h>

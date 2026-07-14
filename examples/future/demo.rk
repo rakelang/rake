@@ -1,0 +1,74 @@
+~~ Future ray-tracing sketch using the canonical surface syntax.
+~~ User-defined calls and native pack traversal are not yet production
+~~ capabilities.
+
+stack Ray {
+  f32: ox, oy, oz, dx, dy, dz;
+}
+
+crunch dot(
+  ax: f32s,
+  ay: f32s,
+  az: f32s,
+  bx: f32s,
+  by: f32s,
+  bz: f32s
+) -> f32s:
+  | result: f32s <| ax * bx + ay * by + az * bz
+  return result
+
+rake intersect_flat(
+  ray_ox: f32s,
+  ray_oy: f32s,
+  ray_oz: f32s,
+  ray_dx: f32s,
+  ray_dy: f32s,
+  ray_dz: f32s,
+  <sphere_cx: f32>,
+  <sphere_cy: f32>,
+  <sphere_cz: f32>,
+  <sphere_radius: f32>
+) -> f32s:
+  let ocx = ray_ox - <sphere_cx>
+  let ocy = ray_oy - <sphere_cy>
+  let ocz = ray_oz - <sphere_cz>
+
+  let a = dot(ray_dx, ray_dy, ray_dz, ray_dx, ray_dy, ray_dz)
+  let b = <2.0> * dot(ocx, ocy, ocz, ray_dx, ray_dy, ray_dz)
+  let c = dot(ocx, ocy, ocz, ocx, ocy, ocz)
+    - <sphere_radius> * <sphere_radius>
+  let discriminant = b * b - <4.0> * a * c
+
+  tine #miss when discriminant < <0.0>
+  tine #maybe when not #miss
+
+  through #maybe else <0.0> into hit_distance:
+    let root = sqrt(discriminant)
+    (-b - root) / (<2.0> * a)
+
+  return sweep:
+    | #miss  => <-1.0>
+    | #maybe => hit_distance
+    | _      => <-1.0>
+
+run render_all(
+  rays: pack Ray,
+  <count: i64>,
+  <sphere_cx: f32>,
+  <sphere_cy: f32>,
+  <sphere_cz: f32>,
+  <sphere_radius: f32>
+) -> f32:
+  for ray in rays using f32s up to <count>:
+    yield intersect_flat(
+      ray.ox,
+      ray.oy,
+      ray.oz,
+      ray.dx,
+      ray.dy,
+      ray.dz,
+      <sphere_cx>,
+      <sphere_cy>,
+      <sphere_cz>,
+      <sphere_radius>
+    )

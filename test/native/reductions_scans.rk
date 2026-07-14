@@ -1,0 +1,23 @@
+crunch strict_reduce_add(values: f32s) -> f32:
+  return sum(values)
+
+crunch strict_reduce_mul(values: f32s) -> f32:
+  return product(values)
+
+crunch strict_reduce_min(values: f32s) -> f32:
+  return minimum(values)
+
+crunch strict_reduce_max(values: f32s) -> f32:
+  return maximum(values)
+
+crunch strict_scan_add(values: f32s) -> f32s:
+  return scan_sum(values)
+
+crunch strict_scan_mul(values: f32s) -> f32s:
+  return scan_product(values)
+
+crunch strict_scan_min(values: f32s) -> f32s:
+  return scan_minimum(values)
+
+crunch strict_scan_max(values: f32s) -> f32s:
+  return scan_maximum(values)

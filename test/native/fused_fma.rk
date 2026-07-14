@@ -1,0 +1,3 @@
+crunch fused_madd(a: f32s, b: f32s, c: f32s) -> f32s:
+  | result: f32s <| fma(a, b, c)
+  return result

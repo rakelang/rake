@@ -1,0 +1,18 @@
+name	logical_case	language	source	symbol	kind	profiles	expect	compile_args	build_command	object
+c-scalar	advance-x	c	c/scalar.c	advance_x_scalar	autovectorized	sse2,avx2,avx512	pass	-ffp-contract=off		
+c-sse2	advance-x	c	c/sse2.c	advance_x_sse2	intrinsics	sse2	pass	-ffp-contract=off		
+c-avx2	advance-x	c	c/avx2.c	advance_x_avx2	intrinsics	avx2	pass	-ffp-contract=off		
+c-avx512	advance-x	c	c/avx512.c	advance_x_avx512	intrinsics	avx512	pass	-ffp-contract=off		
+c-sin	strict-sine	c	c/reject_sin.c	sin_array_scalar	scalar-library	sse2,avx2,avx512	pass	-ffp-contract=off		
+c-pressure-same	pressure-same-dag	c	c/reject_register_pressure_avx2.c	reject_register_pressure_avx2	intrinsics	avx2	pass	-ffp-contract=off		
+c-pressure-stress	pressure-stress	c	c/pressure_avx2.c	pressure_sum_avx2	intrinsics	avx2	pass	-ffp-contract=off		
+rust-scalar	advance-x	rust	rust/src/lib.rs	advance_x_scalar	autovectorized	sse2,avx2,avx512	pass			
+rust-sse2	advance-x	rust	rust/src/lib.rs	advance_x_sse2	intrinsics	sse2	pass			
+rust-avx2	advance-x	rust	rust/src/lib.rs	advance_x_avx2	intrinsics	avx2	pass			
+rust-sin	strict-sine	rust	rust/src/lib.rs	sin_array_scalar	scalar-library	sse2,avx2,avx512	pass			
+rust-pressure-same	pressure-same-dag	rust	rust/src/lib.rs	reject_register_pressure_avx2	intrinsics	avx2	pass			
+rust-pressure-stress	pressure-stress	rust	rust/src/lib.rs	pressure20_avx2	intrinsics	avx2	pass			
+rake-rack-avx2	advance-x-rack	rake	rake/advance_rack.rk	advance_x	native	avx2	pass		../../_build/default/src/bin/main.exe --verify-native --target x86-avx2 -o {object} {source}	
+rake-rack-x86-planned	advance-x-rack	rake	rake/advance_rack.rk	advance_x	native	sse2,avx512	reject		../../_build/default/src/bin/main.exe --verify-native --target x86-{profile} -o {object} {source}	
+rake-sin	strict-sine	rake	rake/reject_sin.rk	reject_sin	native	avx2	reject		../../_build/default/src/bin/main.exe --verify-native --target x86-avx2 -o {object} {source}	
+rake-pressure-same	pressure-same-dag	rake	rake/reject_register_pressure.rk	reject_register_pressure	native	avx2	reject		../../_build/default/src/bin/main.exe --verify-native --target x86-avx2 -o {object} {source}	

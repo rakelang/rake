@@ -1,0 +1,29 @@
+~~ Test: simple_crunch.rk
+~~ Tests basic crunch function with simple arithmetic operations.
+
+~~ Simple addition of two racks
+crunch add_racks(a: f32s, b: f32s) -> f32s:
+  return a + b
+
+~~ Simple multiplication
+crunch mul_racks(a: f32s, b: f32s) -> f32s:
+  return a * b
+
+~~ Compound arithmetic: a*b + c (fused multiply-add pattern)
+crunch fma_racks(a: f32s, b: f32s, c: f32s) -> f32s:
+  return a * b + c
+
+~~ Unary negation
+crunch negate_rack(x: f32s) -> f32s:
+  return -x
+
+~~ Multiple operations chained
+crunch complex_arith(a: f32s, b: f32s, c: f32s) -> f32s:
+  let t1 = a + b
+  let t2 = t1 * c
+  return t2 - a
+
+~~ Fused source syntax does not promise a hardware FMA instruction
+crunch multiply_add(a: f32s, b: f32s, c: f32s) -> f32s:
+  | result: f32s <| a * b + c
+  return result

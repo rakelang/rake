@@ -1,0 +1,7 @@
+stack Values32 {
+  f32: value;
+}
+
+run copy_values32(values: pack Values32, <count: i32>) -> f32:
+  for chunk in values using f32s up to <count>:
+    yield chunk.value

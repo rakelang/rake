@@ -1,0 +1,2 @@
+crunch malformed_scalar(values: f32s, <1: f32>) -> f32s:
+  return values

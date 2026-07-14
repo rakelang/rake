@@ -1,0 +1,6 @@
+stack Pair {
+  f32: left, right;
+}
+
+crunch add_pair(Pair as left right) -> f32s:
+  return left + right

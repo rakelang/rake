@@ -1,0 +1,9 @@
+stack Particles {
+  f32: position, velocity, depth;
+  u8: age;
+}
+
+run advance(particles: pack Particles, <count: i64>) -> f32:
+  for particle in particles using f32s up to <count>:
+    let ages: u32s = widen(particle.age)
+    yield particle.position + particle.velocity

@@ -1,11 +1,11 @@
-(** Rake 0.2.0 Type Checker
+(** Rake type checker
 
     Infers and validates types for the tine/through/sweep model.
 
     Key rules:
     - In rake/crunch functions, untyped params default to float rack
     - Scalars (<x>) broadcast to rack when combined with rack values
-    - Tine predicates produce mask (vector<8xi1>)
+    - Tine predicates produce lane masks
     - Through blocks execute under mask, result has type of final expr
     - Sweep arms must all have the same type
 *)
@@ -15,6 +15,7 @@ open Types
 
 (** Type environment *)
 type env = {
+  target: Capabilities.target;
   types: (ident, t) Hashtbl.t;      (** Type definitions (stack, single) *)
   vars: (ident, t) Hashtbl.t;       (** Variable bindings *)
   tines: (ident, unit) Hashtbl.t;   (** Declared tines (for validation) *)
@@ -22,7 +23,8 @@ type env = {
   locations: (ident, unit) Hashtbl.t;    (** Mutable locations (from :=) *)
 }
 
-let create_env () = {
+let create_env target = {
+  target;
   types = Hashtbl.create 32;
   vars = Hashtbl.create 64;
   tines = Hashtbl.create 16;
@@ -31,6 +33,7 @@ let create_env () = {
 }
 
 let copy_env env = {
+  target = env.target;
   types = Hashtbl.copy env.types;
   vars = Hashtbl.copy env.vars;
   tines = Hashtbl.copy env.tines;
@@ -47,8 +50,25 @@ let type_error msg loc =
 let type_errorf loc fmt =
   Printf.ksprintf (fun msg -> type_error msg loc) fmt
 
+let require_feature env loc feature =
+  if not (Capabilities.is_available env.target feature) then
+    type_errorf loc "WIP: feature '%s' (%s) is unavailable for target '%s'"
+      (Capabilities.id feature)
+      (Capabilities.description feature)
+      (Capabilities.string_of_target env.target)
+
+let unavailable_invariant feature =
+  failwith (Printf.sprintf
+    "Internal error: unavailable feature '%s' passed the capability gate"
+    (Capabilities.id feature))
+
 (** Convert AST type to runtime type *)
 let rec typ_to_t env (ty: typ) : t =
+  require_feature env ty.loc (Capabilities.feature_of_type ty.v);
+  (match ty.v with
+   | TRack p | TScalar p ->
+       require_feature env ty.loc (Capabilities.feature_of_prim p)
+   | _ -> ());
   match ty.v with
   | TRack p -> Rack (of_prim p)
   | TCompoundRack c -> CompoundRack (of_compound c)
@@ -72,6 +92,13 @@ let rec typ_to_t env (ty: typ) : t =
       Fun (List.map (typ_to_t env) args, typ_to_t env ret)
   | TTuple ts -> Tuple (List.map (typ_to_t env) ts)
   | TUnit -> Unit
+
+(** A run annotates its stored output element, while each traversal iteration
+    produces one rack of those elements. *)
+let run_result_to_t env ty =
+  match typ_to_t env ty with
+  | Scalar scalar -> Rack scalar
+  | other -> other
 
 (** Register type definitions *)
 let register_type_def env (def: def) =
@@ -177,7 +204,7 @@ let register_func_def env (def: def) =
             List.map snd expanded
       ) params in
       let ret_type = match result.result_type with
-        | Some ty -> typ_to_t env ty
+        | Some ty -> run_result_to_t env ty
         | None -> Unit
       in
       Hashtbl.add env.funcs name (param_types, ret_type)
@@ -192,7 +219,9 @@ let add_builtins env =
   (* Math functions: rack, rack -> rack *)
   List.iter (fun name ->
     Hashtbl.add env.funcs name ([Rack SFloat; Rack SFloat], Rack SFloat)
-  ) ["min"; "max"; "pow"; "atan2"]
+  ) ["min"; "max"; "pow"; "atan2"];
+  Hashtbl.add env.funcs "select"
+    ([Mask; Rack SFloat; Rack SFloat], Rack SFloat)
 
 (** Get field type from a struct type *)
 let get_field_type t field loc =
@@ -202,6 +231,38 @@ let get_field_type t field loc =
       | Some ft -> ft
       | None -> type_errorf loc "Unknown field: %s" field)
   | _ -> type_errorf loc "Cannot access field of non-struct type"
+
+let scalar_bits = function
+  | SBool -> 1
+  | SInt8 | SUint8 -> 8
+  | SInt16 | SUint16 -> 16
+  | SFloat | SInt | SUint -> 32
+  | SDouble | SInt64 | SUint64 -> 64
+
+let widened_scalar stored domain loc =
+  let target_bits = scalar_bits domain in
+  if scalar_bits stored >= target_bits then
+    type_errorf loc
+      "widen requires a stored element narrower than the traversal domain; got %s in %s"
+      (show_concise (Scalar stored)) (show_concise (Rack domain));
+  match stored, target_bits with
+  | (SInt8 | SInt16), 32 -> SInt
+  | (SInt8 | SInt16 | SInt), 64 -> SInt64
+  | (SUint8 | SUint16), 32 -> SUint
+  | (SUint8 | SUint16 | SUint), 64 -> SUint64
+  | SFloat, 64 -> SDouble
+  | _ ->
+      type_errorf loc "No lossless widening from %s to the lane width of %s"
+        (show_concise (Scalar stored)) (show_concise (Rack domain))
+
+let traversal_field domain (name, field_t) =
+  let loaded = match field_t with
+    | Scalar stored when scalar_bits stored = scalar_bits domain -> Rack stored
+    | Scalar stored -> StorageSlice (stored, domain)
+    | Rack _ as legacy_rack -> legacy_rack
+    | other -> other
+  in
+  (name, loaded)
 
 (** Check if two types are compatible (with broadcast) *)
 let compatible t1 t2 =
@@ -214,8 +275,118 @@ let compatible t1 t2 =
   | Single (n1, _), Single (n2, _) -> n1 = n2
   | _ -> t1 = t2
 
+let is_float_rack = function
+  | Rack SFloat -> true
+  | _ -> false
+
+let is_float_scalar = function
+  | Scalar SFloat -> true
+  | _ -> false
+
+let is_supported_value_type = function
+  | Rack SFloat | Scalar SFloat | Mask -> true
+  | _ -> false
+
+let ensure_supported_value env loc _context t =
+  if not (is_supported_value_type t) then
+    require_feature env loc Capabilities.Value_non_f32
+
+let ensure_float_rack_result env loc = function
+  | Rack SFloat -> ()
+  | StorageSlice (stored, domain) ->
+      type_errorf loc
+        "Column stored as %s cannot be used as a %s value; call widen(column) explicitly"
+        (show_concise (Scalar stored)) (show_concise (Rack domain))
+  | _ -> require_feature env loc Capabilities.Result_non_float_rack
+
+let ensure_rack_result env loc = function
+  | Rack _ -> ()
+  | StorageSlice (stored, domain) ->
+      type_errorf loc
+        "Column stored as %s cannot be used as a %s value; call widen(column) explicitly"
+        (show_concise (Scalar stored)) (show_concise (Rack domain))
+  | _ -> require_feature env loc Capabilities.Result_non_float_rack
+
+let ensure_supported_pack_fields env loc _pack_name fields =
+  List.iter (fun (field_name, field_t) ->
+    if not (is_float_rack field_t) then
+      let _ = field_name in
+      require_feature env loc Capabilities.Pack_non_f32_field
+  ) fields
+
+let ensure_supported_crunch_param env loc = function
+  | PRack (_pname, None) as param ->
+      require_feature env loc (Capabilities.feature_of_param param)
+  | PRack (_pname, Some ty) ->
+      require_feature env loc Capabilities.Param_rack;
+      let t = typ_to_t env ty in
+      if not (is_float_rack t) then
+        require_feature env ty.loc Capabilities.Value_non_f32
+  | PScalar (_pname, annotation) ->
+      require_feature env loc Capabilities.Crunch_scalar_param;
+      (match annotation with
+       | None -> ()
+       | Some ty ->
+           let t = typ_to_t env ty in
+           if not (is_float_scalar t) then
+             require_feature env ty.loc Capabilities.Value_non_f32)
+  | PSpread (names, type_name) ->
+      require_feature env loc Capabilities.Param_spread;
+      let expanded = expand_spread env type_name names loc in
+      List.iter (fun (name, t) ->
+        if not (is_float_rack t) then
+          let _ = name in
+          require_feature env loc Capabilities.Value_non_f32
+      ) expanded
+
+let ensure_supported_rake_param env loc = function
+  | PRack (pname, None) -> (
+      require_feature env loc Capabilities.Param_rack;
+      match find_type env pname with
+      | Some t ->
+          let _ = t in
+          require_feature env loc Capabilities.Value_non_f32
+      | None -> ())
+  | PRack (_pname, Some ty) ->
+      require_feature env loc Capabilities.Param_rack;
+      let t = typ_to_t env ty in
+      if not (is_float_rack t) then
+        require_feature env ty.loc Capabilities.Value_non_f32
+  | PScalar (pname, None) -> (
+      require_feature env loc Capabilities.Param_scalar;
+      match find_type env pname with
+      | Some t ->
+          let _ = t in
+          require_feature env loc Capabilities.Value_non_f32
+      | None -> ())
+  | PScalar (_pname, Some ty) ->
+      require_feature env loc Capabilities.Param_scalar;
+      let t = typ_to_t env ty in
+      if not (is_float_scalar t) then
+        require_feature env ty.loc Capabilities.Value_non_f32
+  | PSpread _ ->
+      require_feature env loc Capabilities.Rake_spread_param
+
+let ensure_supported_run_param env loc = function
+  | PRack (pname, Some ty) -> (
+      require_feature env loc Capabilities.Param_rack;
+      match typ_to_t env ty with
+      | Pack (_, fields) -> ensure_supported_pack_fields env ty.loc pname fields
+      | Rack SFloat -> ()
+      | _ -> require_feature env ty.loc Capabilities.Value_non_f32)
+  | PRack (_pname, None) -> require_feature env loc Capabilities.Param_rack
+  | PScalar (_pname, None) -> require_feature env loc Capabilities.Param_scalar
+  | PScalar (_pname, Some ty) -> (
+      require_feature env loc Capabilities.Param_scalar;
+      match typ_to_t env ty with
+      | Scalar SFloat | Scalar SInt | Scalar SInt64 -> ()
+      | _ -> require_feature env ty.loc Capabilities.Value_non_f32)
+  | PSpread _ ->
+      require_feature env loc Capabilities.Run_spread_param
+
 (** Infer expression type *)
 let rec infer_expr env (expr: Ast.expr) : t =
+  require_feature env expr.loc (Capabilities.feature_of_expr expr.v);
   match expr.v with
   | EInt _ -> Rack SInt  (* integer literals are rack by default in vector context *)
   | EFloat _ -> Rack SFloat
@@ -239,6 +410,17 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | EUnop (op, e) ->
       let t = infer_expr env e in
       infer_unop t op expr.loc
+
+  | ECall ("widen", [arg]) -> (
+      match infer_expr env arg with
+      | StorageSlice (stored, domain) -> Rack (widened_scalar stored domain expr.loc)
+      | actual ->
+          type_errorf expr.loc
+            "widen expects a narrower stack column selected by an over domain, got %s"
+            (show_concise actual))
+
+  | ECall ("widen", args) ->
+      type_errorf expr.loc "widen expects exactly one argument, got %d" (List.length args)
 
   | ECall (name, args) -> (
       match Hashtbl.find_opt env.funcs name with
@@ -264,146 +446,163 @@ let rec infer_expr env (expr: Ast.expr) : t =
       let t = infer_expr env e in
       get_field_type t field expr.loc
 
-  | ERecord (name, _inits) -> (
-      match Hashtbl.find_opt env.types name with
-      | Some (Stack _ as t) -> t
-      | Some (Single _ as t) -> t
-      | _ -> type_errorf expr.loc "Unknown record type: %s" name)
+  | ERecord _ -> unavailable_invariant Capabilities.Expr_record
 
-  | EWith (e, _) -> infer_expr env e
+  | EWith _ -> unavailable_invariant Capabilities.Expr_record_update
 
   | ELaneIndex -> Rack SInt
   | ELanes -> Scalar SInt
 
-  | EExtract (e, _) ->
-      let t = infer_expr env e in
-      element_type t
+  | EExtract _ -> unavailable_invariant Capabilities.Expr_extract
 
-  | EInsert (e, _, _) -> infer_expr env e
+  | EInsert _ -> unavailable_invariant Capabilities.Expr_insert
 
-  | EReduce (_, e) ->
-      let t = infer_expr env e in
-      element_type t
+  | EReduce (operation, operand) ->
+      let operand_t = infer_expr env operand in
+      (match operation, operand_t with
+      | (RAdd | RMul | RMin | RMax), Rack SFloat -> Scalar SFloat
+      | (RAnd | ROr), _ ->
+          type_errorf expr.loc
+            "Logical mask reductions are specified but not implemented in this f32 compiler slice"
+      | (RAdd | RMul | RMin | RMax), actual ->
+          type_errorf expr.loc
+            "Floating-point reduction requires float rack, got %s"
+            (show_concise actual))
 
-  | EScan (_, e) -> infer_expr env e
+  | EScan (operation, operand) ->
+      let operand_t = infer_expr env operand in
+      (match operation, operand_t with
+      | (RAdd | RMul | RMin | RMax), Rack SFloat -> Rack SFloat
+      | (RAnd | ROr), _ ->
+          type_errorf expr.loc "Logical prefix scans are not defined"
+      | (RAdd | RMul | RMin | RMax), actual ->
+          type_errorf expr.loc
+            "Floating-point prefix scan requires float rack, got %s"
+            (show_concise actual))
 
-  | EShuffle (e, _) -> infer_expr env e
-  | EShift (e, _, _) -> infer_expr env e
-  | ERotate (e, _, _) -> infer_expr env e
+  | EShuffle _ -> unavailable_invariant Capabilities.Expr_shuffle
+  | EShift _ | ERotate _ -> unavailable_invariant Capabilities.Expr_shift_rotate
 
-  | EGather (base, _indices) ->
-      (* Gather returns rack of base's element type *)
-      let base_t = infer_expr env base in
-      (match base_t with
-       | Rack s -> Rack s
-       | Scalar s -> Rack s  (* gathering scalars produces rack *)
-       | _ -> Rack SFloat)   (* default for unknown base types *)
-  | EScatter (_, _, _) -> Unit
-  | ECompress (e, _) -> infer_expr env e
-  | EExpand (e, _, _) -> infer_expr env e
+  | EGather _ -> unavailable_invariant Capabilities.Expr_gather
+  | EScatter _ -> unavailable_invariant Capabilities.Expr_scatter
+  | ECompress _ -> unavailable_invariant Capabilities.Expr_compress
+  | EExpand _ -> unavailable_invariant Capabilities.Expr_expand
 
-  | ETines (_, _, sweep) ->
-      (* Type is determined by sweep result *)
-      if List.length sweep.sweep_arms > 0 then
-        infer_expr env (List.hd sweep.sweep_arms).arm_value
+  | ETines _ -> unavailable_invariant Capabilities.Expr_inline_tines
+
+  | EFma (a, b, c) ->
+      let a_t = infer_expr env a in
+      let b_t = infer_expr env b in
+      let c_t = infer_expr env c in
+      if a_t = Rack SFloat && b_t = a_t && c_t = a_t then a_t
       else
-        type_errorf expr.loc "Tines expression requires at least one sweep arm"
+        let describe = function
+          | Rack SFloat -> "float rack"
+          | t -> show_concise t
+        in
+        type_errorf expr.loc
+          "fma requires exactly three equal float rack operands, got %s, %s, and %s"
+          (describe a_t) (describe b_t) (describe c_t)
+  | EOuter _ -> unavailable_invariant Capabilities.Expr_outer
 
-  | EFma (a, _, _) -> infer_expr env a
-  | EOuter (_, _) ->
-      type_errorf expr.loc "Outer product not yet implemented"
-
-  | ETuple es -> Tuple (List.map (infer_expr env) es)
+  | ETuple _ -> unavailable_invariant Capabilities.Expr_tuple
   | EBroadcast e ->
       let t = infer_expr env e in
+      ensure_supported_value env expr.loc "broadcast" t;
       broadcast t
 
-  | EUnit -> Unit
-  | ELambda (params, body) ->
-      (* Infer parameter types and body type to form function type *)
-      let env' = copy_env env in
-      let param_types = List.concat_map (fun p ->
-        match p with
-        | PRack (pname, Some ty) ->
-            let t = typ_to_t env' ty in
-            Hashtbl.add env'.vars pname t;
-            [t]
-        | PRack (pname, None) ->
-            Hashtbl.add env'.vars pname (Rack SFloat);
-            [Rack SFloat]
-        | PScalar (pname, Some ty) ->
-            let t = typ_to_t env' ty in
-            Hashtbl.add env'.vars pname t;
-            [t]
-        | PScalar (pname, None) ->
-            Hashtbl.add env'.vars pname (Scalar SFloat);
-            [Scalar SFloat]
-        | PSpread (names, type_name) ->
-            let expanded = expand_spread env' type_name names expr.loc in
-            List.iter (fun (name, t) -> Hashtbl.add env'.vars name t) expanded;
-            List.map snd expanded
-      ) params in
-      let body_type = infer_expr env' body in
-      Fun (param_types, body_type)
-  | EPipe (_l, r) -> infer_expr env r
-  | EFusedPipe (l, r) ->
-      (* Fused pipe: verify fusion is possible, then return right-hand type *)
-      let _ = infer_expr env l in
-      infer_expr env r
+  | EUnit -> unavailable_invariant Capabilities.Expr_unit
+  | ELambda _ -> unavailable_invariant Capabilities.Expr_lambda
+  | EPipe _ -> unavailable_invariant Capabilities.Expr_pipeline
+  | EFusedPipe _ -> unavailable_invariant Capabilities.Expr_fused_pipeline
 
 (** Infer binary operation result type *)
-and infer_binop t1 t2 op _loc =
+and infer_binop t1 t2 op loc =
   match op with
   | Add | Sub | Mul | Div | Mod ->
-      binop_result t1 t2
+      if compatible t1 t2 && (is_float_rack t1 || is_float_rack t2 || is_float_scalar t1 || is_float_scalar t2) then
+        binop_result t1 t2
+      else
+        type_errorf loc "Unsupported arithmetic operands: %s and %s"
+          (show_concise t1) (show_concise t2)
   | Lt | Le | Gt | Ge | Eq | Ne ->
-      Mask  (* comparisons produce masks *)
+      if compatible t1 t2 && (is_float_rack t1 || is_float_rack t2 || is_float_scalar t1 || is_float_scalar t2) then
+        Mask
+      else
+        type_errorf loc "Unsupported comparison operands: %s and %s"
+          (show_concise t1) (show_concise t2)
   | And | Or ->
-      Mask
+      if t1 = Mask && t2 = Mask then Mask
+      else
+        type_errorf loc "Logical operators require mask operands, got %s and %s"
+          (show_concise t1) (show_concise t2)
   | Pipe ->
-      t2  (* result is right-hand side *)
+      let _ = loc in unavailable_invariant Capabilities.Expr_pipeline_operator
   | Shl | Shr | Rol | Ror ->
-      t1
+      let _ = loc in unavailable_invariant Capabilities.Expr_shift_rotate
   | Interleave ->
-      t1
+      let _ = loc in unavailable_invariant Capabilities.Expr_interleave
 
 (** Infer unary operation result type *)
-and infer_unop t op _loc =
+and infer_unop t op loc =
   match op with
-  | Neg | FNeg -> t
-  | Not -> Mask
+  | Neg | FNeg ->
+      if is_float_rack t || is_float_scalar t then t
+      else type_errorf loc "Unary minus requires float rack/scalar, got %s" (show_concise t)
+  | Not ->
+      if t = Mask then Mask
+      else type_errorf loc "Logical not requires mask operand, got %s" (show_concise t)
 
-(** Check if an expression is fusible (pure, no side effects) *)
-let rec is_fusible env (expr: Ast.expr) : bool =
+(** Built-ins whose implementation is compiler-known and has no observable
+    side effects. Fused bindings may contain calls only from this set; Rake
+    does not yet infer effects for user-defined functions. *)
+let pure_builtin_functions =
+  [ "sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs";
+    "floor"; "ceil"; "min"; "max"; "pow"; "atan2"; "select" ]
+
+(** Validate the source-level fused-binding contract.
+
+    Accepted expressions are immutable SSA computations which the current
+    emitter can place directly in the surrounding block. This deliberately
+    says nothing about backend registers or instruction selection. Returning
+    a reason rather than a boolean keeps rejection diagnostics deterministic. *)
+let rec fused_contract_rejection (expr: Ast.expr) : string option =
+  let first_rejection expressions =
+    List.find_map fused_contract_rejection expressions
+  in
   match expr.v with
-  | EInt _ | EFloat _ | EBool _ -> true
-  | EVar _ | EScalarVar _ -> true
-  | EBinop (l, _, r) -> is_fusible env l && is_fusible env r
-  | EUnop (_, e) -> is_fusible env e
+  | EInt _ | EFloat _ | EBool _ | EVar _ | EScalarVar _ -> None
+  | EBinop (l, _, r) -> first_rejection [l; r]
+  | EUnop (_, e) | EField (e, _) | EBroadcast e ->
+      fused_contract_rejection e
   | ECall (name, args) ->
-      (* Only pure built-in functions are fusible *)
-      let pure_funcs = ["sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs";
-                        "floor"; "ceil"; "min"; "max"; "pow"; "atan2"] in
-      List.mem name pure_funcs && List.for_all (is_fusible env) args
-  | EField (e, _) -> is_fusible env e
-  | EBroadcast e -> is_fusible env e
-  | EReduce (_, e) -> is_fusible env e
-  | EFma (a, b, c) -> is_fusible env a && is_fusible env b && is_fusible env c
-  | ETuple es -> List.for_all (is_fusible env) es
+      if List.mem name pure_builtin_functions then first_rejection args
+      else Some (Printf.sprintf
+        "call to '%s' is not a compiler-known pure built-in" name)
   | ELet (binding, body) ->
-      is_fusible env binding.bind_expr && is_fusible env body
-  | ELaneIndex | ELanes -> true
-  | EExtract (e, i) -> is_fusible env e && is_fusible env i
-  | EScan (_, e) | EShuffle (e, _) | EShift (e, _, _) | ERotate (e, _, _) ->
-      is_fusible env e
-  | EPipe (l, r) | EFusedPipe (l, r) -> is_fusible env l && is_fusible env r
-  | EUnit -> true
-  (* Side-effecting or unknown expressions are not fusible *)
-  | EScatter _ | EGather _ | ECompress _ | EExpand _ -> false
-  | ERecord _ | EWith _ | ETines _ | ELambda _ | EInsert _ | EOuter _ -> false
+      first_rejection [binding.bind_expr; body]
+  | ELaneIndex | ELanes -> None
+  | EExtract _ -> Some "lane extraction is not an inlineable expression shape"
+  | EInsert _ -> Some "lane insertion may update a value"
+  | EReduce _ -> Some "reduction is not an inlineable expression shape"
+  | EScan _ -> Some "scan is not an inlineable expression shape"
+  | EShuffle _ | EShift _ | ERotate _ ->
+      Some "lane rearrangement is not an inlineable expression shape"
+  | EPipe _ | EFusedPipe _ -> Some "pipeline is not an inlineable expression shape"
+  | EUnit -> Some "unit does not produce an inlineable value"
+  | EScatter _ -> Some "scatter may write memory"
+  | EGather _ -> Some "gather may read observable memory"
+  | ECompress _ | EExpand _ -> Some "masked memory operation is not an inlineable expression shape"
+  | ERecord _ | EWith _ -> Some "record construction is not an inlineable expression shape"
+  | ETines _ -> Some "inline tine expression is not an inlineable expression shape"
+  | ELambda _ -> Some "lambda is not an inlineable expression shape"
+  | EFma (a, b, c) -> first_rejection [a; b; c]
+  | EOuter _ -> Some "outer product is not an inlineable expression shape"
+  | ETuple _ -> Some "tuple construction is not an inlineable expression shape"
 
 (** Check a statement, return updated env *)
 let rec check_stmt env (stmt: stmt) : env =
+  require_feature env stmt.loc (Capabilities.feature_of_stmt stmt.v);
   match stmt.v with
   | SLet binding ->
       (* SSA: cannot rebind existing variables *)
@@ -447,56 +646,99 @@ let rec check_stmt env (stmt: stmt) : env =
       if not (Hashtbl.mem env.locations name) then
         type_errorf stmt.loc "Cannot assign to '%s': not a location (use := to create)"
           name;
-      let _ = infer_expr env e in
+      let actual_t = infer_expr env e in
+      let expected_t = match Hashtbl.find_opt env.vars name with
+        | Some t -> t
+        | None -> type_errorf stmt.loc "Location '%s' has no recorded type" name
+      in
+      if not (compatible expected_t actual_t) then
+        type_errorf stmt.loc "Assignment type mismatch for '%s': expected %s, got %s"
+          name (show_concise expected_t) (show_concise actual_t);
       env
 
   | SFused fb ->
-      (* Fused binding: verify fusion is possible *)
-      if not (is_fusible env fb.fused_expr) then
-        type_errorf stmt.loc "Expression for '%s' cannot be fused (contains side effects or non-pure calls)"
+      (* Contract binding: immutable, pure, and directly representable as SSA. *)
+      if Hashtbl.mem env.vars fb.fused_name then
+        type_errorf stmt.loc "Cannot rebind '%s' (SSA violation, use := for mutable storage)"
           fb.fused_name;
+      (match fused_contract_rejection fb.fused_expr with
+       | Some reason ->
+           type_errorf stmt.loc "Fused binding contract for '%s' rejected: %s"
+             fb.fused_name reason
+       | None -> ());
       let t = infer_expr env fb.fused_expr in
-      Hashtbl.add env.vars fb.fused_name t;
+      let final_t =
+        match fb.fused_type with
+        | None -> t
+        | Some annotation ->
+            let expected = typ_to_t env annotation in
+            if compatible expected t then expected
+            else
+              type_errorf stmt.loc
+                "Fused binding '%s' type mismatch: expected %s, got %s"
+                fb.fused_name (show_concise expected) (show_concise t)
+      in
+      Hashtbl.add env.vars fb.fused_name final_t;
       env
 
   | SExpr e ->
       let _ = infer_expr env e in
       env
   | SOver over ->
-      (* Check the count expression *)
-      let _count_t = infer_expr env over.over_count in
-      (* Look up pack type and derive stack type for chunk binding *)
-      let pack_t = match Hashtbl.find_opt env.vars over.over_pack with
-        | Some (Pack (name, fields)) -> Pack (name, fields)
-        | Some t -> type_errorf stmt.loc "Expected pack type, got %s" (show_concise t)
-        | None -> type_errorf stmt.loc "Undefined pack: %s" over.over_pack
-      in
-      (* The chunk binding gets the corresponding stack type *)
-      let chunk_t = match pack_t with
-        | Pack (name, fields) -> Stack (name, fields)
-        | _ -> type_errorf stmt.loc "Expected pack type"
-      in
-      (* Add chunk to env and check body *)
-      let body_env = { env with vars = Hashtbl.copy env.vars } in
-      Hashtbl.add body_env.vars over.over_chunk chunk_t;
-      List.iter (fun s -> ignore (check_stmt body_env s)) over.over_body;
+      let _ = check_over_result env stmt.loc over in
       env
+
+and check_over_result env statement_loc over =
+  let count_t = infer_expr env over.over_count in
+  (match count_t with
+  | Scalar SInt | Scalar SInt64 -> ()
+  | _ ->
+      type_errorf over.over_count.loc
+        "Over loop count must be scalar int/int64, got %s"
+        (show_concise count_t));
+  let chunk_t =
+    match Hashtbl.find_opt env.vars over.over_pack with
+    | Some (Pack (name, fields)) ->
+        let domain = of_prim over.over_domain in
+        Stack (name, List.map (traversal_field domain) fields)
+    | Some t ->
+        type_errorf statement_loc "Expected pack type, got %s" (show_concise t)
+    | None -> type_errorf statement_loc "Undefined pack: %s" over.over_pack
+  in
+  let body_env = { env with vars = Hashtbl.copy env.vars } in
+  Hashtbl.add body_env.vars over.over_chunk chunk_t;
+  List.iter (fun statement -> ignore (check_stmt body_env statement)) over.over_body;
+  match List.rev over.over_body with
+  | { v = SExpr expression; _ } :: _ ->
+      let result = infer_expr body_env expression in
+      ensure_rack_result body_env expression.loc result;
+      result
+  | [] ->
+      type_errorf statement_loc
+        "Over loop must have a body ending in a result expression"
+  | final_statement :: _ ->
+      type_errorf final_statement.loc
+        "Over loop body must end in a result expression"
 
 (** Check tine predicate *)
 let rec check_predicate env (pred: predicate) : unit =
+  require_feature env pred.loc (Capabilities.feature_of_predicate pred.v);
   match pred.v with
   | PExpr e ->
       let t = infer_expr env e in
       if t <> Mask then
         type_errorf pred.loc "Predicate must be mask type, got %s" (show_concise t)
-  | PCmp (l, _, r) ->
-      let _ = infer_expr env l in
-      let _ = infer_expr env r in
-      ()  (* comparisons always produce mask *)
+  | PCmp (l, cmp, r) ->
+      let lt = infer_expr env l in
+      let rt = infer_expr env r in
+      let op = match cmp with
+        | CLt -> Lt | CLe -> Le | CGt -> Gt | CGe -> Ge | CEq -> Eq | CNe -> Ne
+      in
+      ignore (infer_binop lt rt op pred.loc)
   | PIs (l, r) | PIsNot (l, r) ->
-      let _ = infer_expr env l in
-      let _ = infer_expr env r in
-      ()
+      let lt = infer_expr env l in
+      let rt = infer_expr env r in
+      ignore (infer_binop lt rt Eq pred.loc)
   | PAnd (l, r) | POr (l, r) ->
       check_predicate env l;
       check_predicate env r
@@ -506,10 +748,81 @@ let rec check_predicate env (pred: predicate) : unit =
       if not (Hashtbl.mem env.tines name) then
         type_errorf pred.loc "Reference to undefined tine: #%s" name
 
+(** Audit an expression for CPU-predicated execution.  This is deliberately
+    separate from ordinary type inference: a call can be valid in unmasked
+    code while lacking a sound inactive-lane lowering inside [through]. *)
+let rec check_masked_expr env (expr: expr) =
+  match expr.v with
+  | EBinop (l, op, r) ->
+      if not (Masked_safety.supports_binop op) then
+        require_feature env expr.loc Capabilities.Masked_modulo;
+      check_masked_expr env l;
+      check_masked_expr env r
+  | EUnop (_, e) | EBroadcast e | EField (e, _) ->
+      check_masked_expr env e
+  | ECall (name, args) ->
+      (match Masked_safety.classify_builtin name with
+       | Masked_safety.Sanitized -> ()
+       | Masked_safety.Unsupported ->
+           require_feature env expr.loc Capabilities.Masked_user_call);
+      List.iter (check_masked_expr env) args
+  | ELet (binding, body) ->
+      check_masked_expr env binding.bind_expr;
+      check_masked_expr env body
+  | EInt _ | EFloat _ | EBool _ | EVar _ | EScalarVar _ | ELaneIndex
+  | ELanes | EUnit -> ()
+  | ERecord (_, inits) ->
+      List.iter (fun init -> check_masked_expr env init.init_value) inits
+  | EWith (base, inits) ->
+      check_masked_expr env base;
+      List.iter (fun init -> check_masked_expr env init.init_value) inits
+  | EExtract (v, i) -> check_masked_expr env v; check_masked_expr env i
+  | EInsert (v, i, x) ->
+      check_masked_expr env v; check_masked_expr env i; check_masked_expr env x
+  | EReduce _ | EScan _ ->
+      require_feature env expr.loc Capabilities.Masked_cross_lane
+  | EShuffle (e, _) | EShift (e, _, _) | ERotate (e, _, _) ->
+      check_masked_expr env e
+  | EGather (base, indices) ->
+      check_masked_expr env base; check_masked_expr env indices
+  | EScatter (base, indices, values) ->
+      check_masked_expr env base;
+      check_masked_expr env indices;
+      check_masked_expr env values
+  | ECompress (v, mask) ->
+      check_masked_expr env v; check_masked_expr env mask
+  | EExpand (v, mask, passthru) ->
+      check_masked_expr env v;
+      check_masked_expr env mask;
+      check_masked_expr env passthru
+  | ETines (_, throughs, sweep) ->
+      List.iter (fun th ->
+        List.iter (check_masked_stmt env) th.through_body;
+        check_masked_expr env th.through_result
+      ) throughs;
+      List.iter (fun arm -> check_masked_expr env arm.arm_value) sweep.sweep_arms
+  | EFma (a, b, c) ->
+      check_masked_expr env a; check_masked_expr env b; check_masked_expr env c
+  | EOuter (a, b) -> check_masked_expr env a; check_masked_expr env b
+  | ETuple es -> List.iter (check_masked_expr env) es
+  | ELambda (_, body) -> check_masked_expr env body
+  | EPipe (l, r) | EFusedPipe (l, r) ->
+      check_masked_expr env l; check_masked_expr env r
+
+and check_masked_stmt env (stmt: stmt) =
+  match stmt.v with
+  | SLet binding -> check_masked_expr env binding.bind_expr
+  | SFused binding -> check_masked_expr env binding.fused_expr
+  | SExpr expr -> check_masked_expr env expr
+  | SLocBind _ | SAssign _ ->
+      require_feature env stmt.loc Capabilities.Masked_mutation
+  | SOver _ -> require_feature env stmt.loc Capabilities.Masked_loop
+
 (** Check through block *)
 let check_through env (th: through) : t =
   (* Use through_result's location as the block location *)
   let block_loc = th.through_result.loc in
+  require_feature env block_loc Capabilities.Rake_through;
   (* Check tine reference *)
   (match th.through_tine with
    | TRSingle name ->
@@ -519,19 +832,47 @@ let check_through env (th: through) : t =
        check_predicate env pred);
   (* Check body statements *)
   let env' = copy_env env in
-  List.iter (fun s -> ignore (check_stmt env' s)) th.through_body;
+  List.iter (fun s ->
+    check_masked_stmt env' s;
+    ignore (check_stmt env' s)
+  ) th.through_body;
   (* Infer result type *)
   let result_t = infer_expr env' th.through_result in
+  check_masked_expr env' th.through_result;
+  ensure_float_rack_result env th.through_result.loc result_t;
+  (match th.through_passthru with
+   | Some passthru ->
+       (* Passthrough is outside the masked body and cannot observe its locals. *)
+       let passthru_t = infer_expr env passthru in
+       ensure_float_rack_result env passthru.loc passthru_t;
+       if not (compatible result_t passthru_t) then
+         type_errorf passthru.loc "Through passthru type mismatch: expected %s, got %s"
+           (show_concise result_t) (show_concise passthru_t)
+   | None -> ());
   Hashtbl.add env.vars th.through_binding result_t;
   result_t
 
 (** Check sweep block *)
 let check_sweep env (sw: sweep) expected_loc : t =
-  (* Check for catch-all arm (arm with no tine reference) *)
-  let has_catchall = List.exists (fun arm -> arm.arm_tine = None) sw.sweep_arms in
-  if not has_catchall then
-    Printf.eprintf "Warning at %s:%d: sweep has no catch-all (_) arm; lanes not matching any tine will have undefined values\n"
-      expected_loc.file expected_loc.line;
+  require_feature env expected_loc Capabilities.Rake_sweep;
+  (* A total sweep has exactly one final catch-all and mentions each named tine
+     at most once. Keeping this as a source invariant lets emission start from
+     a real value rather than inventing an unmatched-lane seed. *)
+  let rec check_arms seen_tines saw_catchall = function
+    | [] ->
+        if not saw_catchall then
+          type_error "Sweep must end with a catch-all (_) arm" expected_loc
+    | arm :: rest ->
+        if saw_catchall then
+          type_error "Sweep arm after catch-all (_) is unreachable" expected_loc;
+        (match arm.arm_tine with
+         | Some name ->
+             if List.mem name seen_tines then
+               type_errorf expected_loc "Duplicate tine arm in sweep: #%s" name;
+             check_arms (name :: seen_tines) false rest
+         | None -> check_arms seen_tines true rest)
+  in
+  check_arms [] false sw.sweep_arms;
 
   let arm_types = List.map (fun arm ->
     (match arm.arm_tine with
@@ -539,7 +880,10 @@ let check_sweep env (sw: sweep) expected_loc : t =
          if not (Hashtbl.mem env.tines name) then
            type_errorf expected_loc "Reference to undefined tine in sweep: #%s" name
      | None -> ());  (* catch-all *)
-    infer_expr env arm.arm_value
+    check_masked_expr env arm.arm_value;
+    let arm_t = infer_expr env arm.arm_value in
+    ensure_float_rack_result env expected_loc arm_t;
+    arm_t
   ) sw.sweep_arms in
   (* All arms should have compatible types *)
   match arm_types with
@@ -555,6 +899,9 @@ let check_sweep env (sw: sweep) expected_loc : t =
 (** Check rake function definition *)
 let check_rake env _name params result setup tines throughs sweep loc =
   let env' = copy_env env in
+
+  require_feature env' loc Capabilities.Rake_tines;
+  List.iter (ensure_supported_rake_param env' loc) params;
 
   (* Add parameters to environment (rake uses name-based inference) *)
   List.iter (fun p ->
@@ -584,14 +931,13 @@ let check_rake env _name params result setup tines throughs sweep loc =
   (* Check setup statements *)
   List.iter (fun s -> ignore (check_stmt env' s)) setup;
 
-  (* Register tines *)
+  (* Tines are source ordered.  A reference may name only an earlier tine,
+     which gives native lowering a deterministic acyclic mask graph. *)
   List.iter (fun tine ->
+    if Hashtbl.mem env'.tines tine.tine_name then
+      type_errorf tine.tine_pred.loc "Duplicate tine declaration: #%s" tine.tine_name;
+    check_predicate env' tine.tine_pred;
     Hashtbl.add env'.tines tine.tine_name ()
-  ) tines;
-
-  (* Check tine predicates *)
-  List.iter (fun tine ->
-    check_predicate env' tine.tine_pred
   ) tines;
 
   (* Check through blocks *)
@@ -605,10 +951,16 @@ let check_rake env _name params result setup tines throughs sweep loc =
 
   (* Verify result type matches *)
   let expected_t = match result.result_type with
-    | Some ty -> typ_to_t env ty
+    | Some ty ->
+        let t = typ_to_t env ty in
+        require_feature env' ty.loc Capabilities.Result_annotation;
+        ensure_float_rack_result env' ty.loc t;
+        t
     | None ->
         (match Hashtbl.find_opt env.types result.result_name with
-         | Some t -> t
+         | Some t ->
+             ensure_float_rack_result env' loc t;
+             t
          | None -> sweep_t)
   in
   if not (compatible expected_t sweep_t) then
@@ -638,11 +990,81 @@ let add_params_to_env env params loc =
 let check_crunch env _name params _result body loc =
   let env' = copy_env env in
 
+  List.iter (ensure_supported_crunch_param env' loc) params;
+  (match _result.result_type with
+   | Some ty ->
+       require_feature env' ty.loc Capabilities.Result_annotation;
+       let t = typ_to_t env' ty in
+       if t <> Rack SFloat && t <> Scalar SFloat then
+         require_feature env' ty.loc Capabilities.Value_non_f32
+   | None -> ());
+
   (* Add parameters, expanding any spreads *)
   add_params_to_env env' params loc;
 
   (* Check body *)
-  List.iter (fun s -> ignore (check_stmt env' s)) body
+  List.iter (fun s -> ignore (check_stmt env' s)) body;
+
+  let actual_t = match Hashtbl.find_opt env'.vars _result.result_name with
+    | Some t -> t
+    | None ->
+        let has_trailing_expr = match List.rev body with
+          | { v = SExpr _; _ } :: _ -> true
+          | _ -> false
+        in
+        if has_trailing_expr then
+          (require_feature env' loc Capabilities.Crunch_implicit_result;
+           unavailable_invariant Capabilities.Crunch_implicit_result)
+        else
+          type_errorf loc "Crunch result '%s' is not bound; bind it with let or a fused binding"
+            _result.result_name
+  in
+  if actual_t <> Rack SFloat && actual_t <> Scalar SFloat then
+    require_feature env' loc Capabilities.Result_non_float_rack;
+  let expected_t = match _result.result_type with
+    | Some ty -> typ_to_t env' ty
+    | None -> Rack SFloat
+  in
+  if not (compatible expected_t actual_t) then
+    type_errorf loc "Return type mismatch: expected %s, got %s"
+      (show_concise expected_t) (show_concise actual_t)
+
+(** Check run function definition *)
+let check_run env _name params result body loc =
+  let env' = copy_env env in
+  List.iter (ensure_supported_run_param env' loc) params;
+  (match result.result_type with
+   | Some ty ->
+       require_feature env' ty.loc Capabilities.Result_annotation;
+       let t = run_result_to_t env' ty in
+       if not (is_float_rack t) then
+         require_feature env' ty.loc Capabilities.Value_non_f32
+  | None -> ());
+  add_params_to_env env' params loc;
+  let actual_t =
+    match List.rev body with
+    | { v = SOver over; loc = over_loc } :: preceding_reversed ->
+        List.rev preceding_reversed
+        |> List.iter (fun statement -> ignore (check_stmt env' statement));
+        check_over_result env' over_loc over
+    | [] ->
+        type_errorf loc
+          "Run result '%s' is not produced; the body must end in an over loop"
+          result.result_name
+    | final_statement :: _ ->
+        type_errorf final_statement.loc
+          "Run result '%s' is not produced; the body must end in an over loop"
+          result.result_name
+  in
+  ensure_rack_result env' loc actual_t;
+  let expected_t =
+    match result.result_type with
+    | Some ty -> run_result_to_t env' ty
+    | None -> Rack SFloat
+  in
+  if not (compatible expected_t actual_t) then
+    type_errorf loc "Run result '%s' type mismatch: expected %s, got %s"
+      result.result_name (show_concise expected_t) (show_concise actual_t)
 
 (** Check a definition *)
 let check_def env (def: def) =
@@ -654,10 +1076,14 @@ let check_def env (def: def) =
   | DRake (name, params, result, setup, tines, throughs, sweep) ->
       check_rake env name params result setup tines throughs sweep def.loc
   | DRun (name, params, result, body) ->
-      check_crunch env name params result body def.loc
+      check_run env name params result body def.loc
 
 (** Check a module *)
 let check_module env (m: module_) =
+  (* This exhaustive top-level audit runs before any registration pass. *)
+  List.iter (fun def ->
+    require_feature env def.loc (Capabilities.feature_of_def def.v)
+  ) m.mod_defs;
   (* First pass: register all type definitions *)
   List.iter (register_type_def env) m.mod_defs;
   (* Second pass: register function signatures *)
@@ -666,16 +1092,16 @@ let check_module env (m: module_) =
   List.iter (check_def env) m.mod_defs
 
 (** Check a program *)
-let check_program (prog: program) =
-  let env = create_env () in
+let check_program ?(target = Capabilities.Frontend) (prog: program) =
+  let env = create_env target in
   add_builtins env;
   List.iter (check_module env) prog;
   env
 
 (** Check and return result or error message *)
-let check prog =
+let check ?(target = Capabilities.Frontend) prog =
   try
-    let env = check_program prog in
+    let env = check_program ~target prog in
     Ok env
   with TypeError (msg, loc) ->
     Error (Printf.sprintf "%s:%d:%d: Type error: %s"

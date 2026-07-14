@@ -1,0 +1,7 @@
+stack Values {
+  f32: value;
+}
+
+run malformed_over(values: pack Values, <count: i64>) -> f32:
+  for chunk values using f32s up to <count>:
+    yield chunk.value

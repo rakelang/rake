@@ -1,0 +1,14 @@
+rake overlap_priority(values: f32s) -> f32s:
+  tine #first when values >= <0.0>
+  tine #second when values <= <0.0>
+
+  through #first else <-1.0> into first_value:
+    <1.0>
+
+  through #second else <-2.0> into second_value:
+    <2.0>
+
+  return sweep:
+    | #first  => first_value
+    | #second => second_value
+    | _       => <3.0>

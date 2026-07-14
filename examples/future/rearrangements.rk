@@ -1,0 +1,5 @@
+crunch static_rearrangements a b -> result:
+  let shuffled = a ~> [7, 6, 5, 4, 3, 2, 1, 0]
+  let shifted = shuffled << 2
+  let rotated = shifted >>> 1
+  let result = rotated >< b

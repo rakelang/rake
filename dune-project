@@ -1,7 +1,7 @@
 (lang dune 3.20)
 (using menhir 3.0)
 (name rake)
-(version 0.3.0)
+(version 0.3.0-alpha.1)
 (generate_opam_files true)
 
 (package

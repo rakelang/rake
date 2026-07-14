@@ -1,0 +1,11 @@
+~~ docs:start safe-through
+rake safe_root(values: f32s) -> f32s:
+  tine #valid when values >= <0.0>
+
+  through #valid else <0.0> into rooted:
+    sqrt(values)
+
+  return sweep:
+    | #valid => rooted
+    | _      => <0.0>
+~~ docs:end safe-through

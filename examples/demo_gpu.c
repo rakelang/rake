@@ -9,7 +9,7 @@
  *
  * Build:
  *   glslc vulkan_raytracer.comp -o raytracer.spv
- *   clang -O3 -mavx2 vulkan_demo.c raytracer_rake.o -o vulkan_demo \
+ *   cc -O3 -mavx2 vulkan_demo.c raytracer_rake.o -o vulkan_demo \
  *         -lvulkan -lm -lSDL2
  */
 

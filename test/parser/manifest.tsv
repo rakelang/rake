@@ -1,0 +1,19 @@
+path	class	construct
+test/parser/malformed/dynamic_lane_rotate.rk.invalid	malformed	lane rotate count must be a static integer literal
+test/parser/malformed/dynamic_lane_shift.rk.invalid	malformed	lane shift count must be a static integer literal
+test/parser/malformed/dynamic_shuffle_index.rk.invalid	malformed	shuffle indices must be static integer literals
+test/parser/malformed/empty_shuffle.rk.invalid	malformed	shuffle index list must be non-empty
+test/parser/malformed/lane_insertion_missing_value.rk.invalid	malformed	lane insertion requires a scalar value
+test/parser/malformed/fused_missing_operator.rk.invalid	malformed	fused binding requires <|
+test/parser/malformed/legacy_bare_crunch.rk.invalid	malformed	legacy bare parameters and named results are not source syntax
+test/parser/malformed/over_missing_pipe.rk.invalid	malformed	for traversal requires in
+test/parser/malformed/parenthesized_run_list.rk.invalid	malformed	parameters require comma separators
+test/parser/malformed/scalar_literal_parameter.rk.invalid	malformed	scalar parameter marker contains an identifier
+test/parser/malformed/scalar_marker_whitespace.rk.invalid	malformed	scalar parameter marker has no internal whitespace
+test/parser/malformed/sweep_missing_arrow.rk.invalid	malformed	sweep arm requires =>
+test/parser/malformed/tine_missing_parentheses.rk.invalid	malformed	tine declaration requires when
+test/parser/malformed/tine_predicate_call.rk.invalid	malformed	tine predicate arithmetic does not contain calls
+test/parser/malformed/tine_reference_whitespace.rk.invalid	malformed	tine reference has no internal whitespace
+test/parser/malformed/through_missing_result_arrow.rk.invalid	malformed	through header requires into binding
+test/parser/malformed/reserved_single.rk.invalid	malformed	single schemas are reserved
+test/parser/malformed/reserved_spread.rk.invalid	malformed	parameter spreading is reserved
