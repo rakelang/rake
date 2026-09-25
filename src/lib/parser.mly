@@ -549,6 +549,12 @@ expr_primary:
     indices = separated_nonempty_list(COMMA, int_lit) RBRACKET RPAREN {
       mk_node (EShuffle (value, indices)) $startpos $endpos
     }
+  (* Two racks laid end to end; indices past the first rack's lanes select from the second. *)
+  | SHUFFLE_FN LPAREN left = expr COMMA right = expr COMMA LBRACKET
+    indices = separated_nonempty_list(COMMA, int_lit) RBRACKET RPAREN {
+      let pair = mk_node (ETuple [left; right]) $startpos(left) $endpos(right) in
+      mk_node (EShuffle (pair, indices)) $startpos $endpos
+    }
   | SHIFT_LEFT_FN LPAREN value = expr COMMA amount = int_lit RPAREN {
       mk_node (EShift (value, amount, Left)) $startpos $endpos
     }

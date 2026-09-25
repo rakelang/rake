@@ -35,6 +35,7 @@ type feature =
   | Rake_tines | Rake_through | Rake_sweep
   | Masked_user_call | Masked_modulo | Masked_mutation | Masked_loop
   | Masked_cross_lane
+  | Integer_rack_comparison | Bitmask_reduction
   | Crunch_scalar_param | Rake_spread_param | Run_spread_param
   | Crunch_implicit_result | Value_non_f32 | Pack_non_f32_field
   | Result_non_float_rack
@@ -114,7 +115,8 @@ let all = [
     "strict ascending-lane f32 reductions";
   supported Expr_scan "expression.scan" "expression"
     "strict inclusive f32 prefix scans";
-  unavailable Expr_shuffle "expression.shuffle" "expression" "shuffles";
+  supported Expr_shuffle "expression.shuffle" "expression"
+    "static lane shuffles of one rack, or of two equal racks laid end to end";
   unavailable Expr_gather "expression.gather" "expression" "gathers";
   unavailable Expr_scatter "expression.scatter" "expression" "scatters";
   unavailable Expr_compress "expression.compress" "expression" "compression";
@@ -153,6 +155,10 @@ let all = [
   unavailable Masked_loop "masked.loop" "masked" "over loops inside through blocks";
   unavailable Masked_cross_lane "masked.cross-lane" "masked"
     "reductions and scans inside through blocks";
+  supported Integer_rack_comparison "operator.integer-rack-comparison" "operator"
+    "comparisons of equal integer racks, or of an integer rack with an integer literal";
+  supported Bitmask_reduction "expression.bitmask" "expression"
+    "bitmask(mask): one bit per lane as a u32, lane zero in bit zero";
   supported Crunch_scalar_param "crunch.scalar-parameter" "boundary"
     "explicit uniform f32 crunch parameters";
   unavailable Rake_spread_param "rake.spread-parameter" "boundary" "spread rake parameters";

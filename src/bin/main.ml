@@ -19,7 +19,7 @@ Usage:
 
 Options:
   --target <p>   Select native, scalar, x86-sse2, x86-avx2, x86-avx512,
-                 or aarch64-neon (default: native).
+                 aarch64-neon, or wasm-simd128 (default: native).
   --width <n>    Compatibility assertion. It must equal the selected profile's
                  f32 lane count; it never changes or splits a native rack.
   -o <file>      Write the selected emission product to <file>.
@@ -243,13 +243,15 @@ let () =
               write_output (Rake.Native_ir.dump native_ir) opts.output
           | Assembly ->
               let assembly =
-                report_backend (Rake.Native_backend.emit_assembly ~config program)
+                report_backend (Rake.Native_backend.emit_assembly ~source:filename ~config program)
               in
+              (* The wasm-simd128 profile's textual assembly is C carrying inline WebAssembly. *)
+              let extension = if config.profile = Rake.Target.Wasm_simd128 then ".c" else ".s" in
               let output =
                 Some
                   (match opts.output with
                   | Some path -> path
-                  | None -> source_stem filename ^ ".s")
+                  | None -> source_stem filename ^ extension)
               in
               write_output assembly output
           | Object ->

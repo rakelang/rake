@@ -11,12 +11,13 @@ let unknown_location = { file = "<unknown>"; line = 0; col = 0; offset = 0 }
 
 let format_source_location loc = Printf.sprintf "%s:%d:%d" loc.file loc.line loc.col
 
-type element = I1 | I32 | I64 | F32 | F64
+type element = I1 | U8 | I32 | I64 | F32 | F64
 
 type typ = Scalar of element | Rack of element | Mask | Pointer
 
 type literal =
   | Bool of bool
+  | Uint8 of int
   | Int32 of int32
   | Int64 of int64
   | Float32_bits of int32
@@ -28,7 +29,9 @@ type unary = Neg | Sqrt
 
 type comparison = Eq | Ne | Lt | Le | Gt | Ge
 
-type reduction = Reduce_add | Reduce_mul | Reduce_min | Reduce_max | Reduce_and | Reduce_or
+type reduction =
+  | Reduce_add | Reduce_mul | Reduce_min | Reduce_max | Reduce_and | Reduce_or
+  | Reduce_bitmask  (** one bit per mask lane, lane zero in bit zero *)
 
 type scan = Scan_add | Scan_mul | Scan_min | Scan_max
 
@@ -52,7 +55,8 @@ type op =
   | Sanitize of { mask : value; active : value; benign : value }
   | Load of { address : value; alignment : int }
   | Store of { address : value; stored : value; alignment : int }
-  | Shuffle of { rack : value; indices : int list }
+  | Shuffle of { racks : value list; indices : int list }
+      (** Lane [i] of the result is lane [indices.(i)] of the racks laid end to end. *)
   | Reduce of reduction * value
   | Scan of scan * value
   | Extract of { rack : value; lane : value }
@@ -105,6 +109,7 @@ type error = { function_name : string; context : string list; message : string }
 
 let string_of_element = function
   | I1 -> "i1"
+  | U8 -> "u8"
   | I32 -> "i32"
   | I64 -> "i64"
   | F32 -> "f32"
@@ -134,13 +139,14 @@ let complain (verifier : verifier) context message =
 
 let literal_element = function
   | Bool _ -> I1
+  | Uint8 _ -> U8
   | Int32 _ -> I32
   | Int64 _ -> I64
   | Float32_bits _ -> F32
   | Float64_bits _ -> F64
 
 let is_integer = function Scalar I32 | Scalar I64 -> true | _ -> false
-let is_numeric_element = function I32 | I64 | F32 | F64 -> true | I1 -> false
+let is_numeric_element = function U8 | I32 | I64 | F32 | F64 -> true | I1 -> false
 let is_numeric = function Scalar element | Rack element -> is_numeric_element element | Mask | Pointer -> false
 let is_float_rack = function Rack F32 | Rack F64 -> true | _ -> false
 
@@ -155,7 +161,7 @@ let operands = function
   | Sanitize { mask; active; benign } -> [ mask; active; benign ]
   | Load { address; _ } -> [ address ]
   | Store { address; stored; _ } -> [ address; stored ]
-  | Shuffle { rack; _ } -> [ rack ]
+  | Shuffle { racks; _ } -> racks
   | Extract { rack; lane } -> [ rack; lane ]
   | Insert { rack; inserted; lane } -> [ rack; inserted; lane ]
   | Gather { base; indices; mask } -> base :: indices :: Option.to_list mask
@@ -349,18 +355,25 @@ let rec verify_instruction verifier context environment (instruction : instructi
       require_type verifier context environment address Pointer;
       check_alignment verifier context alignment;
       check_result verifier context instruction None
-  | Shuffle { rack; indices } ->
+  | Shuffle { racks; indices } ->
       if indices = [] || List.exists (fun index -> index < 0) indices then
         complain verifier context "shuffle indices must be non-negative and non-empty";
-      (match lookup rack with
-      | Some (Rack _ as typ) -> check_result verifier context instruction (Some typ)
-      | _ -> complain verifier context "shuffle requires a rack")
+      if racks = [] || List.length racks > 2 then
+        complain verifier context "shuffle takes one or two racks";
+      let types = List.filter_map lookup racks in
+      require_same verifier context "shuffle" types;
+      (match types with
+      | (Rack _ as typ) :: _ -> check_result verifier context instruction (Some typ)
+      | _ -> complain verifier context "shuffle requires racks")
   | Reduce ((Reduce_add | Reduce_mul | Reduce_min | Reduce_max), rack) ->
       require_type verifier context environment rack (Rack F32);
       check_result verifier context instruction (Some (Scalar F32))
   | Reduce ((Reduce_and | Reduce_or), rack) ->
       require_type verifier context environment rack Mask;
       check_result verifier context instruction (Some (Scalar I1))
+  | Reduce (Reduce_bitmask, mask) ->
+      require_type verifier context environment mask Mask;
+      check_result verifier context instruction (Some (Scalar I32))
   | Scan (_, rack) ->
       require_type verifier context environment rack (Rack F32);
       check_result verifier context instruction (Some (Rack F32))
@@ -550,6 +563,7 @@ let verify module_ =
 
 let string_of_literal = function
   | Bool value -> string_of_bool value
+  | Uint8 value -> "u8:" ^ string_of_int value
   | Int32 value -> Int32.to_string value
   | Int64 value -> Int64.to_string value
   | Float32_bits bits -> Printf.sprintf "f32:0x%08lx" bits
@@ -577,6 +591,7 @@ let string_of_reduction = function
   | Reduce_max -> "max"
   | Reduce_and -> "and"
   | Reduce_or -> "or"
+  | Reduce_bitmask -> "bitmask"
 
 let string_of_scan = function Scan_add -> "add" | Scan_mul -> "mul" | Scan_min -> "min" | Scan_max -> "max"
 
@@ -612,7 +627,7 @@ let rec string_of_instruction indent (instruction : instruction) =
         "sanitize " ^ values [ mask; active; benign ]
     | Load { address; alignment } -> Printf.sprintf "load %s align %d" (value address) alignment
     | Store { address; stored; alignment } -> Printf.sprintf "store %s, %s align %d" (value stored) (value address) alignment
-    | Shuffle { rack; indices } -> "rack.shuffle " ^ value rack ^ " [" ^ String.concat ", " (List.map string_of_int indices) ^ "]"
+    | Shuffle { racks; indices } -> "rack.shuffle " ^ values racks ^ " [" ^ String.concat ", " (List.map string_of_int indices) ^ "]"
     | Reduce (kind, rack) -> "rack.reduce." ^ string_of_reduction kind ^ " " ^ value rack
     | Scan (kind, rack) -> "rack.scan." ^ string_of_scan kind ^ " " ^ value rack
     | Extract { rack; lane } -> "rack.extract " ^ values [ rack; lane ]

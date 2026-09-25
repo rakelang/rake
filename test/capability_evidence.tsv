@@ -51,7 +51,7 @@ expression.lane-extract	unavailable	unavailable	capability:expression.lane-extra
 expression.lane-insert	unavailable	unavailable	capability:expression.lane-insert	-	-	-	-	-	-
 expression.reduction	checked	verified-slice	fixture:test/native/reductions_scans.rk	runtime:reductions	fixture:test/native/reductions_scans.rk	dune:x86_avx2_isel_test	dune:x86_avx2_regalloc_test	verify:reductions	runtime:reductions
 expression.scan	checked	verified	fixture:test/native/reductions_scans.rk	runtime:scans	fixture:test/native/reductions_scans.rk	dune:x86_avx2_isel_test	dune:x86_avx2_regalloc_test	verify:scans	runtime:scans
-expression.shuffle	unavailable	unavailable	capability:expression.shuffle	-	-	-	-	-	-
+expression.shuffle	checked	frontend-only	capability:expression.shuffle	-	-	-	-	-	-
 expression.gather	unavailable	unavailable	capability:expression.gather	-	-	-	-	-	-
 expression.scatter	unavailable	unavailable	capability:expression.scatter	-	-	-	-	-	-
 expression.compress	unavailable	unavailable	capability:expression.compress	-	-	-	-	-	-
@@ -90,3 +90,5 @@ crunch.implicit-result	unavailable	unavailable	capability:crunch.implicit-result
 value.non-f32	checked	frontend-only	fixture:test/frontend/mixed_storage_widen.rk	-	-	-	-	-	-
 pack.non-f32-field	checked	frontend-only	fixture:test/frontend/mixed_storage_widen.rk	-	-	-	-	-	-
 result.non-float-rack	checked	frontend-only	fixture:test/frontend/byte_domain.rk	-	-	-	-	-	-
+operator.integer-rack-comparison	checked	frontend-only	capability:operator.integer-rack-comparison	-	-	-	-	-	-
+expression.bitmask	checked	frontend-only	capability:expression.bitmask	-	-	-	-	-	-

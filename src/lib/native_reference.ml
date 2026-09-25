@@ -10,8 +10,10 @@ type value =
   | F32_scalar of float
   | F32_rack of float array
   | Mask of bool array
+  | U8_rack of int array   (** lanes 0 to 255; four byte lanes per f32 lane *)
+  | U32_scalar of int      (** 0 to 2^32 - 1, e.g. a bitmask result *)
 
-type value_kind = Scalar | Rack | Mask_kind
+type value_kind = Scalar | Rack | Mask_kind | U8_rack_kind | U32_scalar_kind
 
 type error_kind =
   | Invalid_lane_count of int
@@ -41,11 +43,15 @@ let value_kind = function
   | F32_scalar _ -> Scalar
   | F32_rack _ -> Rack
   | Mask _ -> Mask_kind
+  | U8_rack _ -> U8_rack_kind
+  | U32_scalar _ -> U32_scalar_kind
 
 let string_of_value_kind = function
   | Scalar -> "f32 scalar"
   | Rack -> "f32 rack"
   | Mask_kind -> "mask"
+  | U8_rack_kind -> "u8 rack"
+  | U32_scalar_kind -> "u32 scalar"
 
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let scalar x = F32_scalar (f32 x)
@@ -93,14 +99,22 @@ let validate_width loc lanes = function
       if actual = lanes then Ok value
       else error loc (Lane_count_mismatch { expected = lanes; actual })
   | Mask xs as value ->
+      (* A mask has one lane per lane of the racks compared to make it: f32 or u8. *)
       let actual = Array.length xs in
-      if actual = lanes then Ok value
+      if actual = lanes || actual = 4 * lanes then Ok value
       else error loc (Lane_count_mismatch { expected = lanes; actual })
+  | U8_rack xs as value ->
+      let actual = Array.length xs in
+      if actual = 4 * lanes then Ok value
+      else error loc (Lane_count_mismatch { expected = 4 * lanes; actual })
+  | U32_scalar _ as value -> Ok value
 
 let normalize_value = function
   | F32_scalar x -> scalar x
   | F32_rack xs -> rack xs
   | Mask xs -> mask xs
+  | U8_rack xs -> U8_rack (Array.map (fun x -> x land 0xff) xs)
+  | U32_scalar x -> U32_scalar (x land 0xffffffff)
 
 let lookup loc lanes env name =
   match List.assoc_opt name env with
@@ -114,11 +128,11 @@ let as_rack loc lanes operation = function
   | F32_rack xs ->
       let* value = validate_width loc lanes (F32_rack xs) in
       (match value with F32_rack ys -> Ok ys | _ -> assert false)
-  | Mask _ ->
+  | (Mask _ | U8_rack _ | U32_scalar _) as value ->
       error loc
         (Operand_kind_mismatch {
            operation;
-           left = Mask_kind;
+           left = value_kind value;
            right = None;
          })
 
@@ -128,11 +142,11 @@ let unary_f32 loc lanes operation f value =
   | F32_rack xs ->
       let* xs = as_rack loc lanes operation (F32_rack xs) in
       Ok (F32_rack (Array.map (fun x -> f32 (f x)) xs))
-  | Mask _ ->
+  | (Mask _ | U8_rack _ | U32_scalar _) as value ->
       error loc
         (Operand_kind_mismatch {
            operation;
-           left = Mask_kind;
+           left = value_kind value;
            right = None;
          })
 
@@ -175,7 +189,9 @@ let mask_binary loc lanes operation f left right =
   | Mask xs, Mask ys ->
       let* _ = validate_width loc lanes left in
       let* _ = validate_width loc lanes right in
-      Ok (Mask (Array.init lanes (fun i -> f xs.(i) ys.(i))))
+      if Array.length xs <> Array.length ys then
+        error loc (Lane_count_mismatch { expected = Array.length xs; actual = Array.length ys })
+      else Ok (Mask (Array.map2 f xs ys))
   | _ ->
       error loc
         (Operand_kind_mismatch {
@@ -281,6 +297,51 @@ let eval_f32_scan loc operation = function
            right = None;
          })
 
+let integer_literal (expr : expr) =
+  match expr.v with
+  | EInt value | EBroadcast { v = EInt value; _ } -> Some (Int64.to_int value)
+  | _ -> None
+
+let u8_predicate = function
+  | Lt -> Some ( < ) | Le -> Some ( <= ) | Gt -> Some ( > ) | Ge -> Some ( >= )
+  | Eq -> Some ( = ) | Ne -> Some ( <> )
+  | Add | Sub | Mul | Div | Mod | And | Or | Pipe | Shl | Shr | Rol | Ror | Interleave -> None
+
+let compare_u8 loc operation predicate left right =
+  match left, right with
+  | U8_rack xs, U8_rack ys when Array.length xs = Array.length ys ->
+      Ok (Mask (Array.map2 predicate xs ys))
+  | _ ->
+      error loc
+        (Operand_kind_mismatch {
+           operation;
+           left = value_kind left;
+           right = Some (value_kind right);
+         })
+
+(** Lane [i] of the result is lane [indices.(i)] of the racks laid end to end. *)
+let shuffle_racks loc racks indices =
+  let concatenated_f32 = List.filter_map (function F32_rack xs -> Some xs | _ -> None) racks in
+  let concatenated_u8 = List.filter_map (function U8_rack xs -> Some xs | _ -> None) racks in
+  let pick source lanes make =
+    if List.length indices <> lanes then
+      error loc (Lane_count_mismatch { expected = lanes; actual = List.length indices })
+    else if List.exists (fun index -> index < 0 || index >= Array.length source) indices then
+      error loc (Unsupported_expression "shuffle index outside its racks")
+    else Ok (make (Array.of_list (List.map (fun index -> source.(index)) indices)))
+  in
+  match racks with
+  | [] -> error loc (Unsupported_expression "shuffle of no racks")
+  | first :: _ when List.length concatenated_f32 = List.length racks ->
+      let lanes = match first with F32_rack xs -> Array.length xs | _ -> 0 in
+      pick (Array.concat concatenated_f32) lanes (fun xs -> F32_rack xs)
+  | first :: _ when List.length concatenated_u8 = List.length racks ->
+      let lanes = match first with U8_rack xs -> Array.length xs | _ -> 0 in
+      pick (Array.concat concatenated_u8) lanes (fun xs -> U8_rack xs)
+  | first :: _ ->
+      error loc
+        (Operand_kind_mismatch { operation = "shuffle"; left = value_kind first; right = None })
+
 let rec eval_expr ~lanes env (expr : expr) =
   if lanes <= 0 then error expr.loc (Invalid_lane_count lanes)
   else
@@ -290,7 +351,14 @@ let rec eval_expr ~lanes env (expr : expr) =
     | EVar name ->
         let* value = lookup expr.loc lanes env name in
         (match value with
-         | F32_rack _ | Mask _ -> Ok value
+         | F32_rack _ | Mask _ | U8_rack _ -> Ok value
+         | U32_scalar _ ->
+             error expr.loc
+               (Expected_variable_kind {
+                  name;
+                  expected = Rack;
+                  actual = U32_scalar_kind;
+                })
          | F32_scalar _ ->
              error expr.loc
                (Expected_variable_kind {
@@ -314,11 +382,11 @@ let rec eval_expr ~lanes env (expr : expr) =
         (match value with
          | F32_scalar value -> Ok (splat lanes value)
          | F32_rack _ as value -> Ok value
-         | Mask _ ->
+         | (Mask _ | U8_rack _ | U32_scalar _) as value ->
              error expr.loc
                (Operand_kind_mismatch {
                   operation = "broadcast";
-                  left = Mask_kind;
+                  left = value_kind value;
                   right = None;
                 }))
     | EUnop ((Neg | FNeg), inner) ->
@@ -337,6 +405,37 @@ let rec eval_expr ~lanes env (expr : expr) =
                   left = value_kind value;
                   right = None;
                 }))
+    | EBinop (left_expr, op, right_expr)
+      when integer_literal left_expr <> None || integer_literal right_expr <> None -> (
+        (* An integer literal takes the element type of the u8 rack it is compared with. *)
+        match u8_predicate op with
+        | None -> error expr.loc (Unsupported_expression (Ast.show_binop op))
+        | Some predicate ->
+            let literal_on_left = integer_literal left_expr <> None in
+            let rack_expr = if literal_on_left then right_expr else left_expr in
+            let literal =
+              Option.get (integer_literal (if literal_on_left then left_expr else right_expr))
+            in
+            let* rack = eval_expr ~lanes env rack_expr in
+            (match rack with
+             | U8_rack xs ->
+                 let ys = Array.make (Array.length xs) literal in
+                 let left, right =
+                   if literal_on_left then (U8_rack ys, U8_rack xs) else (U8_rack xs, U8_rack ys)
+                 in
+                 compare_u8 expr.loc (Ast.show_binop op) predicate left right
+             | value ->
+                 error expr.loc
+                   (Operand_kind_mismatch {
+                      operation = "integer literal comparison";
+                      left = value_kind value;
+                      right = None;
+                    })))
+    | EBinop (left_expr, ((Lt | Le | Gt | Ge | Eq | Ne) as op), right_expr)
+      when (match eval_expr ~lanes env left_expr with Ok (U8_rack _) -> true | _ -> false) ->
+        let* left = eval_expr ~lanes env left_expr in
+        let* right = eval_expr ~lanes env right_expr in
+        compare_u8 expr.loc (Ast.show_binop op) (Option.get (u8_predicate op)) left right
     | EBinop (left_expr, op, right_expr) ->
         let* left = eval_expr ~lanes env left_expr in
         let* right = eval_expr ~lanes env right_expr in
@@ -368,6 +467,27 @@ let rec eval_expr ~lanes env (expr : expr) =
              expected = 1;
              actual = List.length arguments;
            })
+    | ECall ("bitmask", [ argument ]) ->
+        let* value = eval_expr ~lanes env argument in
+        (match value with
+         | Mask lanes_set ->
+             let bits = ref 0 in
+             Array.iteri (fun lane set -> if set then bits := !bits lor (1 lsl lane)) lanes_set;
+             Ok (U32_scalar !bits)
+         | value ->
+             error expr.loc
+               (Operand_kind_mismatch { operation = "bitmask"; left = value_kind value; right = None }))
+    | EShuffle (operand, indices) ->
+        let rack_exprs = match operand.v with ETuple racks -> racks | _ -> [ operand ] in
+        let* racks =
+          List.fold_right
+            (fun rack_expr accumulated ->
+              let* racks = accumulated in
+              let* rack = eval_expr ~lanes env rack_expr in
+              Ok (rack :: racks))
+            rack_exprs (Ok [])
+        in
+        shuffle_racks expr.loc racks indices
     | ECall ("select", [ condition; if_true; if_false ]) ->
         let* condition = eval_expr ~lanes env condition in
         let* if_true = eval_expr ~lanes env if_true in
@@ -401,7 +521,14 @@ let rec eval_expr ~lanes env (expr : expr) =
 let bind_parameter ~lanes env parameter argument loc =
   let* argument = validate_width loc lanes (normalize_value argument) in
   match (parameter, argument) with
-  | PRack (name, _), (F32_rack _ | Mask _) -> Ok ((name, argument) :: env)
+  | PRack (name, _), (F32_rack _ | Mask _ | U8_rack _) -> Ok ((name, argument) :: env)
+  | PRack (name, _), U32_scalar _ ->
+      error loc
+        (Expected_variable_kind {
+           name;
+           expected = Rack;
+           actual = U32_scalar_kind;
+         })
   | PRack (name, _), F32_scalar _ ->
       error loc
         (Expected_variable_kind {
@@ -458,8 +585,10 @@ let eval_crunch ~lanes definition arguments =
 
 let project_value lane = function
   | F32_scalar _ as value -> value
+  | U32_scalar _ as value -> value
   | F32_rack values -> F32_rack [| values.(lane) |]
   | Mask values -> Mask [| values.(lane) |]
+  | U8_rack values -> U8_rack [| values.(lane) |]
 
 let project_env lane env =
   List.map (fun (name, value) -> (name, project_value lane value)) env

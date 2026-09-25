@@ -42,6 +42,11 @@
             gcc
             qemu
 
+            # wasm-simd128: Clang compiles the emitted C, llvm-objdump verifies it.
+            # Unwrapped, so gcc stays the C compiler for native harnesses.
+            llvmPackages.clang-unwrapped
+            llvmPackages.llvm
+
             # Differential parser workflow
             tree-sitter
 

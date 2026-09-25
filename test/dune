@@ -57,3 +57,7 @@
 (executable
  (name neon_expected)
  (libraries rake))
+
+(test
+ (name wasm_simd128_test)
+ (libraries rake))

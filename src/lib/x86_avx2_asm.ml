@@ -164,8 +164,8 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
         | Native_ir.Reduce_mul -> simple_combine `Mul dst lane_register
         | Native_ir.Reduce_min -> strict_combine `Min dst lane_register strict_temporaries
         | Native_ir.Reduce_max -> strict_combine `Max dst lane_register strict_temporaries
-        | Native_ir.Reduce_and | Native_ir.Reduce_or ->
-            invalid_arg "logical reduction reached f32 AVX2 emission"
+        | Native_ir.Reduce_and | Native_ir.Reduce_or | Native_ir.Reduce_bitmask ->
+            invalid_arg "mask reduction reached f32 AVX2 emission"
       done
   | A.Scan_f32 { dst; source; operation; scratch } ->
       let prefix, lane_register, strict_temporaries =

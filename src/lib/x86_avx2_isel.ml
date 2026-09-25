@@ -267,9 +267,9 @@ let select_function (func : N.func) =
             fail func.name ~instruction:index "f32 reduction must produce scalar<f32>";
           ensure_operand_f32 func.name environment index source;
           Some (M.Reduce_f32 { dst; source; operation; provenance })
-      | N.Reduce ((N.Reduce_and | N.Reduce_or), _) ->
+      | N.Reduce ((N.Reduce_and | N.Reduce_or | N.Reduce_bitmask), _) ->
           fail func.name ~instruction:index
-            "logical mask reductions are not implemented by the AVX2 f32 slice"
+            "mask reductions are not implemented by the AVX2 f32 slice"
       | N.Scan (operation, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;

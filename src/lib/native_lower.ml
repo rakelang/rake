@@ -40,10 +40,18 @@ let ir_typ_of_annotation typ =
   match typ.v with
   | TRack PFloat -> Ok (Ir.Rack Ir.F32)
   | TScalar PFloat -> Ok (Ir.Scalar Ir.F32)
+  | TRack PUint8 -> Ok (Ir.Rack Ir.U8)
+  | TScalar PUint -> Ok (Ir.Scalar Ir.I32)
   | TMask -> Ok Ir.Mask
   | _ ->
       error typ.loc
-        "only 'float rack', scalar 'float', and mask annotations are supported by native crunch lowering"
+        "only f32 and u8 rack, f32 and u32 scalar, and mask annotations are supported by native crunch lowering"
+
+(** An integer literal, written bare or as a uniform <n>. *)
+let integer_literal (expr : expr) =
+  match expr.v with
+  | EInt value | EBroadcast { v = EInt value; _ } -> Some value
+  | _ -> None
 
 let check_annotation annotation actual =
   match annotation with
@@ -180,10 +188,40 @@ let rec lower_expr state provenance (expr : expr) =
       let left = sanitize_operand state expr.loc provenance left_benign left in
       let right = sanitize_operand state expr.loc provenance right_benign right in
       Ok (emit state expr.loc provenance (Ir.Rack Ir.F32) (Ir.Binary (operation, fst left, fst right)))
+  | EBinop (left_expr, ((Lt | Le | Gt | Ge | Eq | Ne) as comparison), right_expr)
+    when integer_literal left_expr <> None || integer_literal right_expr <> None ->
+      (* An integer literal becomes a splat of the u8 rack it is compared with. *)
+      if provenance.Ir.through <> None then
+        error expr.loc "u8 comparisons are not yet supported in predicated regions"
+      else
+        let literal_on_left = integer_literal left_expr <> None in
+        let rack_expr, literal_expr =
+          if literal_on_left then (right_expr, left_expr) else (left_expr, right_expr)
+        in
+        let* rack = lower_expr state provenance rack_expr in
+        let* () = expect_type expr.loc "integer literal comparison" (Ir.Rack Ir.U8) rack in
+        let value = Option.get (integer_literal literal_expr) in
+        if value < 0L || value > 255L then
+          errorf literal_expr.loc "integer literal %Ld does not fit a u8 lane" value
+        else
+          let splat =
+            emit state literal_expr.loc provenance (Ir.Rack Ir.U8)
+              (Ir.Rack_splat (Ir.Uint8 (Int64.to_int value)))
+          in
+          let left, right = if literal_on_left then (splat, rack) else (rack, splat) in
+          let comparison = Option.get (ir_comparison comparison) in
+          Ok (emit state expr.loc provenance Ir.Mask (Ir.Compare (comparison, fst left, fst right)))
   | EBinop (left, ((Lt | Le | Gt | Ge | Eq | Ne) as comparison), right) ->
       let* left = lower_expr state provenance left in
       let* right = lower_expr state provenance right in
       let* left, right = expect_same expr.loc "comparison" left right in
+      if snd left = Ir.Rack Ir.U8 then
+        if provenance.Ir.through <> None then
+          error expr.loc "u8 comparisons are not yet supported in predicated regions"
+        else
+          let comparison = Option.get (ir_comparison comparison) in
+          Ok (emit state expr.loc provenance Ir.Mask (Ir.Compare (comparison, fst left, fst right)))
+      else
       let* () = expect_type expr.loc "comparison" (Ir.Rack Ir.F32) left in
       let comparison = Option.get (ir_comparison comparison) in
       let left = sanitize_operand state expr.loc provenance 0.0 left in
@@ -227,6 +265,13 @@ let rec lower_expr state provenance (expr : expr) =
               { condition = fst condition; if_true = fst if_true; if_false = fst if_false }))
   | ECall ("select", arguments) ->
       errorf expr.loc "select expects three arguments, got %d" (List.length arguments)
+  | ECall ("bitmask", [ operand ]) ->
+      if provenance.Ir.through <> None then
+        error expr.loc "bitmask is a cross-lane reduction and is forbidden in predicated regions"
+      else
+        let* operand = lower_expr state provenance operand in
+        let* () = expect_type expr.loc "bitmask" Ir.Mask operand in
+        Ok (emit state expr.loc provenance (Ir.Scalar Ir.I32) (Ir.Reduce (Ir.Reduce_bitmask, fst operand)))
   | ECall (name, _) -> errorf expr.loc "call to '%s' is not supported by native crunch lowering" name
   | EFma (a, b, c) ->
       let* a = lower_expr state provenance a in
@@ -276,7 +321,20 @@ let rec lower_expr state provenance (expr : expr) =
               (emit state expr.loc provenance (Ir.Rack Ir.F32)
                  (Ir.Scan (operation, fst operand)))
         | None -> error expr.loc "logical prefix scans are not defined")
-  | EShuffle _ -> error expr.loc "shuffles are not supported by native crunch lowering"
+  | EShuffle (operand, indices) ->
+      let rack_exprs = match operand.v with ETuple racks -> racks | _ -> [ operand ] in
+      let rec lower_racks reversed = function
+        | [] -> Ok (List.rev reversed)
+        | rack :: rest ->
+            let* rack = lower_expr state provenance rack in
+            lower_racks (rack :: reversed) rest
+      in
+      let* racks = lower_racks [] rack_exprs in
+      (match racks with
+       | (_, (Ir.Rack _ as typ)) :: rest when List.for_all (fun (_, other) -> other = typ) rest ->
+           Ok (emit state expr.loc provenance typ
+                 (Ir.Shuffle { racks = List.map fst racks; indices }))
+       | _ -> error expr.loc "shuffle requires one rack or two equal racks")
   | EShift _ -> error expr.loc "lane shifts are not supported by native crunch lowering"
   | ERotate _ -> error expr.loc "lane rotates are not supported by native crunch lowering"
   | EGather _ -> error expr.loc "gather is not supported by native crunch lowering"
@@ -334,11 +392,16 @@ let add_parameter state function_loc index = function
         | None -> Ok ()
         | Some typ ->
             let* typ = ir_typ_of_annotation typ in
-            if typ = Ir.Rack Ir.F32 then Ok ()
-            else error function_loc "native crunch parameters must be float racks"
+            if typ = Ir.Rack Ir.F32 || typ = Ir.Rack Ir.U8 then Ok ()
+            else error function_loc "native crunch parameters must be f32 or u8 racks"
       in
-      let parameter = { Ir.id = index; typ = Ir.Rack Ir.F32; name = Some name } in
-      let* () = bind state function_loc name (index, Ir.Rack Ir.F32) in
+      let typ =
+        match annotation with
+        | Some { v = TRack PUint8; _ } -> Ir.Rack Ir.U8
+        | _ -> Ir.Rack Ir.F32
+      in
+      let parameter = { Ir.id = index; typ; name = Some name } in
+      let* () = bind state function_loc name (index, typ) in
       Ok parameter
   | PScalar (name, annotation) ->
       let* () =
@@ -378,8 +441,8 @@ let lower_crunch definition_loc name parameters result body =
     | None -> Ok ()
     | Some annotation ->
         let* typ = ir_typ_of_annotation annotation in
-        if typ = Ir.Rack Ir.F32 || typ = Ir.Scalar Ir.F32 then Ok ()
-        else error annotation.loc "native crunch results must be float rack or scalar float"
+        if List.mem typ [ Ir.Rack Ir.F32; Ir.Scalar Ir.F32; Ir.Rack Ir.U8; Ir.Scalar Ir.I32 ] then Ok ()
+        else error annotation.loc "native crunch results must be an f32 or u8 rack, or an f32 or u32 scalar"
   in
   let rec lower_body active_fused = function
     | [] -> Ok ()

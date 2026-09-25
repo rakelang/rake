@@ -79,6 +79,11 @@ that inactive invalid operands don't set floating-point exception flags. `run`
 and pack traversal remain frontend-only. The compiler reports that boundary
 directly.
 
+The `wasm-simd128` slice accepts `f32s` and `u8s` crunches, including two-rack
+byte shuffles and `bitmask`, and emits C that spells out its selected
+WebAssembly SIMD instructions as intrinsics. Its byte racks, shuffles and
+bitmasks are a proposal and aren't available on the other profiles.
+
 Records, tuples, logical mask reductions, reductions and scans outside AVX2,
 rearrangement operations, gather/scatter, compression/expansion, lane
 insertion/extraction, lambdas, expression pipelines, native non-f32 numeric paths,
@@ -95,7 +100,7 @@ produces reproducible cross-target behavior.
 
 The profile catalog describes intended rack shapes independently of production
 backend coverage. At present, `x86-avx2` and `aarch64-neon` have production
-native lowerings. The compiler rejects other profiles at the native-backend
+native lowerings, and `wasm-simd128` has a C-emitting lowering for WebAssembly. The compiler rejects other profiles at the native-backend
 boundary. The explicit planned `scalar` profile doesn't claim native SIMD
 registers.
 

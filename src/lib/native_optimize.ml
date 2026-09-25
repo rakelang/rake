@@ -18,7 +18,7 @@ type operation_costs = { add : int; multiply : int; fma : int option }
 let operation_costs = function
   | Target.X86_avx2 | Target.Aarch64_neon ->
       Some { add = 1; multiply = 1; fma = Some 1 }
-  | Target.Scalar | Target.X86_sse2 | Target.X86_avx512 -> None
+  | Target.Scalar | Target.X86_sse2 | Target.X86_avx512 | Target.Wasm_simd128 -> None
 
 let fma_is_cheaper costs =
   match costs.fma with

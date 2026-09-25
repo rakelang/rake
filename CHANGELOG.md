@@ -51,5 +51,10 @@ conformance suite covers it.
   lambdas, expression pipelines, and non-f32 numeric paths remain unavailable
   to executable programs even where the parser recognizes their syntax.
 - AVX-512 and SSE2 production object output remain proposed.
+- The `wasm-simd128` profile, on the `wasm-simd128` branch, proposes `u8s`
+  racks, integer rack comparisons, static one- and two-rack shuffles and
+  `bitmask`. It emits C with one SIMD intrinsic per selected instruction and
+  verifies the Clang-compiled object against a locals, constants and SIMD
+  allow-list.
 - The broader control-flow design remains a proposal rather than part of this
   alpha's executable language.

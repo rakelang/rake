@@ -34,13 +34,14 @@ let require_backend (config : Target.config) =
   match (config.target, config.profile, config.width) with
   | Target.Cpu, Target.X86_avx2, 8 -> Ok ()
   | Target.Cpu, Target.Aarch64_neon, 4 -> Ok ()
+  | Target.Cpu, Target.Wasm_simd128, 4 -> Ok ()
   | _ ->
       Error
         {
           stage = Target;
           message =
             Printf.sprintf
-              "profile '%s' has no production backend yet; select --target x86-avx2 or --target aarch64-neon"
+              "profile '%s' has no production backend yet; select --target x86-avx2, aarch64-neon or wasm-simd128"
               (Target.profile_name config.profile);
         }
 
@@ -61,6 +62,7 @@ let lower ~config program =
 type allocated =
   | Avx2 of X86_avx2_regalloc.func list
   | Neon of Aarch64_neon_regalloc.func list
+  | Wasm of Wasm_simd128_isel.func list  (** WebAssembly locals need no register allocation *)
 
 let allocate_avx2 native_ir =
   match X86_avx2_isel.select native_ir with
@@ -99,6 +101,11 @@ let allocate ~config native_ir =
   match config.Target.profile with
   | Target.X86_avx2 -> allocate_avx2 native_ir
   | Target.Aarch64_neon -> allocate_neon native_ir
+  | Target.Wasm_simd128 -> (
+      match Wasm_simd128_isel.select native_ir with
+      | Ok selected -> Ok (Wasm selected)
+      | Error error ->
+          Error { stage = Instruction_selection; message = Wasm_simd128_isel.format_error error })
   | profile ->
       Error
         {
@@ -112,7 +119,11 @@ let compile ~config program =
   let* native_ir = lower ~config program in
   allocate ~config native_ir
 
-let emit_allocated = function
+let emit_allocated ~source = function
+  | Wasm selected -> (
+      match Wasm_simd128_c.emit ~source selected with
+      | source -> Ok source
+      | exception Wasm_simd128_c.Emission_error message -> Error { stage = Assembly; message })
   | Avx2 allocated -> (
       match X86_avx2_asm.emit allocated with
       | Ok assembly -> Ok assembly
@@ -125,16 +136,24 @@ let emit_allocated = function
           Error
             { stage = Assembly; message = Aarch64_neon_asm.format_error error })
 
-let emit_assembly ~config program =
+let emit_assembly ~source ~config program =
   let* allocated = compile ~config program in
-  emit_allocated allocated
+  emit_allocated ~source allocated
+
+let assemble ~source ~(config : Target.config) assembly =
+  match config.profile with
+  | Target.Wasm_simd128 -> (
+      match Wasm_simd128_toolchain.assemble assembly with
+      | Ok object_bytes -> Ok object_bytes
+      | Error error -> Error { stage = Assemble; message = Wasm_simd128_toolchain.format_error error })
+  | profile -> (
+      match Native_toolchain.assemble ~profile ~source assembly with
+      | Ok object_bytes -> Ok object_bytes
+      | Error error -> Error { stage = Assemble; message = Native_toolchain.format_error error })
 
 let emit_object ~source ~config program =
-  let* assembly = emit_assembly ~config program in
-  match Native_toolchain.assemble ~profile:config.profile ~source assembly with
-  | Ok object_bytes -> Ok object_bytes
-  | Error error ->
-      Error { stage = Assemble; message = Native_toolchain.format_error error }
+  let* assembly = emit_assembly ~source ~config program in
+  assemble ~source ~config assembly
 
 let fma_count = function
   | Avx2 allocated ->
@@ -158,8 +177,10 @@ let fma_count = function
               | _ -> count)
             count func.instructions)
         0 allocated
+  | Wasm _ -> 0
 
 let function_names = function
+  | Wasm selected -> List.map (fun (func : Wasm_simd128_isel.func) -> func.name) selected
   | Avx2 allocated ->
       List.map (fun (func : X86_avx2_regalloc.func) -> func.name) allocated
   | Neon allocated ->
@@ -180,24 +201,25 @@ let cross_lane_function_names = function
           then Some func.name
           else None)
         allocated
-  | Neon _ -> []
+  | Neon _ | Wasm _ -> []
 
 let emit_verified_object ~source ~config program =
   let* allocated = compile ~config program in
-  let* assembly = emit_allocated allocated in
-  let* object_bytes =
-    match Native_toolchain.assemble ~profile:config.profile ~source assembly with
-    | Ok object_bytes -> Ok object_bytes
-    | Error error ->
-        Error { stage = Assemble; message = Native_toolchain.format_error error }
-  in
+  let* assembly = emit_allocated ~source allocated in
+  let* object_bytes = assemble ~source ~config assembly in
   let functions = function_names allocated in
-  let cross_lane_functions = cross_lane_function_names allocated in
-  match
-    Native_verify.verify ~profile:config.profile ~source ~functions
-      ~cross_lane_functions
-      ~expected_fma_count:(fma_count allocated) object_bytes
-  with
-  | Ok () -> Ok object_bytes
-  | Error error ->
-      Error { stage = Verify; message = Native_verify.format_error error }
+  match allocated with
+  | Wasm _ -> (
+      match Wasm_simd128_toolchain.verify ~functions object_bytes with
+      | Ok () -> Ok object_bytes
+      | Error error -> Error { stage = Verify; message = Wasm_simd128_toolchain.format_error error })
+  | Avx2 _ | Neon _ ->
+    let cross_lane_functions = cross_lane_function_names allocated in
+    match
+      Native_verify.verify ~profile:config.profile ~source ~functions
+        ~cross_lane_functions
+        ~expected_fma_count:(fma_count allocated) object_bytes
+    with
+    | Ok () -> Ok object_bytes
+    | Error error ->
+        Error { stage = Verify; message = Native_verify.format_error error }

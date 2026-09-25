@@ -12,6 +12,7 @@ type profile =
   | X86_avx2
   | X86_avx512
   | Aarch64_neon
+  | Wasm_simd128
 
 type selection = Native | Explicit of profile
 
@@ -76,8 +77,17 @@ let info = function
         mir_register_class = Some "v";
         description = "AArch64 NEON/AAPCS64, one 128-bit vector rack";
       }
+  | Wasm_simd128 ->
+      {
+        profile = Wasm_simd128;
+        id = "wasm-simd128";
+        register_bits = Some 128;
+        f32_lanes = 4;
+        mir_register_class = Some "v128";
+        description = "WebAssembly SIMD128, one v128 rack, emitted as C with inline WebAssembly";
+      }
 
-let profiles = [ Scalar; X86_sse2; X86_avx2; X86_avx512; Aarch64_neon ]
+let profiles = [ Scalar; X86_sse2; X86_avx2; X86_avx512; Aarch64_neon; Wasm_simd128 ]
 let profile_name profile = (info profile).id
 let name Cpu = "cpu"
 

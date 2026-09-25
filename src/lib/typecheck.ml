@@ -384,6 +384,17 @@ let ensure_supported_run_param env loc = function
   | PSpread _ ->
       require_feature env loc Capabilities.Run_spread_param
 
+(** An integer literal, written bare or as a uniform <n>. *)
+let is_integer_literal (expr: Ast.expr) =
+  match expr.v with
+  | EInt _ | EBroadcast { v = EInt _; _ } -> true
+  | _ -> false
+
+let integer_literal_value (expr: Ast.expr) =
+  match expr.v with
+  | EInt value | EBroadcast { v = EInt value; _ } -> value
+  | _ -> invalid_arg "integer_literal_value: not an integer literal"
+
 (** Infer expression type *)
 let rec infer_expr env (expr: Ast.expr) : t =
   require_feature env expr.loc (Capabilities.feature_of_expr expr.v);
@@ -401,6 +412,23 @@ let rec infer_expr env (expr: Ast.expr) : t =
       match Hashtbl.find_opt env.vars name with
       | Some t -> t
       | None -> type_errorf expr.loc "Undefined scalar variable: %s" name)
+
+  | EBinop (l, ((Lt | Le | Gt | Ge | Eq | Ne) as op), r)
+    when is_integer_literal l || is_integer_literal r ->
+      (* An integer literal takes the element type of the integer rack it is compared with. *)
+      let rack, literal = if is_integer_literal l then (r, l) else (l, r) in
+      let rack_t = infer_expr env rack in
+      require_feature env expr.loc Capabilities.Integer_rack_comparison;
+      (match rack_t with
+       | Rack SUint8 ->
+           let value = integer_literal_value literal in
+           if value < 0L || value > 255L then
+             type_errorf literal.loc "integer literal %Ld does not fit a u8 lane" value;
+           let _ = op in
+           Mask
+       | actual ->
+           type_errorf expr.loc "integer literal comparison requires a u8 rack, got %s"
+             (show_concise actual))
 
   | EBinop (l, op, r) ->
       let lt = infer_expr env l in
@@ -421,6 +449,16 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall ("widen", args) ->
       type_errorf expr.loc "widen expects exactly one argument, got %d" (List.length args)
+
+  | ECall ("bitmask", [mask]) ->
+      require_feature env expr.loc Capabilities.Bitmask_reduction;
+      (match infer_expr env mask with
+       | Mask -> Scalar SUint
+       | actual ->
+           type_errorf expr.loc "bitmask requires a mask, got %s" (show_concise actual))
+
+  | ECall ("bitmask", args) ->
+      type_errorf expr.loc "bitmask expects exactly one argument, got %d" (List.length args)
 
   | ECall (name, args) -> (
       match Hashtbl.find_opt env.funcs name with
@@ -480,7 +518,15 @@ let rec infer_expr env (expr: Ast.expr) : t =
             "Floating-point prefix scan requires float rack, got %s"
             (show_concise actual))
 
-  | EShuffle _ -> unavailable_invariant Capabilities.Expr_shuffle
+  | EShuffle (operand, indices) ->
+      if List.exists (fun index -> index < 0) indices then
+        type_errorf expr.loc "shuffle indices must not be negative";
+      let racks = match operand.v with ETuple [left; right] -> [left; right] | _ -> [operand] in
+      (match List.map (infer_expr env) racks with
+       | (Rack _ as first) :: rest when List.for_all (fun t -> t = first) rest -> first
+       | types ->
+           type_errorf expr.loc "shuffle requires one rack or two equal racks, got %s"
+             (String.concat " and " (List.map show_concise types)))
   | EShift _ | ERotate _ -> unavailable_invariant Capabilities.Expr_shift_rotate
 
   | EGather _ -> unavailable_invariant Capabilities.Expr_gather
@@ -528,6 +574,7 @@ and infer_binop t1 t2 op loc =
   | Lt | Le | Gt | Ge | Eq | Ne ->
       if compatible t1 t2 && (is_float_rack t1 || is_float_rack t2 || is_float_scalar t1 || is_float_scalar t2) then
         Mask
+      else if t1 = Rack SUint8 && t2 = Rack SUint8 then Mask
       else
         type_errorf loc "Unsupported comparison operands: %s and %s"
           (show_concise t1) (show_concise t2)
@@ -586,7 +633,9 @@ let rec fused_contract_rejection (expr: Ast.expr) : string option =
   | EInsert _ -> Some "lane insertion may update a value"
   | EReduce _ -> Some "reduction is not an inlineable expression shape"
   | EScan _ -> Some "scan is not an inlineable expression shape"
-  | EShuffle _ | EShift _ | ERotate _ ->
+  | EShuffle ({ v = ETuple racks; _ }, _) -> first_rejection racks
+  | EShuffle (e, _) -> fused_contract_rejection e
+  | EShift _ | ERotate _ ->
       Some "lane rearrangement is not an inlineable expression shape"
   | EPipe _ | EFusedPipe _ -> Some "pipeline is not an inlineable expression shape"
   | EUnit -> Some "unit does not produce an inlineable value"
