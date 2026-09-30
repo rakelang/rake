@@ -277,6 +277,9 @@ let select_function (func : N.func) =
       | N.Shuffle _ | N.Extract _ | N.Insert _ ->
           fail func.name ~instruction:index
             "cross-lane operation is unavailable in the initial AVX2 selection contract"
+      | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ ->
+          fail func.name ~instruction:index
+            "integer rack operations are part of the wasm-simd128 slice only"
     in
     let instructions = List.filter_map Fun.id (List.mapi select func.body.instructions) in
     let result =

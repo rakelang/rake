@@ -181,7 +181,42 @@ let test_rake_priority_and_inactive_lanes () =
   eval_rake ~lanes:4 definition [ rack [| -1.0; 0.0; 1.0; nan |] ]
   |> get |> expect_rack [| 2.0; 1.0; 1.0; 3.0 |]
 
+let expect_i16 expected = function
+  | I16_rack actual when expected = Array.to_list actual -> ()
+  | value -> failwith ("unexpected i16 rack, got " ^ string_of_value_kind (value_kind value))
+
+let expect_i32 expected = function
+  | I32_rack actual when expected = Array.to_list actual -> ()
+  | value -> failwith ("unexpected i32 rack, got " ^ string_of_value_kind (value_kind value))
+
+(* The wasm-simd128 integer racks: eight i16 or four i32 lanes where f32 has four. *)
+let test_integer_racks () =
+  let call name args = expression (ECall (name, args)) in
+  let int value = expression (EBroadcast (expression (EInt value))) in
+  let i16 = I16_rack [| 1; 2; 3; 4; 5; 6; 7; 8 |] in
+  let weights = I16_rack [| 1; 1; 2; 2; -1; -1; 32767; 32767 |] in
+  eval_expr ~lanes:4 [ "a", i16; "b", weights ] (call "dot" [ var "a"; var "b" ])
+  |> get |> expect_i32 [ 3; 14; -11; 491505 ];
+  eval_expr ~lanes:4 [ "a", I32_rack [| 70000; -70000; 5; -5 |]; "b", I32_rack [| 1; 2; 3; 4 |] ]
+    (call "narrow" [ var "a"; var "b" ])
+  |> get |> expect_i16 [ 32767; -32768; 5; -5; 1; 2; 3; 4 ];
+  let bytes = U8_rack (Array.init 16 (fun i -> if i = 9 then 250 else i)) in
+  eval_expr ~lanes:4 [ "x", bytes ] (call "widen_low" [ var "x" ]) |> get |> expect_i16 [ 0; 1; 2; 3; 4; 5; 6; 7 ];
+  eval_expr ~lanes:4 [ "x", bytes ] (call "widen_high" [ var "x" ]) |> get |> expect_i16 [ 8; 250; 10; 11; 12; 13; 14; 15 ];
+  (* Round to nearest, ties to even, saturated; NaN is zero. *)
+  eval_expr ~lanes:4 [ "x", rack [| 2.5; 3.5; -2.5; 1e10 |] ] (call "to_i32" [ var "x" ])
+  |> get |> expect_i32 [ 2; 4; -2; 2147483647 ];
+  eval_expr ~lanes:4 [ "x", rack [| Float.nan; -1e10; 0.49999997; -0.5 |] ] (call "to_i32" [ var "x" ])
+  |> get |> expect_i32 [ 0; -2147483648; 0; 0 ];
+  eval_expr ~lanes:4 [ "x", I32_rack [| 16777217; -3; 0; 7 |] ] (call "to_f32" [ var "x" ])
+  |> get |> expect_rack [| 16777216.0; -3.0; 0.0; 7.0 |];
+  eval_expr ~lanes:4 [ "x", I16_rack [| -3; 4; 0; -32768; 9; -1; 2; 1 |] ] (call "max" [ var "x"; int 0L ])
+  |> get |> expect_i16 [ 0; 4; 0; 0; 9; 0; 2; 1 ];
+  eval_expr ~lanes:4 [ "x", I16_rack (Array.make 8 32767); "y", I16_rack (Array.make 8 1) ] (binop (var "x") Add (var "y"))
+  |> get |> expect_i16 (List.init 8 (fun _ -> -32768))
+
 let () =
+  test_integer_racks ();
   test_round_after_each_operation ();
   test_broadcast_arithmetic ();
   test_comparison_and_select ();

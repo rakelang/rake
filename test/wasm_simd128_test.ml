@@ -57,6 +57,40 @@ let side_bits =
     loc = N.unknown_location;
   }
 
+(* The student network's inner step and requantisation: a dot product accumulated
+   into i32 sums, then two i32 racks scaled, rounded, narrowed and clamped at zero. *)
+let integer_kernel =
+  {
+    N.name = "requantise";
+    parameters =
+      [ parameter 0 "pair" (N.Rack N.I16); parameter 1 "weights" (N.Rack N.I16);
+        parameter 2 "sums" (N.Rack N.I32); parameter 3 "scale" (N.Rack N.F32) ];
+    result = Some (N.Rack N.I16);
+    body =
+      {
+        instructions =
+          [ instruction (Some (4, N.Rack N.I32)) (N.Dot (0, 1));
+            instruction (Some (5, N.Rack N.I32)) (N.Binary (N.Add, 2, 4));
+            instruction (Some (6, N.Rack N.F32)) (N.Convert { operand = 5; element = N.F32 });
+            instruction (Some (7, N.Rack N.F32)) (N.Binary (N.Mul, 6, 3));
+            instruction (Some (8, N.Rack N.I32)) (N.Convert { operand = 7; element = N.I32 });
+            instruction (Some (9, N.Rack N.I16)) (N.Narrow (8, 8));
+            instruction (Some (10, N.Rack N.I16)) (N.Rack_splat (N.Int16 0));
+            instruction (Some (11, N.Rack N.I16)) (N.Binary (N.Max, 9, 10)) ];
+        terminators = [ N.Return (Some 11) ];
+      };
+    loc = N.unknown_location;
+  }
+
+let () =
+  let source = C.emit ~source:"requantise.rk" [ select integer_kernel ] in
+  List.iter
+    (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
+    [ "v128_t requantise(v128_t pair, v128_t weights, v128_t sums, v128_t scale)";
+      "wasm_i32x4_dot_i16x8(pair, weights)"; "wasm_i32x4_add(sums, step0)"; "wasm_f32x4_convert_i32x4(step1)";
+      "wasm_f32x4_nearest("; "wasm_i32x4_trunc_sat_f32x4("; "wasm_i16x8_narrow_i32x4("; "wasm_i16x8_splat(0)";
+      "wasm_i16x8_max(" ]
+
 let () =
   let selected = select shared_value in
   let teed = Hashtbl.create 4 in

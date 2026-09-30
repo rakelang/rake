@@ -11,13 +11,14 @@ let unknown_location = { file = "<unknown>"; line = 0; col = 0; offset = 0 }
 
 let format_source_location loc = Printf.sprintf "%s:%d:%d" loc.file loc.line loc.col
 
-type element = I1 | U8 | I32 | I64 | F32 | F64
+type element = I1 | U8 | I16 | I32 | I64 | F32 | F64
 
 type typ = Scalar of element | Rack of element | Mask | Pointer
 
 type literal =
   | Bool of bool
   | Uint8 of int
+  | Int16 of int
   | Int32 of int32
   | Int64 of int64
   | Float32_bits of int32
@@ -59,6 +60,14 @@ type op =
       (** Lane [i] of the result is lane [indices.(i)] of the racks laid end to end. *)
   | Reduce of reduction * value
   | Scan of scan * value
+  | Dot of value * value
+      (** Two i16 racks to an i32 rack: lane [i] is [a.(2i) * b.(2i) + a.(2i+1) * b.(2i+1)]. *)
+  | Narrow of value * value
+      (** Two i32 racks to one i16 rack, each lane saturated; the first rack's lanes come first. *)
+  | Widen of { operand : value; high : bool }
+      (** The low or high half of a u8 rack, zero-extended to an i16 rack. *)
+  | Convert of { operand : value; element : element }
+      (** An i32 rack to f32, or an f32 rack to i32 rounded to nearest, ties to even, and saturated. *)
   | Extract of { rack : value; lane : value }
   | Insert of { rack : value; inserted : value; lane : value }
   | Gather of { base : value; indices : value; mask : value option }
@@ -110,6 +119,7 @@ type error = { function_name : string; context : string list; message : string }
 let string_of_element = function
   | I1 -> "i1"
   | U8 -> "u8"
+  | I16 -> "i16"
   | I32 -> "i32"
   | I64 -> "i64"
   | F32 -> "f32"
@@ -140,19 +150,22 @@ let complain (verifier : verifier) context message =
 let literal_element = function
   | Bool _ -> I1
   | Uint8 _ -> U8
+  | Int16 _ -> I16
   | Int32 _ -> I32
   | Int64 _ -> I64
   | Float32_bits _ -> F32
   | Float64_bits _ -> F64
 
 let is_integer = function Scalar I32 | Scalar I64 -> true | _ -> false
-let is_numeric_element = function U8 | I32 | I64 | F32 | F64 -> true | I1 -> false
+let is_numeric_element = function U8 | I16 | I32 | I64 | F32 | F64 -> true | I1 -> false
 let is_numeric = function Scalar element | Rack element -> is_numeric_element element | Mask | Pointer -> false
 let is_float_rack = function Rack F32 | Rack F64 -> true | _ -> false
 
 let operands = function
   | Const _ | Mask_const _ | Rack_const _ | Rack_splat _ -> []
-  | Broadcast value | Unary (_, value) | Reduce (_, value) | Scan (_, value) | Mask_not value -> [ value ]
+  | Broadcast value | Unary (_, value) | Reduce (_, value) | Scan (_, value) | Mask_not value
+  | Widen { operand = value; _ } | Convert { operand = value; _ } -> [ value ]
+  | Dot (left, right) | Narrow (left, right)
   | Binary (_, left, right)
   | Compare (_, left, right)
   | Mask_binary (_, left, right) -> [ left; right ]
@@ -229,6 +242,10 @@ let instruction_name = function
   | Shuffle _ -> "rack.shuffle"
   | Reduce _ -> "rack.reduce"
   | Scan _ -> "rack.scan"
+  | Dot _ -> "rack.dot"
+  | Narrow _ -> "rack.narrow"
+  | Widen _ -> "rack.widen"
+  | Convert _ -> "rack.convert"
   | Extract _ -> "rack.extract"
   | Insert _ -> "rack.insert"
   | Gather _ -> "rack.gather"
@@ -241,7 +258,7 @@ let instruction_name = function
 let effectful = function
   | Load _ | Store _ | Gather _ | Scatter _ | Call _ | Loop _ -> true
   | Const _ | Mask_const _ | Rack_const _ | Rack_splat _ | Broadcast _ | Unary _ | Binary _ | Fma _ | Compare _ | Select _ | Sanitize _ | Shuffle _
-  | Reduce _ | Scan _ | Extract _ | Insert _ | Mask_binary _ | Mask_not _ -> false
+  | Reduce _ | Scan _ | Dot _ | Narrow _ | Widen _ | Convert _ | Extract _ | Insert _ | Mask_binary _ | Mask_not _ -> false
 
 let check_provenance verifier context environment (instruction : instruction) =
   Option.iter (fun tine -> require_type verifier context environment tine Mask) instruction.provenance.through;
@@ -313,6 +330,21 @@ let rec verify_instruction verifier context environment (instruction : instructi
       (match types with
       | typ :: _ when is_numeric typ -> check_result verifier context instruction (Some typ)
       | _ -> complain verifier context "binary arithmetic requires numeric scalar or rack operands")
+  | Dot (left, right) ->
+      require_type verifier context environment left (Rack I16);
+      require_type verifier context environment right (Rack I16);
+      check_result verifier context instruction (Some (Rack I32))
+  | Narrow (left, right) ->
+      require_type verifier context environment left (Rack I32);
+      require_type verifier context environment right (Rack I32);
+      check_result verifier context instruction (Some (Rack I16))
+  | Widen { operand; _ } ->
+      require_type verifier context environment operand (Rack U8);
+      check_result verifier context instruction (Some (Rack I16))
+  | Convert { operand; element } ->
+      (match (lookup operand, element) with
+      | Some (Rack I32), F32 | Some (Rack F32), I32 -> check_result verifier context instruction (Some (Rack element))
+      | _ -> complain verifier context "convert turns an i32 rack into f32 or an f32 rack into i32")
   | Fma (a, b, c) ->
       let types = List.filter_map lookup [ a; b; c ] in
       require_same verifier context "fma" types;
@@ -564,6 +596,7 @@ let verify module_ =
 let string_of_literal = function
   | Bool value -> string_of_bool value
   | Uint8 value -> "u8:" ^ string_of_int value
+  | Int16 value -> "i16:" ^ string_of_int value
   | Int32 value -> Int32.to_string value
   | Int64 value -> Int64.to_string value
   | Float32_bits bits -> Printf.sprintf "f32:0x%08lx" bits
@@ -621,6 +654,10 @@ let rec string_of_instruction indent (instruction : instruction) =
     | Unary (op, operand) -> string_of_unary op ^ " " ^ value operand
     | Binary (op, left, right) -> string_of_binary op ^ " " ^ values [ left; right ]
     | Fma (a, b, c) -> "rack.fma " ^ values [ a; b; c ]
+    | Dot (left, right) -> "rack.dot " ^ values [ left; right ]
+    | Narrow (left, right) -> "rack.narrow " ^ values [ left; right ]
+    | Widen { operand; high } -> "rack.widen." ^ (if high then "high " else "low ") ^ value operand
+    | Convert { operand; element } -> "rack.convert." ^ string_of_element element ^ " " ^ value operand
     | Compare (comparison, left, right) -> "compare." ^ string_of_comparison comparison ^ " " ^ values [ left; right ]
     | Select { condition; if_true; if_false } -> "select " ^ values [ condition; if_true; if_false ]
     | Sanitize { mask; active; benign } ->

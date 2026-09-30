@@ -56,5 +56,11 @@ conformance suite covers it.
   `bitmask`. It emits C with one SIMD intrinsic per selected instruction and
   verifies the Clang-compiled object against a locals, constants and SIMD
   allow-list.
+- The `wasm-simd128` profile also proposes `i16s` and `i32s` racks: wrapping
+  `+` and `-`, signed `min` and `max`, `dot` of 16-bit pairs into 32-bit
+  lanes, saturating `narrow`, `widen_low` and `widen_high` of bytes, and
+  `to_f32` and `to_i32`, the last rounding to nearest with ties to even. The
+  executable semantics define each, and the documentation example compiles to
+  verified SIMD-only C.
 - The broader control-flow design remains a proposal rather than part of this
   alpha's executable language.

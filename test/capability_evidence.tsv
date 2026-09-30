@@ -92,3 +92,5 @@ pack.non-f32-field	checked	frontend-only	fixture:test/frontend/mixed_storage_wid
 result.non-float-rack	checked	frontend-only	fixture:test/frontend/byte_domain.rk	-	-	-	-	-	-
 operator.integer-rack-comparison	checked	frontend-only	capability:operator.integer-rack-comparison	-	-	-	-	-	-
 expression.bitmask	checked	frontend-only	capability:expression.bitmask	-	-	-	-	-	-
+operator.integer-rack-arithmetic	checked	frontend-only	capability:operator.integer-rack-arithmetic	-	-	-	-	-	-
+expression.integer-rack-conversion	checked	frontend-only	capability:expression.integer-rack-conversion	-	-	-	-	-	-

@@ -41,7 +41,7 @@ exception Selection_error of string
 let reject format = Printf.ksprintf (fun message -> raise (Selection_error message)) format
 
 let class_of_type = function
-  | N.Rack (N.U8 | N.F32) | N.Mask -> V128
+  | N.Rack (N.U8 | N.I16 | N.I32 | N.F32) | N.Mask -> V128
   | N.Scalar N.I32 -> I32
   | N.Scalar N.F32 -> F32
   | typ -> reject "values of type %s have no wasm-simd128 representation" (N.string_of_typ typ)
@@ -49,7 +49,8 @@ let class_of_type = function
 (** Bytes in one lane of a rack element, for turning lane indices into byte indices. *)
 let lane_bytes = function
   | N.U8 -> 1
-  | N.F32 -> 4
+  | N.I16 -> 2
+  | N.I32 | N.F32 -> 4
   | element -> reject "racks of %s are not part of the wasm-simd128 slice" (N.string_of_element element)
 
 let comparison_instruction element comparison =
@@ -140,8 +141,26 @@ let select_function (func : N.func) =
     | N.Rack_splat (N.Uint8 byte), _ -> [ I32_const (Int32.of_int byte); Operation "i8x16.splat" ]
     | N.Rack_splat (N.Float32_bits bits), _ ->
         [ I32_const bits; Operation "f32.reinterpret_i32"; Operation "f32x4.splat" ]
+    | N.Rack_splat (N.Int16 value), _ -> [ I32_const (Int32.of_int value); Operation "i16x8.splat" ]
+    | N.Rack_splat (N.Int32 value), N.Rack N.I32 -> [ I32_const value; Operation "i32x4.splat" ]
     | N.Mask_const set, _ -> [ I32_const (if set then -1l else 0l); Operation "i32x4.splat" ]
     | N.Broadcast scalar, N.Rack N.F32 -> emit scalar @ [ Operation "f32x4.splat" ]
+    | N.Broadcast scalar, N.Rack N.I32 -> emit scalar @ [ Operation "i32x4.splat" ]
+    | N.Binary (((N.Add | N.Sub | N.Min | N.Max) as operation), left, right), N.Rack ((N.I16 | N.I32) as element) ->
+        let shape = if element = N.I16 then "i16x8" else "i32x4" in
+        let name =
+          match operation with
+          | N.Add -> "add" | N.Sub -> "sub" | N.Min -> "min_s" | _ -> "max_s"
+        in
+        emit_in_order [ left; right ] @ [ Operation (shape ^ "." ^ name) ]
+    | N.Dot (left, right), N.Rack N.I32 -> emit_in_order [ left; right ] @ [ Operation "i32x4.dot_i16x8_s" ]
+    | N.Narrow (left, right), N.Rack N.I16 -> emit_in_order [ left; right ] @ [ Operation "i16x8.narrow_i32x4_s" ]
+    | N.Widen { operand; high }, N.Rack N.I16 ->
+        emit operand @ [ Operation (if high then "i16x8.extend_high_i8x16_u" else "i16x8.extend_low_i8x16_u") ]
+    | N.Convert { operand; element = N.F32 }, N.Rack N.F32 -> emit operand @ [ Operation "f32x4.convert_i32x4_s" ]
+    | N.Convert { operand; element = N.I32 }, N.Rack N.I32 ->
+        (* trunc_sat alone rounds toward zero; nearest first gives Rake's round to nearest, ties to even. *)
+        emit operand @ [ Operation "f32x4.nearest"; Operation "i32x4.trunc_sat_f32x4_s" ]
     | N.Binary (((N.Add | N.Sub | N.Mul | N.Div) as operation), left, right), N.Rack N.F32 ->
         let name =
           match operation with

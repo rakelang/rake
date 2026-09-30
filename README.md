@@ -79,10 +79,12 @@ that inactive invalid operands don't set floating-point exception flags. `run`
 and pack traversal remain frontend-only. The compiler reports that boundary
 directly.
 
-The `wasm-simd128` slice accepts `f32s` and `u8s` crunches, including two-rack
-byte shuffles and `bitmask`, and emits C that spells out its selected
-WebAssembly SIMD instructions as intrinsics. Its byte racks, shuffles and
-bitmasks are a proposal and aren't available on the other profiles.
+The `wasm-simd128` slice accepts `f32s`, `u8s`, `i16s` and `i32s` crunches,
+including two-rack byte shuffles, `bitmask`, integer arithmetic, `dot`,
+`narrow`, `widen_low`, `widen_high`, `to_f32` and `to_i32`, and emits C that
+spells out its selected WebAssembly SIMD instructions as intrinsics. Its byte
+and integer racks, shuffles, bitmasks and conversions are a proposal and aren't
+available on the other profiles.
 
 Records, tuples, logical mask reductions, reductions and scans outside AVX2,
 rearrangement operations, gather/scatter, compression/expansion, lane

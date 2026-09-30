@@ -395,6 +395,16 @@ let integer_literal_value (expr: Ast.expr) =
   | EInt value | EBroadcast { v = EInt value; _ } -> value
   | _ -> invalid_arg "integer_literal_value: not an integer literal"
 
+(** Whether an integer literal fits a lane of this integer rack. *)
+let literal_fits rack value =
+  match rack with
+  | Rack SUint8 -> value >= 0L && value <= 255L
+  | Rack SInt16 -> value >= -32768L && value <= 32767L
+  | Rack SInt -> value >= -2147483648L && value <= 2147483647L
+  | _ -> false
+
+let is_integer_rack = function Rack (SInt16 | SInt) -> true | _ -> false
+
 (** Infer expression type *)
 let rec infer_expr env (expr: Ast.expr) : t =
   require_feature env expr.loc (Capabilities.feature_of_expr expr.v);
@@ -433,7 +443,11 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | EBinop (l, op, r) ->
       let lt = infer_expr env l in
       let rt = infer_expr env r in
-      infer_binop lt rt op expr.loc
+      (match op with
+       | (Add | Sub) when lt = rt && is_integer_rack lt ->
+           require_feature env expr.loc Capabilities.Integer_rack_arithmetic;
+           lt
+       | _ -> infer_binop lt rt op expr.loc)
 
   | EUnop (op, e) ->
       let t = infer_expr env e in
@@ -449,6 +463,49 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall ("widen", args) ->
       type_errorf expr.loc "widen expects exactly one argument, got %d" (List.length args)
+
+  | ECall (("min" | "max") as name, [a; b])
+    when not (is_integer_literal a && is_integer_literal b)
+         && is_integer_rack (infer_expr env (if is_integer_literal a then b else a)) ->
+      (* An integer literal takes the element type of the integer rack beside it. *)
+      require_feature env expr.loc Capabilities.Integer_rack_arithmetic;
+      let rack, other = if is_integer_literal a then (b, a) else (a, b) in
+      let t = infer_expr env rack in
+      if is_integer_literal other then begin
+        let value = integer_literal_value other in
+        if not (literal_fits t value) then
+          type_errorf other.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type t))
+      end
+      else if infer_expr env other <> t then
+        type_errorf expr.loc "%s requires two equal integer racks" name;
+      t
+
+  | ECall (("dot" | "narrow") as name, [a; b]) ->
+      require_feature env expr.loc Capabilities.Integer_rack_conversion;
+      let operand, result = if name = "dot" then (Rack SInt16, Rack SInt) else (Rack SInt, Rack SInt16) in
+      List.iter (fun arg ->
+        let actual = infer_expr env arg in
+        if actual <> operand then
+          type_errorf arg.loc "%s requires %s racks, got %s" name (show_concise operand) (show_concise actual))
+        [a; b];
+      result
+
+  | ECall (("widen_low" | "widen_high" | "to_f32" | "to_i32") as name, [x]) ->
+      require_feature env expr.loc Capabilities.Integer_rack_conversion;
+      let operand, result =
+        match name with
+        | "widen_low" | "widen_high" -> (Rack SUint8, Rack SInt16)
+        | "to_f32" -> (Rack SInt, Rack SFloat)
+        | _ -> (Rack SFloat, Rack SInt)
+      in
+      let actual = infer_expr env x in
+      if actual <> operand then
+        type_errorf x.loc "%s requires a %s rack, got %s" name (show_concise operand) (show_concise actual);
+      result
+
+  | ECall (("dot" | "narrow" | "widen_low" | "widen_high" | "to_f32" | "to_i32") as name, args) ->
+      type_errorf expr.loc "%s expects %d argument(s), got %d" name
+        (if name = "dot" || name = "narrow" then 2 else 1) (List.length args)
 
   | ECall ("bitmask", [mask]) ->
       require_feature env expr.loc Capabilities.Bitmask_reduction;
@@ -605,7 +662,8 @@ and infer_unop t op loc =
     does not yet infer effects for user-defined functions. *)
 let pure_builtin_functions =
   [ "sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs";
-    "floor"; "ceil"; "min"; "max"; "pow"; "atan2"; "select" ]
+    "floor"; "ceil"; "min"; "max"; "pow"; "atan2"; "select";
+    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32" ]
 
 (** Validate the source-level fused-binding contract.
 

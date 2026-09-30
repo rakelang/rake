@@ -62,6 +62,22 @@ let intrinsic text =
       | "v128.bitselect" -> call 3 "wasm_v128_bitselect"
       | "i8x16.bitmask" -> call 1 "wasm_i8x16_bitmask"
       | "i32x4.bitmask" -> call 1 "wasm_i32x4_bitmask"
+      | "i16x8.splat" -> call 1 "wasm_i16x8_splat"
+      | "i16x8.add" -> call 2 "wasm_i16x8_add"
+      | "i16x8.sub" -> call 2 "wasm_i16x8_sub"
+      | "i16x8.min_s" -> call 2 "wasm_i16x8_min"
+      | "i16x8.max_s" -> call 2 "wasm_i16x8_max"
+      | "i32x4.add" -> call 2 "wasm_i32x4_add"
+      | "i32x4.sub" -> call 2 "wasm_i32x4_sub"
+      | "i32x4.min_s" -> call 2 "wasm_i32x4_min"
+      | "i32x4.max_s" -> call 2 "wasm_i32x4_max"
+      | "i32x4.dot_i16x8_s" -> call 2 "wasm_i32x4_dot_i16x8"
+      | "i16x8.narrow_i32x4_s" -> call 2 "wasm_i16x8_narrow_i32x4"
+      | "i16x8.extend_low_i8x16_u" -> call 1 "wasm_u16x8_extend_low_u8x16"
+      | "i16x8.extend_high_i8x16_u" -> call 1 "wasm_u16x8_extend_high_u8x16"
+      | "f32x4.convert_i32x4_s" -> call 1 "wasm_f32x4_convert_i32x4"
+      | "f32x4.nearest" -> call 1 "wasm_f32x4_nearest"
+      | "i32x4.trunc_sat_f32x4_s" -> call 1 "wasm_i32x4_trunc_sat_f32x4"
       | _ -> raise (Emission_error ("no intrinsic for " ^ text)))
 
 let result_type text =

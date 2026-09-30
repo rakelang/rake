@@ -42,12 +42,12 @@ its one-rounding semantics. GNU cross-binutils encode and inspect
 the object, and a static AArch64 harness compares exact result bits under QEMU.
 
 The third profile, `wasm-simd128`, maps a rack to one `v128` value: four f32
-lanes or sixteen `u8` lanes. It has no register allocator, because WebAssembly
+lanes, sixteen `u8` lanes, eight `i16` lanes or four `i32` lanes. It has no register allocator, because WebAssembly
 locals are unlimited, and it emits C with one SIMD intrinsic per selected
 instruction instead of assembly text, for judges and toolchains that accept
 only C. Verification compiles that C with Clang and checks the disassembled
 object against a locals-constants-and-SIMD allow-list. Its byte racks, shuffles
-and bitmasks are a proposal described in
+and bitmasks, and its integer racks and dot products, are proposals described in
 [the racks and targets specification](spec/01_racks_targets_and_abi.md#byte-racks-shuffles-and-bitmasks).
 
 An angle-bracket `f32` parameter is uniform rather than a rack. On the SysV

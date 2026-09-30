@@ -16,7 +16,7 @@ element type.
 | `x86-avx2` | x86-64 AVX2 and FMA3 | YMM | 8 | crunches and predicated rakes |
 | `x86-avx512` | x86-64 AVX-512F | ZMM | 16 | planned |
 | `aarch64-neon` | AArch64 NEON | vector | 4 | crunches and predicated rakes |
-| `wasm-simd128` | WebAssembly SIMD128 | `v128` | 4 | crunches, emitted as C |
+| `wasm-simd128` | WebAssembly SIMD128 | `v128` | 4 | crunches over f32, u8, i16 and i32 racks, emitted as C |
 
 `native` resolves to the strongest production profile implemented for the
 host. An explicit profile produces deterministic cross-target behavior. The
@@ -84,6 +84,40 @@ It is a reduction. Its result is a scalar and ends rack-valued work.
 ```text
 crunch occupied_bits(tiles: u8s) -> u32:
   return bitmask(tiles != <0>)
+```
+
+## Integer racks and dot products
+
+This section is a proposal. It is implemented for `wasm-simd128` only.
+
+An `i16s` rack holds eight signed 16-bit lanes and an `i32s` rack four signed
+32-bit lanes on a 128-bit profile. They carry integer arithmetic, such as an
+8-bit network's 16-bit activations and 32-bit sums:
+
+- `a + b` and `a - b` of equal `i16s` or `i32s` racks wrap on overflow.
+- `min(a, b)` and `max(a, b)` compare signed lanes. Either operand may be an
+  integer literal, which is broadcast in the other's element type.
+- `dot(a, b)` takes two `i16s` racks and returns an `i32s` rack whose lane `i`
+  is `a[2i] * b[2i] + a[2i+1] * b[2i+1]`, wrapping.
+- `narrow(a, b)` takes two `i32s` racks and returns one `i16s` rack, `a`'s
+  lanes then `b`'s, each saturated to the 16-bit range.
+- `widen_low(x)` and `widen_high(x)` take the low or high eight lanes of a `u8s`
+  rack, zero-extended to an `i16s` rack.
+- `to_f32(x)` converts an `i32s` rack to `f32s`, rounding to nearest.
+  `to_i32(x)` converts an `f32s` rack to `i32s`, rounding to nearest with ties
+  to even and saturating to the 32-bit range; NaN becomes zero.
+
+On `wasm-simd128` each of these is one instruction, except `to_i32`, which is
+`f32x4.nearest` then `i32x4.trunc_sat_f32x4_s`.
+
+```text
+crunch accumulate(sums: i32s, pair: i16s, weights: i16s) -> i32s:
+  return sums + dot(pair, weights)
+
+crunch requantise(low: i32s, high: i32s, low_scale: f32s, high_scale: f32s) -> i16s:
+  | a <| to_i32(to_f32(low) * low_scale)
+  | b <| to_i32(to_f32(high) * high_scale)
+  return max(narrow(a, b), <0>)
 ```
 
 ## WebAssembly boundary

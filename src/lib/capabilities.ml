@@ -36,6 +36,7 @@ type feature =
   | Masked_user_call | Masked_modulo | Masked_mutation | Masked_loop
   | Masked_cross_lane
   | Integer_rack_comparison | Bitmask_reduction
+  | Integer_rack_arithmetic | Integer_rack_conversion
   | Crunch_scalar_param | Rake_spread_param | Run_spread_param
   | Crunch_implicit_result | Value_non_f32 | Pack_non_f32_field
   | Result_non_float_rack
@@ -159,6 +160,10 @@ let all = [
     "comparisons of equal integer racks, or of an integer rack with an integer literal";
   supported Bitmask_reduction "expression.bitmask" "expression"
     "bitmask(mask): one bit per lane as a u32, lane zero in bit zero";
+  supported Integer_rack_arithmetic "operator.integer-rack-arithmetic" "operator"
+    "+ and - of equal i16 or i32 racks, wrapping, and their min and max, against a rack or an integer literal";
+  supported Integer_rack_conversion "expression.integer-rack-conversion" "expression"
+    "dot of i16 racks into i32, narrow of i32 racks into saturated i16, widen_low and widen_high of u8 racks into i16, to_f32 of i32 racks and to_i32 of f32 racks";
   supported Crunch_scalar_param "crunch.scalar-parameter" "boundary"
     "explicit uniform f32 crunch parameters";
   unavailable Rake_spread_param "rake.spread-parameter" "boundary" "spread rake parameters";
