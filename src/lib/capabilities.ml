@@ -36,7 +36,7 @@ type feature =
   | Masked_user_call | Masked_modulo | Masked_mutation | Masked_loop
   | Masked_cross_lane
   | Integer_rack_comparison | Bitmask_reduction
-  | Integer_rack_arithmetic | Integer_rack_conversion
+  | Integer_rack_arithmetic | Integer_rack_conversion | Integer_rack_bits
   | Crunch_scalar_param | Rake_spread_param | Run_spread_param
   | Crunch_implicit_result | Value_non_f32 | Pack_non_f32_field
   | Result_non_float_rack
@@ -164,8 +164,10 @@ let all = [
     "+ and - of equal i16 or i32 racks, wrapping, and their min and max, against a rack or an integer literal";
   supported Integer_rack_conversion "expression.integer-rack-conversion" "expression"
     "dot of i16 racks into i32, narrow of i32 racks into saturated i16, widen_low and widen_high of u8 racks into i16, to_f32 of i32 racks and to_i32 of f32 racks";
+  supported Integer_rack_bits "expression.integer-rack-bits" "expression"
+    "bit_and, bit_or, bit_xor and bit_andnot of equal integer racks, and shift_bits_left, shift_bits_right and shift_bits_right_signed of an integer rack by an integer literal or a uniform u32";
   supported Crunch_scalar_param "crunch.scalar-parameter" "boundary"
-    "explicit uniform f32 crunch parameters";
+    "explicit uniform f32 and u32 crunch parameters";
   unavailable Rake_spread_param "rake.spread-parameter" "boundary" "spread rake parameters";
   unavailable Run_spread_param "run.spread-parameter" "boundary" "spread run parameters";
   unavailable Crunch_implicit_result "crunch.implicit-result" "boundary" "implicit final-expression crunch results";

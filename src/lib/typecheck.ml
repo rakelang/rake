@@ -405,6 +405,14 @@ let literal_fits rack value =
 
 let is_integer_rack = function Rack (SInt16 | SInt) -> true | _ -> false
 
+(** The lane bits of a rack that bitwise operations and shifts take. *)
+let lane_bits = function
+  | Rack (SUint8 | SInt8) -> Some 8
+  | Rack (SUint16 | SInt16) -> Some 16
+  | Rack (SUint | SInt) -> Some 32
+  | Rack (SUint64 | SInt64) -> Some 64
+  | _ -> None
+
 (** Infer expression type *)
 let rec infer_expr env (expr: Ast.expr) : t =
   require_feature env expr.loc (Capabilities.feature_of_expr expr.v);
@@ -506,6 +514,42 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | ECall (("dot" | "narrow" | "widen_low" | "widen_high" | "to_f32" | "to_i32") as name, args) ->
       type_errorf expr.loc "%s expects %d argument(s), got %d" name
         (if name = "dot" || name = "narrow" then 2 else 1) (List.length args)
+
+  | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot") as name, [a; b]) ->
+      require_feature env expr.loc Capabilities.Integer_rack_bits;
+      let t = infer_expr env a in
+      if lane_bits t = None then
+        type_errorf a.loc "%s requires integer racks, got %s" name (show_concise t);
+      let other = infer_expr env b in
+      if other <> t then
+        type_errorf b.loc "%s requires two equal integer racks, got %s and %s" name
+          (show_concise t) (show_concise other);
+      t
+
+  | ECall (("shift_bits_left" | "shift_bits_right" | "shift_bits_right_signed") as name, [x; count]) ->
+      require_feature env expr.loc Capabilities.Integer_rack_bits;
+      let t = infer_expr env x in
+      (match lane_bits t with
+       | None -> type_errorf x.loc "%s shifts an integer rack, got %s" name (show_concise t)
+       | Some bits ->
+           if is_integer_literal count then begin
+             let value = integer_literal_value count in
+             if value < 0L || value >= Int64.of_int bits then
+               type_errorf count.loc "a shift of %d-bit lanes takes a count from 0 to %d, got %Ld"
+                 bits (bits - 1) value
+           end
+           else (match count.v with
+             | EScalarVar _ | EBroadcast { v = EScalarVar _; _ } ->
+                 (match infer_expr env count with
+                  | Scalar SUint | Rack SUint -> ()
+                  | actual ->
+                      type_errorf count.loc "%s takes a uniform u32 count, got %s" name (show_concise actual))
+             | _ -> type_errorf count.loc "%s takes its count as an integer literal or a uniform u32" name));
+      t
+
+  | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot" | "shift_bits_left" | "shift_bits_right"
+           | "shift_bits_right_signed") as name, args) ->
+      type_errorf expr.loc "%s expects 2 arguments, got %d" name (List.length args)
 
   | ECall ("bitmask", [mask]) ->
       require_feature env expr.loc Capabilities.Bitmask_reduction;
@@ -663,7 +707,8 @@ and infer_unop t op loc =
 let pure_builtin_functions =
   [ "sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs";
     "floor"; "ceil"; "min"; "max"; "pow"; "atan2"; "select";
-    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32" ]
+    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32";
+    "bit_and"; "bit_or"; "bit_xor"; "bit_andnot"; "shift_bits_left"; "shift_bits_right"; "shift_bits_right_signed" ]
 
 (** Validate the source-level fused-binding contract.
 

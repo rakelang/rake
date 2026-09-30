@@ -62,5 +62,10 @@ conformance suite covers it.
   `to_f32` and `to_i32`, the last rounding to nearest with ties to even. The
   executable semantics define each, and the documentation example compiles to
   verified SIMD-only C.
+- The `wasm-simd128` profile also proposes `u32s`, `u64s` and `i64s` racks,
+  `bit_and`, `bit_or`, `bit_xor` and `bit_andnot` of integer racks,
+  `shift_bits_left`, `shift_bits_right` and `shift_bits_right_signed` by an
+  integer literal or a uniform `u32`, and uniform `u32` crunch parameters, for
+  kernels such as a bitboard flood fill, one board row to a 64-bit lane.
 - The broader control-flow design remains a proposal rather than part of this
   alpha's executable language.

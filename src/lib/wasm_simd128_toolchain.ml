@@ -47,7 +47,7 @@ let contains text part =
 (** Locals, constants and register-to-register SIMD; no memory, calls or control flow. *)
 let allowed_instruction name =
   List.mem name [ "local.get"; "local.set"; "local.tee"; "i32.const"; "f32.reinterpret_i32"; "end" ]
-  || List.exists (fun prefix -> String.starts_with ~prefix name) [ "v128."; "i8x16."; "i16x8."; "i32x4."; "f32x4." ]
+  || List.exists (fun prefix -> String.starts_with ~prefix name) [ "v128."; "i8x16."; "i16x8."; "i32x4."; "i64x2."; "f32x4." ]
      && not (contains name "load" || contains name "store")
 
 (** Function name to instruction mnemonics, from llvm-objdump's wasm disassembly. *)

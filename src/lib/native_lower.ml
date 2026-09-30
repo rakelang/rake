@@ -42,17 +42,26 @@ let ir_typ_of_annotation typ =
   | TScalar PFloat -> Ok (Ir.Scalar Ir.F32)
   | TRack PUint8 -> Ok (Ir.Rack Ir.U8)
   | TRack PInt16 -> Ok (Ir.Rack Ir.I16)
-  | TRack PInt -> Ok (Ir.Rack Ir.I32)
+  | TRack (PInt | PUint) -> Ok (Ir.Rack Ir.I32)
+  | TRack (PInt64 | PUint64) -> Ok (Ir.Rack Ir.I64)
   | TScalar PUint -> Ok (Ir.Scalar Ir.I32)
   | TMask -> Ok Ir.Mask
   | _ ->
       error typ.loc
-        "only f32, u8, i16 and i32 rack, f32 and u32 scalar, and mask annotations are supported by native crunch lowering"
+        "only f32, u8, i16, i32, u32, i64 and u64 rack, f32 and u32 scalar, and mask annotations are supported by native crunch lowering"
 
 (** Racks a native crunch takes and returns. *)
-let native_racks = [ Ir.Rack Ir.F32; Ir.Rack Ir.U8; Ir.Rack Ir.I16; Ir.Rack Ir.I32 ]
+let native_racks = [ Ir.Rack Ir.F32; Ir.Rack Ir.U8; Ir.Rack Ir.I16; Ir.Rack Ir.I32; Ir.Rack Ir.I64 ]
 
 let is_integer_rack = function Ir.Rack (Ir.I16 | Ir.I32) -> true | _ -> false
+
+(** Racks whose lanes bitwise operations and shifts take, and their lane bits. *)
+let lane_bits = function
+  | Ir.Rack Ir.U8 -> Some 8
+  | Ir.Rack Ir.I16 -> Some 16
+  | Ir.Rack Ir.I32 -> Some 32
+  | Ir.Rack Ir.I64 -> Some 64
+  | _ -> None
 
 (** A splat of an integer literal, in the element of the integer rack it meets. *)
 let integer_splat loc typ value =
@@ -332,6 +341,46 @@ let rec lower_expr state provenance (expr : expr) =
       let operand, element = if name = "to_f32" then (Ir.Rack Ir.I32, Ir.F32) else (Ir.Rack Ir.F32, Ir.I32) in
       let* () = expect_type expr.loc name operand x in
       Ok (emit state expr.loc provenance (Ir.Rack element) (Ir.Convert { operand = fst x; element }))
+  | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot") as name, [ a; b ]) ->
+      if provenance.Ir.through <> None then
+        errorf expr.loc "%s is not yet supported in predicated regions" name
+      else
+        let* a = lower_expr state provenance a in
+        let* b = lower_expr state provenance b in
+        let* a, b = expect_same expr.loc name a b in
+        if lane_bits (snd a) = None then errorf expr.loc "%s takes two equal integer racks" name
+        else
+          let operation =
+            match name with
+            | "bit_and" -> Ir.And | "bit_or" -> Ir.Or | "bit_xor" -> Ir.Xor | _ -> Ir.Andnot
+          in
+          Ok (emit state expr.loc provenance (snd a) (Ir.Binary (operation, fst a, fst b)))
+  | ECall (("shift_bits_left" | "shift_bits_right" | "shift_bits_right_signed") as name, [ x; count ]) ->
+      if provenance.Ir.through <> None then
+        errorf expr.loc "%s is not yet supported in predicated regions" name
+      else
+        let* x = lower_expr state provenance x in
+        (match lane_bits (snd x) with
+         | None -> errorf expr.loc "%s shifts an integer rack" name
+         | Some bits ->
+             let* count =
+               match (integer_literal count, count.v) with
+               | Some value, _ ->
+                   if value < 0L || value >= Int64.of_int bits then
+                     errorf count.loc "a shift of %d-bit lanes takes a count from 0 to %d, got %Ld" bits (bits - 1) value
+                   else
+                     Ok (fst (emit state count.loc provenance (Ir.Scalar Ir.I32) (Ir.Const (Ir.Int32 (Int64.to_int32 value)))))
+               | None, (EScalarVar scalar | EBroadcast { v = EScalarVar scalar; _ }) ->
+                   let* found = find_binding state count.loc scalar in
+                   let* () = expect_type count.loc name (Ir.Scalar Ir.I32) found in
+                   Ok (fst found)
+               | None, _ -> errorf count.loc "%s takes its count as an integer literal or a uniform u32" name
+             in
+             let shift =
+               match name with
+               | "shift_bits_left" -> Ir.Shift_left | "shift_bits_right" -> Ir.Shift_right | _ -> Ir.Shift_right_signed
+             in
+             Ok (emit state expr.loc provenance (snd x) (Ir.Shift { operand = fst x; count; shift })))
   | ECall (name, _) -> errorf expr.loc "call to '%s' is not supported by native crunch lowering" name
   | EFma (a, b, c) ->
       let* a = lower_expr state provenance a in
@@ -464,16 +513,16 @@ let add_parameter state function_loc index = function
       let* () = bind state function_loc name (index, typ) in
       Ok parameter
   | PScalar (name, annotation) ->
-      let* () =
+      let* typ =
         match annotation with
-        | None -> Ok ()
+        | None -> Ok (Ir.Scalar Ir.F32)
         | Some typ ->
             let* typ = ir_typ_of_annotation typ in
-            if typ = Ir.Scalar Ir.F32 then Ok ()
-            else error function_loc "native scalar crunch parameters must be f32"
+            if typ = Ir.Scalar Ir.F32 || typ = Ir.Scalar Ir.I32 then Ok typ
+            else error function_loc "native scalar crunch parameters must be f32 or u32"
       in
-      let parameter = { Ir.id = index; typ = Ir.Scalar Ir.F32; name = Some name } in
-      let* () = bind state function_loc name (index, Ir.Scalar Ir.F32) in
+      let parameter = { Ir.id = index; typ; name = Some name } in
+      let* () = bind state function_loc name (index, typ) in
       Ok parameter
   | PSpread _ -> error function_loc "spread crunch parameters are not supported by native lowering"
 

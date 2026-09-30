@@ -16,7 +16,7 @@ element type.
 | `x86-avx2` | x86-64 AVX2 and FMA3 | YMM | 8 | crunches and predicated rakes |
 | `x86-avx512` | x86-64 AVX-512F | ZMM | 16 | planned |
 | `aarch64-neon` | AArch64 NEON | vector | 4 | crunches and predicated rakes |
-| `wasm-simd128` | WebAssembly SIMD128 | `v128` | 4 | crunches over f32, u8, i16 and i32 racks, emitted as C |
+| `wasm-simd128` | WebAssembly SIMD128 | `v128` | 4 | crunches over f32, u8, i16, i32, u32 and 64-bit racks, emitted as C |
 
 `native` resolves to the strongest production profile implemented for the
 host. An explicit profile produces deterministic cross-target behavior. The
@@ -118,6 +118,37 @@ crunch requantise(low: i32s, high: i32s, low_scale: f32s, high_scale: f32s) -> i
   | a <| to_i32(to_f32(low) * low_scale)
   | b <| to_i32(to_f32(high) * high_scale)
   return max(narrow(a, b), <0>)
+```
+
+## Bitwise operations and bit shifts
+
+This section is a proposal. It is implemented for `wasm-simd128` only.
+
+A `u64s` or `i64s` rack holds two 64-bit lanes on a 128-bit profile, and a
+`u32s` rack four unsigned 32-bit lanes. Integer racks of every width carry
+bitwise operations and bit shifts, such as a bitboard's rows, one row to a
+lane:
+
+- `bit_and(a, b)`, `bit_or(a, b)` and `bit_xor(a, b)` combine two equal
+  integer racks bit by bit, and `bit_andnot(a, b)` keeps the bits of `a` that
+  `b` doesn't set.
+- `shift_bits_left(x, n)` shifts each lane's bits towards its high end,
+  filling with zeros. `shift_bits_right(x, n)` shifts them towards the low end
+  filling with zeros, and `shift_bits_right_signed(x, n)` filling with the
+  sign bit. The count `n` is an integer literal from 0 to one less than the
+  lane's bits, or a uniform `u32` taken modulo the lane's bits.
+
+A crunch takes a uniform `u32` parameter, such as a shift count that depends on
+the data. The names differ from `shift_left` and `shift_right`, which move
+lanes rather than bits. On `wasm-simd128` each operation is one instruction:
+`v128.and`, `v128.or`, `v128.xor` and `v128.andnot`, and the lane width's
+`shl`, `shr_u` and `shr_s`.
+
+```text
+crunch step_east(here: u64s, open: u64s, board: u64s, <wrap: u32>) -> u64s:
+  let moving = bit_and(here, open)
+  let moved = bit_or(shift_bits_left(moving, 1), shift_bits_right(moving, <wrap>))
+  return bit_or(here, bit_and(moved, board))
 ```
 
 ## WebAssembly boundary

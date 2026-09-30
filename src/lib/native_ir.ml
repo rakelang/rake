@@ -25,6 +25,10 @@ type literal =
   | Float64_bits of int64
 
 type binary = Add | Sub | Mul | Div | Min | Max | And | Or | Xor
+  | Andnot  (** [left] and not [right], bit by bit *)
+
+(** A lane shift: left, or right filling with zeros or with the sign bit. *)
+type shift = Shift_left | Shift_right | Shift_right_signed
 
 type unary = Neg | Sqrt
 
@@ -68,6 +72,8 @@ type op =
       (** The low or high half of a u8 rack, zero-extended to an i16 rack. *)
   | Convert of { operand : value; element : element }
       (** An i32 rack to f32, or an f32 rack to i32 rounded to nearest, ties to even, and saturated. *)
+  | Shift of { operand : value; count : value; shift : shift }
+      (** Each lane of an integer rack shifted by the i32 scalar [count], taken modulo the lane's bits. *)
   | Extract of { rack : value; lane : value }
   | Insert of { rack : value; inserted : value; lane : value }
   | Gather of { base : value; indices : value; mask : value option }
@@ -165,6 +171,7 @@ let operands = function
   | Const _ | Mask_const _ | Rack_const _ | Rack_splat _ -> []
   | Broadcast value | Unary (_, value) | Reduce (_, value) | Scan (_, value) | Mask_not value
   | Widen { operand = value; _ } | Convert { operand = value; _ } -> [ value ]
+  | Shift { operand; count; _ } -> [ operand; count ]
   | Dot (left, right) | Narrow (left, right)
   | Binary (_, left, right)
   | Compare (_, left, right)
@@ -246,6 +253,7 @@ let instruction_name = function
   | Narrow _ -> "rack.narrow"
   | Widen _ -> "rack.widen"
   | Convert _ -> "rack.convert"
+  | Shift _ -> "rack.shift"
   | Extract _ -> "rack.extract"
   | Insert _ -> "rack.insert"
   | Gather _ -> "rack.gather"
@@ -258,7 +266,7 @@ let instruction_name = function
 let effectful = function
   | Load _ | Store _ | Gather _ | Scatter _ | Call _ | Loop _ -> true
   | Const _ | Mask_const _ | Rack_const _ | Rack_splat _ | Broadcast _ | Unary _ | Binary _ | Fma _ | Compare _ | Select _ | Sanitize _ | Shuffle _
-  | Reduce _ | Scan _ | Dot _ | Narrow _ | Widen _ | Convert _ | Extract _ | Insert _ | Mask_binary _ | Mask_not _ -> false
+  | Reduce _ | Scan _ | Dot _ | Narrow _ | Widen _ | Convert _ | Shift _ | Extract _ | Insert _ | Mask_binary _ | Mask_not _ -> false
 
 let check_provenance verifier context environment (instruction : instruction) =
   Option.iter (fun tine -> require_type verifier context environment tine Mask) instruction.provenance.through;
@@ -324,6 +332,17 @@ let rec verify_instruction verifier context environment (instruction : instructi
       (match lookup value with
       | Some (Rack (F32 | F64) as typ) -> check_result verifier context instruction (Some typ)
       | _ -> complain verifier context "sqrt requires a floating-point rack")
+  | Binary ((And | Or | Xor | Andnot), left, right) ->
+      let types = List.filter_map lookup [ left; right ] in
+      require_same verifier context "bitwise" types;
+      (match types with
+      | (Rack (U8 | I16 | I32 | I64) as typ) :: _ -> check_result verifier context instruction (Some typ)
+      | _ -> complain verifier context "bitwise operations require equal integer racks")
+  | Shift { operand; count; _ } ->
+      require_type verifier context environment count (Scalar I32);
+      (match lookup operand with
+      | Some (Rack (U8 | I16 | I32 | I64) as typ) -> check_result verifier context instruction (Some typ)
+      | _ -> complain verifier context "shifts require an integer rack")
   | Binary (_, left, right) ->
       let types = List.filter_map lookup [ left; right ] in
       require_same verifier context "binary" types;
@@ -612,6 +631,12 @@ let string_of_binary = function
   | And -> "and"
   | Or -> "or"
   | Xor -> "xor"
+  | Andnot -> "andnot"
+
+let string_of_shift = function
+  | Shift_left -> "shl"
+  | Shift_right -> "shr"
+  | Shift_right_signed -> "shr_s"
 
 let string_of_unary = function Neg -> "neg" | Sqrt -> "sqrt"
 
@@ -658,6 +683,7 @@ let rec string_of_instruction indent (instruction : instruction) =
     | Narrow (left, right) -> "rack.narrow " ^ values [ left; right ]
     | Widen { operand; high } -> "rack.widen." ^ (if high then "high " else "low ") ^ value operand
     | Convert { operand; element } -> "rack.convert." ^ string_of_element element ^ " " ^ value operand
+    | Shift { operand; count; shift } -> "rack." ^ string_of_shift shift ^ " " ^ values [ operand; count ]
     | Compare (comparison, left, right) -> "compare." ^ string_of_comparison comparison ^ " " ^ values [ left; right ]
     | Select { condition; if_true; if_false } -> "select " ^ values [ condition; if_true; if_false ]
     | Sanitize { mask; active; benign } ->

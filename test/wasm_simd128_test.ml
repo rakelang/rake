@@ -113,3 +113,35 @@ let () =
       "wasm_i8x16_shuffle(a, b, 0, 4, 8, 12, 16, 20, 24, 28, 0, 0, 0, 0, 0, 0, 0, 0)";
       "wasm_i8x16_ne(step0, step1)"; "wasm_i8x16_bitmask(step2)" ];
   print_endline "wasm-simd128 selection and C emission tests passed"
+
+(* A bitboard row step: the cells reached, those one step east within a board of
+   width w (a rotation by 1 and by w - 1), masked to the board. *)
+let bits_kernel =
+  {
+    N.name = "spread_east";
+    parameters =
+      [ parameter 0 "here" (N.Rack N.I64); parameter 1 "open" (N.Rack N.I64);
+        parameter 2 "board" (N.Rack N.I64); parameter 3 "wrap" (N.Scalar N.I32) ];
+    result = Some (N.Rack N.I64);
+    body =
+      {
+        instructions =
+          [ instruction (Some (4, N.Rack N.I64)) (N.Binary (N.And, 0, 1));
+            instruction (Some (5, N.Scalar N.I32)) (N.Const (N.Int32 1l));
+            instruction (Some (6, N.Rack N.I64)) (N.Shift { operand = 4; count = 5; shift = N.Shift_left });
+            instruction (Some (7, N.Rack N.I64)) (N.Shift { operand = 4; count = 3; shift = N.Shift_right });
+            instruction (Some (8, N.Rack N.I64)) (N.Binary (N.Or, 6, 7));
+            instruction (Some (9, N.Rack N.I64)) (N.Binary (N.And, 8, 2));
+            instruction (Some (10, N.Rack N.I64)) (N.Binary (N.Andnot, 9, 0)) ];
+        terminators = [ N.Return (Some 10) ];
+      };
+    loc = N.unknown_location;
+  }
+
+let () =
+  let source = C.emit ~source:"spread.rk" [ select bits_kernel ] in
+  List.iter
+    (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
+    [ "v128_t spread_east(v128_t here, v128_t open, v128_t board, uint32_t wrap)";
+      "wasm_v128_and(here, open)"; "wasm_i64x2_shl("; ", 1)"; "wasm_u64x2_shr("; ", wrap)";
+      "wasm_v128_or("; "wasm_v128_andnot(" ]

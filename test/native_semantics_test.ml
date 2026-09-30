@@ -215,7 +215,37 @@ let test_integer_racks () =
   eval_expr ~lanes:4 [ "x", I16_rack (Array.make 8 32767); "y", I16_rack (Array.make 8 1) ] (binop (var "x") Add (var "y"))
   |> get |> expect_i16 (List.init 8 (fun _ -> -32768))
 
+let expect_i64 expected = function
+  | I64_rack actual when expected = Array.to_list actual -> ()
+  | value -> failwith ("unexpected i64 rack, got " ^ string_of_value_kind (value_kind value))
+
+(* Bitwise operations and shifts: a bitboard row is one 64-bit lane, two to a rack
+   where f32 has four lanes. *)
+let test_integer_bits () =
+  let call name args = expression (ECall (name, args)) in
+  let int value = expression (EInt value) in
+  let rows = I64_rack [| 0b1011L; -1L |] in
+  let masks = I64_rack [| 0b0110L; 0xffL |] in
+  let env = [ "r", rows; "m", masks ] in
+  eval_expr ~lanes:4 env (call "bit_and" [ var "r"; var "m" ]) |> get |> expect_i64 [ 0b0010L; 0xffL ];
+  eval_expr ~lanes:4 env (call "bit_or" [ var "r"; var "m" ]) |> get |> expect_i64 [ 0b1111L; -1L ];
+  eval_expr ~lanes:4 env (call "bit_xor" [ var "r"; var "m" ]) |> get |> expect_i64 [ 0b1101L; -256L ];
+  eval_expr ~lanes:4 env (call "bit_andnot" [ var "r"; var "m" ]) |> get |> expect_i64 [ 0b1001L; -256L ];
+  eval_expr ~lanes:4 env (call "shift_bits_left" [ var "r"; int 1L ]) |> get |> expect_i64 [ 0b10110L; -2L ];
+  (* Logical right shifts fill with zeros, signed ones with the sign bit. *)
+  eval_expr ~lanes:4 env (call "shift_bits_right" [ var "r"; int 63L ]) |> get |> expect_i64 [ 0L; 1L ];
+  eval_expr ~lanes:4 env (call "shift_bits_right_signed" [ var "r"; int 63L ]) |> get |> expect_i64 [ 0L; -1L ];
+  (* A uniform count is taken modulo the lane's bits. *)
+  let uniform = expression (EScalarVar "n") in
+  eval_expr ~lanes:4 (("n", U32_scalar 65) :: env) (call "shift_bits_left" [ var "r"; uniform ])
+  |> get |> expect_i64 [ 0b10110L; -2L ];
+  eval_expr ~lanes:4 [ "x", I32_rack [| -8; 1; 0; 5 |] ] (call "shift_bits_right" [ var "x"; int 1L ])
+  |> get |> expect_i32 [ 2147483644; 0; 0; 2 ];
+  eval_expr ~lanes:4 [ "x", I32_rack [| -8; 1; 0; 5 |] ] (call "shift_bits_right_signed" [ var "x"; int 1L ])
+  |> get |> expect_i32 [ -4; 0; 0; 2 ]
+
 let () =
+  test_integer_bits ();
   test_integer_racks ();
   test_round_after_each_operation ();
   test_broadcast_arithmetic ();

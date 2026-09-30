@@ -41,7 +41,7 @@ exception Selection_error of string
 let reject format = Printf.ksprintf (fun message -> raise (Selection_error message)) format
 
 let class_of_type = function
-  | N.Rack (N.U8 | N.I16 | N.I32 | N.F32) | N.Mask -> V128
+  | N.Rack (N.U8 | N.I16 | N.I32 | N.I64 | N.F32) | N.Mask -> V128
   | N.Scalar N.I32 -> I32
   | N.Scalar N.F32 -> F32
   | typ -> reject "values of type %s have no wasm-simd128 representation" (N.string_of_typ typ)
@@ -51,6 +51,7 @@ let lane_bytes = function
   | N.U8 -> 1
   | N.I16 -> 2
   | N.I32 | N.F32 -> 4
+  | N.I64 -> 8
   | element -> reject "racks of %s are not part of the wasm-simd128 slice" (N.string_of_element element)
 
 let comparison_instruction element comparison =
@@ -138,6 +139,7 @@ let select_function (func : N.func) =
   and compute value =
     let op, typ = IntMap.find value definitions in
     match (op, typ) with
+    | N.Const (N.Int32 value), N.Scalar N.I32 -> [ I32_const value ]
     | N.Rack_splat (N.Uint8 byte), _ -> [ I32_const (Int32.of_int byte); Operation "i8x16.splat" ]
     | N.Rack_splat (N.Float32_bits bits), _ ->
         [ I32_const bits; Operation "f32.reinterpret_i32"; Operation "f32x4.splat" ]
@@ -153,6 +155,20 @@ let select_function (func : N.func) =
           | N.Add -> "add" | N.Sub -> "sub" | N.Min -> "min_s" | _ -> "max_s"
         in
         emit_in_order [ left; right ] @ [ Operation (shape ^ "." ^ name) ]
+    | N.Binary (((N.And | N.Or | N.Xor | N.Andnot) as operation), left, right), N.Rack (N.U8 | N.I16 | N.I32 | N.I64) ->
+        let name =
+          match operation with
+          | N.And -> "v128.and" | N.Or -> "v128.or" | N.Xor -> "v128.xor" | _ -> "v128.andnot"
+        in
+        emit_in_order [ left; right ] @ [ Operation name ]
+    | N.Shift { operand; count; shift }, N.Rack element ->
+        let shape =
+          match element with
+          | N.U8 -> "i8x16" | N.I16 -> "i16x8" | N.I32 -> "i32x4" | N.I64 -> "i64x2"
+          | _ -> reject "shifts of %s racks are not part of the wasm-simd128 slice" (N.string_of_element element)
+        in
+        let name = match shift with N.Shift_left -> "shl" | N.Shift_right -> "shr_u" | N.Shift_right_signed -> "shr_s" in
+        emit_in_order [ operand; count ] @ [ Operation (shape ^ "." ^ name) ]
     | N.Dot (left, right), N.Rack N.I32 -> emit_in_order [ left; right ] @ [ Operation "i32x4.dot_i16x8_s" ]
     | N.Narrow (left, right), N.Rack N.I16 -> emit_in_order [ left; right ] @ [ Operation "i16x8.narrow_i32x4_s" ]
     | N.Widen { operand; high }, N.Rack N.I16 ->
