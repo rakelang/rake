@@ -39,6 +39,22 @@ let shared_value =
     loc = N.unknown_location;
   }
 
+(* IEEE 754 maximum and minimum of f32 racks: f32x4.max and f32x4.min. *)
+let float_extremes =
+  {
+    N.name = "extremes";
+    parameters = [ parameter 0 "a" (N.Rack N.F32); parameter 1 "b" (N.Rack N.F32) ];
+    result = Some (N.Rack N.F32);
+    body =
+      {
+        instructions =
+          [ instruction (Some (2, N.Rack N.F32)) (N.Binary (N.Max, 0, 1));
+            instruction (Some (3, N.Rack N.F32)) (N.Binary (N.Min, 2, 1)) ];
+        terminators = [ N.Return (Some 3) ];
+      };
+    loc = N.unknown_location;
+  }
+
 let side_bits =
   {
     N.name = "side_bits";
@@ -106,6 +122,10 @@ let () =
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
     [ "wasm_f32x4_add(a, b)"; "wasm_f32x4_mul(step0, step0)"; "wasm_f32x4_gt(step0, a)";
       "wasm_v128_bitselect(step1, b, step2)" ];
+  let source = C.emit ~source:"extremes.rk" [ select float_extremes ] in
+  List.iter
+    (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
+    [ "wasm_f32x4_max(a, b)"; "wasm_f32x4_min(step0, b)" ];
   let source = C.emit ~source:"side_bits.rk" [ select side_bits ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))

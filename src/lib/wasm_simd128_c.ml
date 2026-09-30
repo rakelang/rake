@@ -42,6 +42,8 @@ let intrinsic text =
       | "f32x4.sub" -> call 2 "wasm_f32x4_sub"
       | "f32x4.mul" -> call 2 "wasm_f32x4_mul"
       | "f32x4.div" -> call 2 "wasm_f32x4_div"
+      | "f32x4.min" -> call 2 "wasm_f32x4_min"
+      | "f32x4.max" -> call 2 "wasm_f32x4_max"
       | "f32x4.neg" -> call 1 "wasm_f32x4_neg"
       | "f32x4.sqrt" -> call 1 "wasm_f32x4_sqrt"
       | "f32x4.eq" -> call 2 "wasm_f32x4_eq"

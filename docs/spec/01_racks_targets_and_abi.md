@@ -107,6 +107,10 @@ An `i16s` rack holds eight signed 16-bit lanes and an `i32s` rack four signed
   `to_i32(x)` converts an `f32s` rack to `i32s`, rounding to nearest with ties
   to even and saturating to the 32-bit range; NaN becomes zero.
 
+On `wasm-simd128`, `min(a, b)` and `max(a, b)` also take two `f32s` racks:
+the IEEE 754 minimum and maximum of each lane, NaN if either lane is, with
+−0 below +0 (`f32x4.min` and `f32x4.max`).
+
 On `wasm-simd128` each of these is one instruction, except `to_i32`, which is
 `f32x4.nearest` then `i32x4.trunc_sat_f32x4_s`.
 

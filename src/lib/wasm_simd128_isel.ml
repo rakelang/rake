@@ -183,6 +183,9 @@ let select_function (func : N.func) =
           | N.Add -> "f32x4.add" | N.Sub -> "f32x4.sub" | N.Mul -> "f32x4.mul" | _ -> "f32x4.div"
         in
         emit_in_order [ left; right ] @ [ Operation name ]
+    | N.Binary (((N.Min | N.Max) as operation), left, right), N.Rack N.F32 ->
+        (* IEEE 754 minimum and maximum: NaN if either lane is, and -0 below +0, as the reference computes. *)
+        emit_in_order [ left; right ] @ [ Operation (if operation = N.Min then "f32x4.min" else "f32x4.max") ]
     | N.Unary (N.Neg, operand), N.Rack N.F32 -> emit operand @ [ Operation "f32x4.neg" ]
     | N.Unary (N.Sqrt, operand), N.Rack N.F32 -> emit operand @ [ Operation "f32x4.sqrt" ]
     | N.Compare (comparison, left, right), N.Mask -> (

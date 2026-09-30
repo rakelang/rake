@@ -462,7 +462,7 @@ let rec eval_expr ~lanes env (expr : expr) =
          | _ -> error expr.loc (Operand_kind_mismatch { operation = Ast.show_binop op; left = value_kind left; right = Some (value_kind right) }))
     | ECall (("min" | "max") as name, [ a; b ])
       when integer_literal a <> None || integer_literal b <> None
-           || (match eval_expr ~lanes env a with Ok (I16_rack _ | I32_rack _) -> true | _ -> false) ->
+           || (match eval_expr ~lanes env a with Ok (I16_rack _ | I32_rack _ | F32_rack _) -> true | _ -> false) ->
         let literal_first = integer_literal a <> None in
         let rack_expr, other_expr = if literal_first then (b, a) else (a, b) in
         let* rack = eval_expr ~lanes env rack_expr in
@@ -475,6 +475,9 @@ let rec eval_expr ~lanes env (expr : expr) =
         in
         let f = if name = "min" then min else max in
         (match (rack, other) with
+         | F32_rack xs, F32_rack ys when Array.length xs = Array.length ys ->
+             (* IEEE 754 minimum and maximum, as wasm's f32x4.min and f32x4.max: NaN if either is, -0 below +0. *)
+             Ok (F32_rack (Array.map2 (if name = "min" then Float.min else Float.max) xs ys))
          | I16_rack xs, I16_rack ys when Array.length xs = Array.length ys -> Ok (I16_rack (Array.map2 f xs ys))
          | I32_rack xs, I32_rack ys when Array.length xs = Array.length ys -> Ok (I32_rack (Array.map2 f xs ys))
          | _ -> error expr.loc (Operand_kind_mismatch { operation = name; left = value_kind rack; right = Some (value_kind other) }))

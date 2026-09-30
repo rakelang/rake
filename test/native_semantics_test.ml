@@ -210,6 +210,10 @@ let test_integer_racks () =
   |> get |> expect_i32 [ 0; -2147483648; 0; 0 ];
   eval_expr ~lanes:4 [ "x", I32_rack [| 16777217; -3; 0; 7 |] ] (call "to_f32" [ var "x" ])
   |> get |> expect_rack [| 16777216.0; -3.0; 0.0; 7.0 |];
+  (* f32 racks: IEEE 754 maximum and minimum, as f32x4.max and f32x4.min: NaN if either is, -0 below +0. *)
+  let pair = [ "x", rack [| Float.nan; -0.0; 1.0; -2.0 |]; "y", rack [| 0.0; 0.0; 3.0; -1.0 |] ] in
+  eval_expr ~lanes:4 pair (call "max" [ var "x"; var "y" ]) |> get |> expect_rack [| Float.nan; 0.0; 3.0; -1.0 |];
+  eval_expr ~lanes:4 pair (call "min" [ var "x"; var "y" ]) |> get |> expect_rack [| Float.nan; -0.0; 1.0; -2.0 |];
   eval_expr ~lanes:4 [ "x", I16_rack [| -3; 4; 0; -32768; 9; -1; 2; 1 |] ] (call "max" [ var "x"; int 0L ])
   |> get |> expect_i16 [ 0; 4; 0; 0; 9; 0; 2; 1 ];
   eval_expr ~lanes:4 [ "x", I16_rack (Array.make 8 32767); "y", I16_rack (Array.make 8 1) ] (binop (var "x") Add (var "y"))

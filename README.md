@@ -82,6 +82,7 @@ directly.
 The `wasm-simd128` slice accepts `f32s`, `u8s`, `i16s`, `i32s`, `u32s`, `u64s`
 and `i64s` crunches, including two-rack byte shuffles, `bitmask`, integer
 arithmetic, `dot`, `narrow`, `widen_low`, `widen_high`, `to_f32`, `to_i32`,
+float `min` and `max`,
 bitwise operations and bit shifts, and emits C that spells out its selected
 WebAssembly SIMD instructions as intrinsics. Its byte and integer racks,
 shuffles, bitmasks, conversions, bitwise operations and bit shifts are a

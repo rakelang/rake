@@ -62,6 +62,9 @@ conformance suite covers it.
   `to_f32` and `to_i32`, the last rounding to nearest with ties to even. The
   executable semantics define each, and the documentation example compiles to
   verified SIMD-only C.
+- The `wasm-simd128` profile also proposes `min` and `max` of `f32s` racks,
+  the IEEE 754 minimum and maximum (`f32x4.min` and `f32x4.max`), with NaN and
+  signed-zero cases in the executable semantics.
 - The `wasm-simd128` profile also proposes `u32s`, `u64s` and `i64s` racks,
   `bit_and`, `bit_or`, `bit_xor` and `bit_andnot` of integer racks,
   `shift_bits_left`, `shift_bits_right` and `shift_bits_right_signed` by an
