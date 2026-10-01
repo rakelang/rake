@@ -1,0 +1,188 @@
+~~ The vector tier inside runs, hashed: every result must agree between the
+~~ interpreter and WebAssembly.
+
+stack Signal {
+  f32: x;
+}
+
+stack Picks {
+  i32: index;
+}
+
+stack Left {
+  f32: x;
+}
+
+stack Right {
+  f32: w;
+}
+
+stack Totals {
+  f32: total;
+}
+
+crunch scaled(v: f32s, <k: f32>) -> f32s:
+  return v * <k> + 1.0
+
+rake guarded_root(values: f32s) -> f32s:
+  tine #valid when values >= <0.0>
+  through #valid else <0.0> into rooted:
+    sqrt(values)
+  return sweep:
+    | #valid => rooted
+    | _      => <-1.0>
+
+run lanes_and_reductions(x: []f32, ints: []i32, out_f: mut []f32, out_i: mut []i32, <late: i32>):
+  let v = x[<0>]
+  let w = x[<4>]
+  let picked = if <late> > <0> then v else v * <2.0>
+  let lane_wise = if v > w then v - w else w - v
+  out_f[<0>] <- picked
+  out_f[<4>] <- lane_wise
+  let <third: f32> = extract(v, 2)
+  out_f[<8>] <- insert(w, 1, <third>)
+  let <s: f32> = sum(v)
+  let <p: f32> = product(w)
+  let <lo: f32> = minimum(v)
+  let <hi: f32> = maximum(w)
+  out_f[<12>] <- insert(insert(insert(insert(v, 0, <s>), 1, <p>), 2, <lo>), 3, <hi>)
+  out_f[<16>] <- scan_sum(v)
+  out_f[<20>] <- scan_maximum(w)
+  out_f[<24>] <- shuffle(v, [3, 2, 1, 0])
+  out_f[<28>] <- shuffle(v, w, [0, 4, 1, 5])
+  out_f[<32>] <- scaled(v, <0.25>)
+  out_f[<36>] <- guarded_root(v)
+  let a = ints[<0>]
+  let b = ints[<4>]
+  let <every: bool> = all(a < b)
+  let <some: bool> = any(a = b)
+  let <bits: u32> = bitmask(a > b)
+  out_i[<0>] <- a * b - 7
+  out_i[<4>] <- if a > b then bit_xor(a, b) else shift_bits_left(b, 3)
+  let <every_flag: i32> = if <every> then <1> else <0>
+  let <some_flag: i32> = if <some> then <1> else <0>
+  out_i[<8>] <- insert(insert(a, 0, <every_flag>), 1, <some_flag>)
+  out_i[<12>] <- bitcast(i32s, <bits>)
+  out_i[<16>] <- abs(a - b) + max(a, -5)
+
+run small_lanes(halves: []i16, bytes: []u8, out_h: mut []i16, out_b: mut []u8):
+  let h = halves[<0>]
+  out_h[<0>] <- h * h - 3
+  out_h[<8>] <- if h > 0 then min(h, 100) else -h
+  let b = bytes[<0>]
+  out_b[<0>] <- if b > 128 then max(b, 200) else min(b, 50)
+  out_b[<16>] <- b + 3
+
+run wide_lanes(longs: []i64, out_l: mut []i64):
+  let l = longs[<0>]
+  out_l[<0>] <- l + shift_bits_right(l, 7) - 1
+  out_l[<2>] <- if l > 0 then l * 3 else bit_and(l, 255)
+
+run lookup(table: []i32, indices: []i32, out: mut []i32):
+  out[<0>] <- table[indices[<0>]] + 1
+
+~~ A repeat too long to unroll stays a loop.
+run long_repeat(x: []f32, out: mut []f32):
+  total := x[<0>]
+  repeat <k: i32> from <0> up to <5000>:
+    total <- total * 0.999 + 0.001
+  out[<0>] <- total
+
+~~ A rake inlined in a traversal: in the tail, its lanes are also the tail's.
+run roots(input: pack Signal, <count: i64>) -> f32:
+  for chunk in input using f32s up to <count>:
+    yield guarded_root(chunk.x - 2.0)
+
+~~ A gather in a traversal: the tail's inactive lanes hold index 0 - 1 = -1,
+~~ which is neither checked nor read.
+run picked(input: pack Picks, table: []f32, <count: i64>) -> f32:
+  for chunk in input using i32s up to <count>:
+    yield table[chunk.index - 1] * 2.0
+
+~~ A nested traversal: for each chunk of left, the lane-wise sum over right's
+~~ chunks of x * w. Both have tails, and the inner one runs in the outer's.
+run crossed(left: pack Left, right: pack Right, out: mut pack Totals, <nl: i64>, <nr: i64>):
+  for a in left using f32s up to <nl>:
+    let x = a.x
+    acc := <0.0>
+    for b in right using f32s up to <nr>:
+      acc <- acc + x * b.w
+    out.total <- acc
+
+~~ A uniform != in a crunch is ordered too: NaN != NaN is false.
+crunch pick(v: f32s, w: f32s, <a: f32>, <b: f32>) -> f32s:
+  return if <a> != <b> then v else w
+
+run nan_pick(x: []f32, out: mut []f32, <q: f32>):
+  out[<0>] <- pick(x[<0>], x[<4>], <q>, <q>)
+  out[<4>] <- pick(x[<0>], x[<4>], <q>, <1.0>)
+
+~~ Uniform arithmetic on reductions, and a uniform stored where a rack goes,
+~~ which is broadcast.
+run spread_top(x: []f32, out: mut []f32):
+  let <top: f32> = maximum(x[<0>]) - minimum(x[<0>]) * <2.0>
+  out[<0>] <- <top>
+
+slow fold(h: u32, value: u32) -> u32:
+  return wrap_mul(bit_xor(h, value), 16777619)
+
+slow main() -> i32:
+  x: [8]f32 := [1.5, -2.0, 9.0, 0.25, 3.0, 4.0, -1.0, 8.0]
+  ints: [8]i32 := [5, -3, 7, 100, 2, -3, 9, -50]
+  out_f: [40]f32 := [0.0; 40]
+  out_i: [20]i32 := [0; 20]
+  lanes_and_reductions(x, ints, out_f, out_i, <1>)
+  lanes_and_reductions(x, ints, out_f, out_i, <0>)
+  halves: [8]i16 := [-300, 2, 150, -7, 32000, 0, 99, -32000]
+  bytes: [16]u8 := [0, 255, 129, 128, 50, 51, 200, 199, 1, 2, 3, 4, 5, 6, 7, 8]
+  out_h: [16]i16 := [0; 16]
+  out_b: [32]u8 := [0; 32]
+  small_lanes(halves, bytes, out_h, out_b)
+  longs: [2]i64 := [-5000000000, 77]
+  out_l: [4]i64 := [0; 4]
+  wide_lanes(longs, out_l)
+  table: [6]i32 := [10, 20, 30, 40, 50, 60]
+  indices: [4]i32 := [5, 0, 3, 3]
+  out_g: [4]i32 := [0; 4]
+  lookup(table, indices, out_g)
+  out_r: [4]f32 := [0.0; 4]
+  long_repeat(x, out_r)
+  signal: [11]f32 := [0.0, 1.0, 2.0, 3.0, 4.0, 9.0, 16.0, -4.0, 2.5, 6.0, 102.0]
+  rooted: [11]f32 := [0.0; 11]
+  roots(Signal { x: signal }, <11>, rooted)
+  picks: [6]i32 := [3, 1, 6, 2, 5, 4]
+  values: [6]f32 := [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
+  chosen: [6]f32 := [0.0; 6]
+  picked(Picks { index: picks }, values, <6>, chosen)
+  lx: [6]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+  rw: [7]f32 := [0.5, 0.25, 2.0, 1.0, 3.0, 0.125, 4.0]
+  totals: [6]f32 := [0.0; 6]
+  crossed(Left { x: lx }, Right { w: rw }, Totals { total: totals }, <6>, <7>)
+  let quiet = 0.0 / 0.0
+  picks_out: [8]f32 := [0.0; 8]
+  nan_pick(x, picks_out, <quiet>)
+  tops: [4]f32 := [0.0; 4]
+  spread_top(x, tops)
+  h: u32 := 2166136261
+  for i from 0 up to 40:
+    h <- fold(h, bitcast(u32, out_f[i]))
+  for i from 0 up to 20:
+    h <- fold(h, bitcast(u32, out_i[i]))
+  for i from 0 up to 16:
+    h <- fold(h, u32(wrap(u16, out_h[i])))
+  for i from 0 up to 32:
+    h <- fold(h, u32(out_b[i]))
+  for i from 0 up to 4:
+    h <- fold(h, wrap(u32, bitcast(u64, out_l[i])))
+    h <- fold(h, bitcast(u32, out_g[i]))
+    h <- fold(h, bitcast(u32, out_r[i]))
+  for i from 0 up to 11:
+    h <- fold(h, bitcast(u32, rooted[i]))
+  for i from 0 up to 8:
+    h <- fold(h, bitcast(u32, picks_out[i]))
+  for i from 0 up to 4:
+    h <- fold(h, bitcast(u32, tops[i]))
+  for i from 0 up to 6:
+    h <- fold(h, bitcast(u32, chosen[i]))
+    h <- fold(h, bitcast(u32, totals[i]))
+  return bitcast(i32, bit_and(h, 2147483647))

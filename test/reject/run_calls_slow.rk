@@ -1,0 +1,9 @@
+slow twice(n: i32) -> i32:
+  return n * 2
+
+run uses(x: []i32, out: mut []i32, <n: i32>):
+  let <m: i32> = twice(<n>)
+  out[<0>] <- x[<0>] + <m>
+
+slow main() -> i32:
+  return 0

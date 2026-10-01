@@ -40,6 +40,12 @@ type feature =
   | Crunch_scalar_param | Rake_spread_param | Run_spread_param
   | Crunch_implicit_result | Value_non_f32 | Pack_non_f32_field
   | Result_non_float_rack
+  (* The slow tier, general runs and control flow *)
+  | Type_array | Type_view | Type_pointer | Type_mutable | Type_record
+  | Def_record | Def_slow | Def_extern | Def_state | Def_embed | Def_const
+  | Expr_string | Expr_index | Expr_conversion | Expr_if | Expr_array
+  | Stmt_store | Stmt_return | Stmt_yield | Stmt_break | Stmt_continue
+  | Stmt_if | Stmt_while | Stmt_loop | Stmt_repeat | Stmt_uniform
 
 type entry = {
   feature : feature;
@@ -87,39 +93,39 @@ let all = [
   supported Param_scalar "parameter.scalar" "parameter" "scalar parameters where target ABI permits";
   unavailable Param_spread "parameter.spread" "parameter" "spread parameters";
   supported Result_annotation "result.annotation" "result" "explicit result annotations";
-  unavailable Expr_int "expression.integer-literal" "expression" "integer literals";
+  supported Expr_int "expression.integer-literal" "expression" "integer literals, typed by the rack or scalar beside them";
   supported Expr_float "expression.float-literal" "expression" "float literals";
   supported Expr_bool "expression.bool-literal" "expression" "mask literals";
   supported Expr_var "expression.variable" "expression" "rack variables";
   supported Expr_scalar_var "expression.scalar-variable" "expression" "scalar variables";
-  supported Expr_arithmetic "operator.arithmetic" "operator" "float arithmetic";
-  supported Expr_comparison "operator.comparison" "operator" "float comparisons";
+  supported Expr_arithmetic "operator.arithmetic" "operator" "arithmetic of racks and of slow and uniform scalars";
+  supported Expr_comparison "operator.comparison" "operator" "comparisons of racks and scalars";
   supported Expr_mask_logic "operator.mask-logic" "operator" "mask logic";
   unavailable Expr_pipeline_operator "operator.pipeline" "operator" "binary pipeline operator";
   unavailable Expr_shift_rotate "operator.shift-rotate" "operator" "shift and rotate operators";
   unavailable Expr_interleave "operator.interleave" "operator" "interleave operator";
-  supported Expr_negate "operator.negate" "operator" "float negation";
+  supported Expr_negate "operator.negate" "operator" "negation of float and signed integer racks and scalars";
   supported Expr_not "operator.not" "operator" "mask negation";
   supported Expr_call "expression.call" "expression" "built-in and checked function calls";
   unavailable Expr_lambda "expression.lambda" "expression" "lambda expressions";
   unavailable Expr_pipeline "expression.pipeline" "expression" "expression pipelines";
   unavailable Expr_fused_pipeline "expression.fused-pipeline" "expression" "fused expression pipelines";
-  supported Expr_let "expression.let" "expression" "let expressions";
+  unavailable Expr_let "expression.let" "expression" "let expressions (no source syntax)";
   supported Expr_field "expression.field" "expression" "field access";
-  unavailable Expr_record "expression.record" "expression" "record construction";
+  supported Expr_record "expression.record" "expression" "record and pack literals in slow code";
   unavailable Expr_record_update "expression.record-update" "expression" "record updates";
   unavailable Expr_lane_index "expression.lane-index" "expression" "zero-based profile-resolved rack lane index (reserved; no lowering yet)";
   unavailable Expr_lane_count "expression.lane-count" "expression" "profile-resolved rack lane count (reserved; no lowering yet)";
-  unavailable Expr_extract "expression.lane-extract" "expression" "lane extraction";
-  unavailable Expr_insert "expression.lane-insert" "expression" "lane insertion";
+  supported Expr_extract "expression.lane-extract" "expression" "extract(rack, lane): one lane as a uniform scalar, lane a literal";
+  supported Expr_insert "expression.lane-insert" "expression" "insert(rack, lane, <value>): a rack with one lane replaced, lane a literal";
   supported Expr_reduce "expression.reduction" "expression"
     "strict ascending-lane f32 reductions";
   supported Expr_scan "expression.scan" "expression"
     "strict inclusive f32 prefix scans";
   supported Expr_shuffle "expression.shuffle" "expression"
     "static lane shuffles of one rack, or of two equal racks laid end to end";
-  unavailable Expr_gather "expression.gather" "expression" "gathers";
-  unavailable Expr_scatter "expression.scatter" "expression" "scatters";
+  supported Expr_gather "expression.gather" "expression" "gathers: view[indices] with an i32s index rack in a run, checked unless written unchecked";
+  unavailable Expr_scatter "expression.scatter" "expression" "scatters: no profile stores lanes to rack-chosen indices without a scalar lane loop";
   unavailable Expr_compress "expression.compress" "expression" "compression";
   unavailable Expr_expand "expression.expand" "expression" "expansion";
   unavailable Expr_inline_tines "expression.inline-tines" "expression" "inline tines";
@@ -140,9 +146,9 @@ let all = [
   supported Stmt_fused "statement.fused" "statement" "verified pure inlineable-SSA bindings";
   supported Stmt_expression "statement.expression" "statement" "expression statements";
   supported Stmt_over "statement.over" "statement" "pack iteration";
-  supported Predicate_expr "predicate.expression" "predicate" "mask expressions";
+  unavailable Predicate_expr "predicate.expression" "predicate" "mask expressions as predicates (no source syntax)";
   supported Predicate_comparison "predicate.comparison" "predicate" "comparisons";
-  supported Predicate_is "predicate.is" "predicate" "is and is-not comparisons";
+  unavailable Predicate_is "predicate.is" "predicate" "is and is-not comparisons (no source syntax)";
   supported Predicate_and "predicate.and" "predicate" "predicate conjunction";
   supported Predicate_or "predicate.or" "predicate" "predicate disjunction";
   supported Predicate_not "predicate.not" "predicate" "predicate negation";
@@ -175,6 +181,32 @@ let all = [
   supported Pack_non_f32_field "pack.non-f32-field" "boundary" "mixed-width pack storage fields";
   supported Result_non_float_rack "result.non-float-rack" "boundary"
     "typed non-f32 frontend rack results";
+  supported Type_array "type.array" "type" "[N]T: fixed arrays in memory, or rack arrays held in registers";
+  supported Type_view "type.view" "type" "[]T: a borrowed run of elements with a runtime count";
+  supported Type_pointer "type.pointer" "type" "ptr T: C pointers for extern interoperation, accessed unchecked";
+  supported Type_mutable "type.mutable" "type" "mut T: parameters the callee may write";
+  supported Type_record "type.record" "type" "records, with Rake or C layout";
+  supported Def_record "definition.record" "definition" "record declarations, including C structs named by header";
+  supported Def_slow "definition.slow" "definition" "slow functions: scalar orchestration code";
+  supported Def_extern "definition.extern" "definition" "extern slow declarations of C functions";
+  supported Def_state "definition.state" "definition" "module state that persists across calls";
+  supported Def_embed "definition.embed" "definition" "embedded constant bytes from a file";
+  supported Def_const "definition.const" "definition" "compile-time constants";
+  supported Expr_string "expression.string" "expression" "string literals";
+  supported Expr_index "expression.index" "expression" "element, rack and gather indexing, checked or unchecked";
+  supported Expr_conversion "expression.conversion" "expression" "checked, wrapping and bit-cast scalar conversions";
+  supported Expr_if "expression.if" "expression" "value-producing if, by scalar condition or rack mask";
+  supported Expr_array "expression.array" "expression" "array literals";
+  supported Stmt_store "statement.store" "statement" "stores to fields, elements and memory";
+  supported Stmt_return "statement.return" "statement" "return";
+  supported Stmt_yield "statement.yield" "statement" "yield, ending a traversal";
+  supported Stmt_break "statement.break" "statement" "break";
+  supported Stmt_continue "statement.continue" "statement" "continue";
+  supported Stmt_if "statement.if" "statement" "if, else if and else statements";
+  supported Stmt_while "statement.while" "statement" "while loops";
+  supported Stmt_loop "statement.loop" "statement" "counted for loops";
+  supported Stmt_repeat "statement.repeat" "statement" "fixed-count repeat, unrolled";
+  supported Stmt_uniform "statement.uniform" "statement" "let <name: T> = e: a uniform scalar binding in vector code";
 ]
 
 let find feature =
@@ -214,6 +246,8 @@ let feature_of_type = function
   | TFun _ -> Type_function
   | TTuple _ -> Type_tuple
   | TUnit -> Type_unit
+  | TArray _ -> Type_array | TView _ -> Type_view | TPtr _ -> Type_pointer
+  | TMut _ -> Type_mutable | TNamed _ -> Type_record
 
 let feature_of_binop = function
   | Add | Sub | Mul | Div | Mod -> Expr_arithmetic
@@ -241,6 +275,8 @@ let feature_of_expr = function
   | ECompress _ -> Expr_compress | EExpand _ -> Expr_expand
   | ETines _ -> Expr_inline_tines | EFma _ -> Expr_fma | EOuter _ -> Expr_outer
   | ETuple _ -> Expr_tuple | EBroadcast _ -> Expr_broadcast | EUnit -> Expr_unit
+  | EString _ -> Expr_string | EIndex _ -> Expr_index | EConvert _ -> Expr_conversion
+  | EIf _ -> Expr_if | EArray _ -> Expr_array
 
 let feature_of_param = function
   | PRack _ -> Param_rack | PScalar _ -> Param_scalar | PSpread _ -> Param_spread
@@ -249,6 +285,9 @@ let feature_of_stmt = function
   | SLet _ -> Stmt_let | SLocBind _ -> Stmt_location
   | SAssign _ -> Stmt_assign | SFused _ -> Stmt_fused
   | SExpr _ -> Stmt_expression | SOver _ -> Stmt_over
+  | SUniform _ -> Stmt_uniform | SStore _ -> Stmt_store | SReturn _ -> Stmt_return | SYield _ -> Stmt_yield
+  | SBreak -> Stmt_break | SContinue -> Stmt_continue | SIf _ -> Stmt_if
+  | SWhile _ -> Stmt_while | SLoop { loop_repeat = true; _ } -> Stmt_repeat | SLoop _ -> Stmt_loop
 
 let feature_of_predicate = function
   | PExpr _ -> Predicate_expr | PCmp _ -> Predicate_comparison
@@ -259,6 +298,8 @@ let feature_of_predicate = function
 let feature_of_def = function
   | DStack _ -> Def_stack | DSingle _ -> Def_single | DType _ -> Def_alias
   | DCrunch _ -> Def_crunch | DRake _ -> Def_rake | DRun _ -> Def_run
+  | DRecord _ -> Def_record | DSlow _ -> Def_slow | DExtern _ -> Def_extern
+  | DState _ -> Def_state | DEmbed _ -> Def_embed | DConst _ -> Def_const
 
 let print oc =
   output_string oc "rake-capabilities-v2\ncontract\tstatus\tfeature\tcategory\tdescription\n";

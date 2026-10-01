@@ -49,6 +49,13 @@ valid_evidence_id() {
     verify:add|verify:select|verify:scalar-broadcast|verify:predication|verify:reductions|verify:scans)
       test -f "${project_root}/test/native_backend_test.sh" ;;
     docs:*) test -f "${project_root}/${value}" ;;
+    # The wasm-simd128 whole-program slice: the interpreter-to-wasmtime
+    # differential (test/program_test.sh), the C boundary and interop test
+    # (test/abi_test.sh), and rakec --verify-native on the fixture, which both
+    # run and which rejects any C stack traffic in a run.
+    program:test/program/*.rk) test -f "${project_root}/${value}" ;;
+    abi:test/abi/*.rk) test -f "${project_root}/${value}" ;;
+    wasm-verify:test/program/*.rk|wasm-verify:test/abi/*.rk) test -f "${project_root}/${value}" ;;
     *) return 1 ;;
   esac
 }

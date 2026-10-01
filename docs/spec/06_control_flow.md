@@ -1,91 +1,127 @@
-# Proposal: general control flow
+# Control flow
 
-This document proposes control-flow forms beyond Rake's tine, through, sweep,
-and pack-traversal constructs. The syntax is reserved for design work and is
-not part of the executable language contract. The capability report lists the
-forms implemented by a compiler revision.
+Rake has two kinds of choice. A uniform condition, one `bool` for every lane,
+chooses which code runs. A mask, one `bool` for each lane, chooses each lane's
+value, and every lane's code runs. Tines, through blocks and sweeps are the
+named form of the second kind, defined in [tines, through and
+sweeps](03_tines_and_through.md). This page defines conditional
+expressions, loops and branches.
 
-## Value-producing conditionals
+## Conditional expressions
 
-Proposed syntax:
+`if c then a else b` is a value. Its condition decides how it chooses.
 
-```rake,proposal
-let result = if condition then value1 else value2
+A mask condition chooses lane by lane. Each branch is computed under its
+mask, the condition's lanes for `a` and the others for `b`, combined with
+any mask around the expression, and a lane-wise selection joins them. An
+inactive lane's computation doesn't happen, as in a through block, so
+operands are replaced with benign values on targets with floating-point
+exceptions. On WebAssembly, the expression below is two subtractions, a
+comparison and one `v128.bitselect`. A mask conditional compiles on
+`x86-avx2`, `aarch64-neon` and `wasm-simd128`:
+
+<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+```rake
+crunch distance(v: f32s, w: f32s) -> f32s:
+  return if v > w then v - w else w - v
 ```
 
-A conditional produces one value. Its condition and branches must belong to
-one of two explicitly different semantic classes.
+A uniform condition chooses one whole rack. In vector code both branches are
+rack expressions that the target computes before selecting one, so computing
+the branch not taken has no effect. In slow code, only the chosen branch is
+evaluated. A uniform conditional in vector code compiles on `wasm-simd128`
+only:
 
-### Scalar condition
-
-A scalar boolean selects one branch. Only the selected branch is evaluated.
-This form is suitable for scalar orchestration outside lane-dependent kernel
-work. Its typed IR uses a structured conditional whose two regions yield the
-same type.
-
-### Rack mask
-
-A rack mask selects a value independently in each lane. Both candidate
-computations must be pure and safe under the active mask. The semantics are the
-same as a one-arm `through` followed by total selection: inactive lanes cannot
-raise floating-point exceptions, access invalid memory, or produce effects.
-
-Native lowering must retain vector predication. A target may select between
-already-total candidate racks, sanitize unsafe operands, or use native masked
-instructions. The backend must reject a branch whose operations cannot satisfy
-the inactive-lane rule. Per-lane scalar branches are forbidden.
-
-The existing tine/through/sweep syntax remains the primary form for divergent
-kernel work because it names masks and totality explicitly.
-
-## Fixed-count iteration
-
-Proposed syntax:
-
-```rake,proposal
-repeat <i: i32> from <0> up to <4>:
-  body
+<!-- rake-check: verify wasm-simd128 -->
+```rake
+crunch pick(near: f32s, far: f32s, <late: i32>) -> f32s:
+  return if <late> > <0> then near else far
 ```
 
-Angle brackets mark the scalar induction variable and scalar bounds. Bounds and
-step must be compile-time constants in the first implementation. The loop body
-may yield typed loop-carried values; mutation is not required to express an
-accumulator.
+In vector code, a branch can't read memory. A load, gather or element read is
+bound with `let` before the conditional, so it visibly happens whichever way
+the condition goes:
 
-The typed native IR represents the loop as a structured region with explicit
-initial values, induction value, carried values, and yields. Target
-legalization chooses full unrolling, partial unrolling, or a scalar loop around
-whole-rack operations. The choice must preserve every live rack as one native
-register. A loop inside a rack computation cannot become separate per-lane
-iteration.
+<!-- rake-check: reject "an if's branches compute on values" -->
+```rake
+run choose(x: []f32, out: mut []f32, <late: i32>):
+  out[<0>] <- if <late> > <0> then x[<0>] else x[<4>]
+```
 
-Unrolling is a pressure-aware target decision. No fixed universal trip-count
-threshold is part of the language contract. The allocator may reject a forced
-unroll when its live racks exceed the profile budget.
+## Fixed-count loops
 
-## Interaction with pack traversal
+`repeat <i: i32> from <0> up to <4>:` runs its body once for each index from
+the first bound up to, but not including, the second. Both bounds are
+constants, and the brackets mark the index as uniform. Inside the body the
+index is a constant, so it can index an array of rack locations and take part
+in address arithmetic.
 
-`for chunk in input using f32s up to <count>:` traverses pack storage in
-native-rack chunks and is distinct from a source-level fixed-count loop. A
-future general loop around pack traversal repeats whole traversals. A future
-loop inside a crunch or rake repeats vector operations on the same racks.
+In a crunch or rake, `repeat` unrolls completely, and the body may update
+mutable rack locations, so a crunch stays straight-line code. This compiles on
+every production profile:
 
-Native `run` lowering remains responsible for full-rack iteration, safe tails,
-pointer validity, and the binary boundary specified in
-[`02_packs_and_run.md`](02_packs_and_run.md). Safe tails cover both bounded
-memory access and suppression of floating-point exceptions from inactive
-lanes. General loop syntax cannot weaken those obligations. The current native
-backend does not implement this traversal contract yet.
+<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+```rake
+crunch cube(a: f32s) -> f32s:
+  power := a
+  repeat <i: i32> from <0> up to <2>:
+    power <- power * a
+  return power
+```
 
-## Acceptance requirements
+In a run, `repeat` unrolls while its trips times its body's statements stay
+within 4096, and otherwise it stays a loop with the same meaning. Either way
+each rack location stays one register, in a WebAssembly local. In
+`test/program/vector_tier.rk`, a `repeat` of 5000 trips compiles to a loop of
+one `f32x4.mul`, one `f32x4.add` and the counter.
 
-Neither proposed form becomes executable merely because the parser recognizes
-it. Production acceptance requires:
+## Loops and branches in runs
 
-1. complete type and scope rules;
-2. scalar-interpreter semantics for results, effects, and exceptional values;
-3. typed-IR verification for structured regions and dominance;
-4. per-profile legalization and register-pressure handling;
-5. native runtime comparison with the interpreter; and
-6. assembly/disassembly checks for vector register classes, calls, spills,
-   scalar lane branches, and any promised unrolling.
+A run's counted loop, `for <i: i32> from <a> up to <b> by <s>:`, has a uniform
+index, bounds and step. The step is 1 unless given. A step of zero or less
+traps, and the last iteration stops at the bound instead of stepping past it.
+A statement `if <c>:`, with `else if` and `else` arms, takes a uniform
+condition and branches around whole statements:
+
+<!-- rake-check: run 20 -->
+```rake
+run clip_rows(x: []f32, out: mut []f32, <n: i32>, <limit: i32>):
+  for <i: i32> from <0> up to <n> by <4>:
+    let row = x[<i>]
+    if <i> < <limit>:
+      out[<i>] <- row * <2.0>
+    else:
+      out[<i>] <- row
+
+slow main() -> i32:
+  values: [12]f32 := [1.0; 12]
+  result: [12]f32 := [0.0; 12]
+  clip_rows(values, result, <12>, <8>)
+  total := 0.0
+  i := 0
+  while true:
+    if i = 12:
+      break
+    total <- total + result[i]
+    i <- i + 1
+  return i32(total)
+```
+
+A run has no `while`, `break`, `continue` or `return`, so every vector loop
+runs a counted number of iterations. Mutable rack locations, such as
+`total := <0.0>`, and arrays of them, such as `acc: [8]i32s := <0>`, carry
+values across iterations. In a traversal's tail an assignment updates only
+the active lanes.
+
+A traversal, `for chunk in input using f32s up to <count>:`, is a different
+loop: it visits a pack's records a rack at a time, as [packs and
+runs](02_packs_and_run.md) define. A counted loop may contain a traversal, and
+a traversal may contain counted loops, `repeat`, statement `if` and a
+traversal of the same lane count.
+
+## Slow control flow
+
+Slow code has `if`, `else if` and `else`, `while`, the counted `for i from a
+up to b by s`, `break`, `continue` and `return`, as [the slow
+tier](09_slow_tier.md) defines. It holds no racks, so a run called inside a
+slow loop does whole-rack work once each iteration.

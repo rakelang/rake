@@ -33,10 +33,12 @@ while IFS=$'\t' read -r path category targets widths stage outcome diagnostic; d
   test "${path}" != "path" || continue
   case "${category}:${path}" in
     frontend:test/frontend/*.rk|native:test/native/*.rk|reject:test/reject/*.rk|future:examples/future/*.rk) ;;
+    program:test/program/*.rk|trap:test/program/trap/*.rk|abi:test/abi/*.rk) ;;
     *) fail "${path}: category ${category} disagrees with directory" ;;
   esac
   case "${category}:${stage}:${outcome}" in
     frontend:frontend:pass|native:native-object:pass|reject:frontend:reject|future:design:excluded) ;;
+    program:program:differential|trap:program:trap|abi:program:boundary|abi:program:c-interop) ;;
     *) fail "${path}: inconsistent stage/outcome metadata" ;;
   esac
   test -n "${targets}" && test -n "${widths}" \
@@ -72,6 +74,13 @@ while IFS=$'\t' read -r path category target width stage outcome diagnostic; do
       "${rakec}" --verify-native --target "${target}" --width "${width}" \
         -o "${object}" "${source}"
       test -s "${object}" || fail "${path}: verified native object was empty"
+      ;;
+    program | trap | abi)
+      # Checked here; executed against the interpreter by program_test.sh.
+      "${rakec}" "${source}" > /dev/null
+      if test "${category}" != trap; then
+        "${rakec}" --verify-native --target "${target}" -o "${tmp}/program.o" "${source}"
+      fi
       ;;
     future) ;;
     *) fail "${path}: unknown category ${category}" ;;

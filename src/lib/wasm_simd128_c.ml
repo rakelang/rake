@@ -17,9 +17,17 @@
 
 module I = Wasm_simd128_isel
 
-let c_type = function I.V128 -> "v128_t" | I.I32 -> "uint32_t" | I.F32 -> "float"
+let c_type = function I.V128 -> "v128_t" | I.I32 -> "uint32_t" | I.I64 -> "uint64_t" | I.F32 -> "float"
 
 exception Emission_error of string
+
+(** The relaxed profile: its functions are compiled for relaxed SIMD. *)
+let relaxed = ref false
+
+let relaxed_prologue () =
+  if !relaxed then "#pragma clang attribute push (__attribute__((target(\"relaxed-simd\"))), apply_to = function)\n" else ""
+
+let relaxed_epilogue () = if !relaxed then "\n#pragma clang attribute pop\n" else ""
 
 (** The intrinsic for one selected instruction, and how many stack values it consumes. *)
 let intrinsic text =
@@ -30,12 +38,28 @@ let intrinsic text =
   in
   match (name, immediates) with
   | "i8x16.shuffle", Some indices -> (2, fun args -> Printf.sprintf "wasm_i8x16_shuffle(%s, %s)" (String.concat ", " args) indices)
+  | name, Some lane when String.ends_with ~suffix:".extract_lane" name || String.ends_with ~suffix:".extract_lane_s" name
+                         || String.ends_with ~suffix:".extract_lane_u" name ->
+      let intrinsic =
+        match name with
+        | "f32x4.extract_lane" -> "wasm_f32x4_extract_lane"
+        | "i32x4.extract_lane" -> "wasm_i32x4_extract_lane"
+        | "i64x2.extract_lane" -> "wasm_i64x2_extract_lane"
+        | "i16x8.extract_lane_s" -> "wasm_i16x8_extract_lane"
+        | "i8x16.extract_lane_u" -> "wasm_u8x16_extract_lane"
+        | _ -> raise (Emission_error ("no intrinsic for " ^ text))
+      in
+      (1, fun args -> Printf.sprintf "%s(%s, %s)" intrinsic (List.hd args) lane)
+  | name, Some lane when String.ends_with ~suffix:".replace_lane" name ->
+      let shape = String.sub name 0 (String.index name '.') in
+      (2, fun args -> Printf.sprintf "wasm_%s_replace_lane(%s, %s, %s)" shape (List.nth args 0) lane (List.nth args 1))
   | _, Some _ -> raise (Emission_error ("unexpected immediates on " ^ text))
   | _ ->
       let call arity intrinsic = (arity, fun args -> Printf.sprintf "%s(%s)" intrinsic (String.concat ", " args)) in
       (match name with
       | "f32.reinterpret_i32" -> (1, fun args -> Printf.sprintf "__builtin_bit_cast(float, (uint32_t)%s)" (List.hd args))
-      | "i8x16.splat" -> call 1 "wasm_i8x16_splat"
+      (* Rake's byte racks are unsigned, so their splat takes a uint8_t. *)
+      | "i8x16.splat" -> call 1 "wasm_u8x16_splat"
       | "i32x4.splat" -> call 1 "wasm_i32x4_splat"
       | "f32x4.splat" -> call 1 "wasm_f32x4_splat"
       | "f32x4.add" -> call 2 "wasm_f32x4_add"
@@ -76,7 +100,9 @@ let intrinsic text =
       | "i64x2.shr_s" -> call 2 "wasm_i64x2_shr"
       | "v128.bitselect" -> call 3 "wasm_v128_bitselect"
       | "i8x16.bitmask" -> call 1 "wasm_i8x16_bitmask"
+      | "i16x8.bitmask" -> call 1 "wasm_i16x8_bitmask"
       | "i32x4.bitmask" -> call 1 "wasm_i32x4_bitmask"
+      | "i64x2.bitmask" -> call 1 "wasm_i64x2_bitmask"
       | "i16x8.splat" -> call 1 "wasm_i16x8_splat"
       | "i16x8.add" -> call 2 "wasm_i16x8_add"
       | "i16x8.sub" -> call 2 "wasm_i16x8_sub"
@@ -93,11 +119,67 @@ let intrinsic text =
       | "f32x4.convert_i32x4_s" -> call 1 "wasm_f32x4_convert_i32x4"
       | "f32x4.nearest" -> call 1 "wasm_f32x4_nearest"
       | "i32x4.trunc_sat_f32x4_s" -> call 1 "wasm_i32x4_trunc_sat_f32x4"
+      | "f32x4.ne" -> call 2 "wasm_f32x4_ne"
+      | "f32x4.relaxed_madd" -> call 3 "wasm_f32x4_relaxed_madd"
+      | "f32x4.relaxed_nmadd" -> call 3 "wasm_f32x4_relaxed_nmadd"
+      | "f32x4.relaxed_min" -> call 2 "wasm_f32x4_relaxed_min"
+      | "f32x4.relaxed_max" -> call 2 "wasm_f32x4_relaxed_max"
+      | "f32x4.abs" -> call 1 "wasm_f32x4_abs"
+      | "f32x4.floor" -> call 1 "wasm_f32x4_floor"
+      | "f32x4.ceil" -> call 1 "wasm_f32x4_ceil"
+      | "f32x4.trunc" -> call 1 "wasm_f32x4_trunc"
+      | "i64x2.splat" -> call 1 "wasm_i64x2_splat"
+      | "i8x16.add" -> call 2 "wasm_i8x16_add"
+      | "i8x16.sub" -> call 2 "wasm_i8x16_sub"
+      | "i64x2.add" -> call 2 "wasm_i64x2_add"
+      | "i64x2.sub" -> call 2 "wasm_i64x2_sub"
+      | "i16x8.mul" -> call 2 "wasm_i16x8_mul"
+      | "i32x4.mul" -> call 2 "wasm_i32x4_mul"
+      | "i64x2.mul" -> call 2 "wasm_i64x2_mul"
+      | "i8x16.min_u" -> call 2 "wasm_u8x16_min"
+      | "i8x16.max_u" -> call 2 "wasm_u8x16_max"
+      | "i8x16.neg" -> call 1 "wasm_i8x16_neg"
+      | "i16x8.neg" -> call 1 "wasm_i16x8_neg"
+      | "i32x4.neg" -> call 1 "wasm_i32x4_neg"
+      | "i64x2.neg" -> call 1 "wasm_i64x2_neg"
+      | "i8x16.abs" -> call 1 "wasm_i8x16_abs"
+      | "i16x8.abs" -> call 1 "wasm_i16x8_abs"
+      | "i32x4.abs" -> call 1 "wasm_i32x4_abs"
+      | "i64x2.abs" -> call 1 "wasm_i64x2_abs"
+      | "i16x8.eq" -> call 2 "wasm_i16x8_eq" | "i16x8.ne" -> call 2 "wasm_i16x8_ne"
+      | "i16x8.lt_s" -> call 2 "wasm_i16x8_lt" | "i16x8.le_s" -> call 2 "wasm_i16x8_le"
+      | "i16x8.gt_s" -> call 2 "wasm_i16x8_gt" | "i16x8.ge_s" -> call 2 "wasm_i16x8_ge"
+      | "i32x4.eq" -> call 2 "wasm_i32x4_eq" | "i32x4.ne" -> call 2 "wasm_i32x4_ne"
+      | "i32x4.lt_s" -> call 2 "wasm_i32x4_lt" | "i32x4.le_s" -> call 2 "wasm_i32x4_le"
+      | "i32x4.gt_s" -> call 2 "wasm_i32x4_gt" | "i32x4.ge_s" -> call 2 "wasm_i32x4_ge"
+      | "i64x2.eq" -> call 2 "wasm_i64x2_eq" | "i64x2.ne" -> call 2 "wasm_i64x2_ne"
+      | "i64x2.lt_s" -> call 2 "wasm_i64x2_lt" | "i64x2.le_s" -> call 2 "wasm_i64x2_le"
+      | "i64x2.gt_s" -> call 2 "wasm_i64x2_gt" | "i64x2.ge_s" -> call 2 "wasm_i64x2_ge"
+      | "i8x16.all_true" -> call 1 "wasm_i8x16_all_true"
+      | "i16x8.all_true" -> call 1 "wasm_i16x8_all_true"
+      | "i32x4.all_true" -> call 1 "wasm_i32x4_all_true"
+      | "i64x2.all_true" -> call 1 "wasm_i64x2_all_true"
+      | "v128.any_true" -> call 1 "wasm_v128_any_true"
+      | "select" -> (3, fun args -> Printf.sprintf "(%s ? %s : %s)" (List.nth args 2) (List.nth args 0) (List.nth args 1))
+      | "i32.or" -> (2, fun args -> Printf.sprintf "(%s | %s)" (List.nth args 0) (List.nth args 1))
+      | ("i32.eq" | "i32.ne" | "i32.lt_s" | "i32.le_s" | "i32.gt_s" | "i32.ge_s"
+        | "i64.eq" | "i64.ne" | "i64.lt_s" | "i64.le_s" | "i64.gt_s" | "i64.ge_s"
+        | "f32.eq" | "f32.ne" | "f32.lt" | "f32.le" | "f32.gt" | "f32.ge") as op ->
+          let cast = if String.starts_with ~prefix:"i64" op then "(int64_t)" else if String.starts_with ~prefix:"i32" op then "(int32_t)" else "" in
+          let operator =
+            match String.sub op 4 (String.length op - 4) with
+            | "eq" -> "==" | "ne" -> "!=" | "lt_s" | "lt" -> "<" | "le_s" | "le" -> "<=" | "gt_s" | "gt" -> ">" | _ -> ">="
+          in
+          (2, fun args -> Printf.sprintf "(%s%s %s %s%s)" cast (List.nth args 0) operator cast (List.nth args 1))
       | _ -> raise (Emission_error ("no intrinsic for " ^ text)))
 
 let result_type text =
-  if String.ends_with ~suffix:".bitmask" text then "uint32_t"
-  else if text = "f32.reinterpret_i32" then "float"
+  let name = match String.index_opt text ' ' with Some space -> String.sub text 0 space | None -> text in
+  if String.ends_with ~suffix:".bitmask" name || String.ends_with ~suffix:"_true" name then "uint32_t"
+  else if name = "f32.reinterpret_i32" || name = "f32x4.extract_lane" then "float"
+  else if name = "i64x2.extract_lane" then "uint64_t"
+  else if String.contains name 'x' && String.length name > 4 && (String.sub name 0 4 = "i32x" || String.sub name 0 4 = "i16x" || String.sub name 0 4 = "i8x1") && (String.ends_with ~suffix:"extract_lane" name || String.ends_with ~suffix:"extract_lane_s" name || String.ends_with ~suffix:"extract_lane_u" name) then "uint32_t"
+  else if String.length name > 4 && (String.sub name 0 4 = "i32." || String.sub name 0 4 = "i64." || String.sub name 0 4 = "f32.") then "uint32_t"
   else "v128_t"
 
 let emit_function (func : I.func) =
@@ -122,6 +204,10 @@ let emit_function (func : I.func) =
     (function
       | I.Local_get local -> stack := local_name local :: !stack
       | I.I32_const value -> stack := Int32.to_string value :: !stack
+      | I.I64_const value -> stack := Printf.sprintf "UINT64_C(0x%Lx)" value :: !stack
+      | I.Local_set (I.Scratch_local _ as local) ->
+          (* Every value already has its own const name; a scratch local just names it. *)
+          Hashtbl.replace scratch_names local (pop ())
       | I.Local_set local ->
           statements := Printf.sprintf "%s = %s;" (local_name local) (pop ()) :: !statements
       | I.Local_tee local ->
@@ -156,6 +242,8 @@ let emit ~source (functions : I.func list) =
      #include <wasm_simd128.h>\n\n\
      #ifndef RAKE_WASM_LINKAGE\n\
      #define RAKE_WASM_LINKAGE static inline __attribute__((always_inline))\n\
-     #endif\n\n%s"
+     #endif\n\n%s%s%s"
     (Filename.basename source)
+    (relaxed_prologue ())
     (String.concat "\n" (List.map emit_function functions))
+    (relaxed_epilogue ())

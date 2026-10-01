@@ -4,5 +4,5 @@
     value here so the compiled executable does not need a source checkout at
     runtime. *)
 
-let value = "0.3.0-alpha.1"
+let value = "0.4.0-beta"
 let display = "rake " ^ value

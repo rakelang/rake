@@ -1,0 +1,55 @@
+~~ exp, log, log2 and tanh: the rack forms against the scalar forms, and both
+~~ against the interpreter, over bit patterns that include NaN, infinities,
+~~ zeros, subnormals and both signs.
+
+run rack_math(x: []f32, e: mut []f32, l: mut []f32, l2: mut []f32, t: mut []f32, <n: i32>):
+  for <i: i32> from <0> up to <n> by <4>:
+    let v = x[<i>]
+    e[<i>] <- exp(v)
+    l[<i>] <- log(v)
+    l2[<i>] <- log2(v)
+    t[<i>] <- tanh(v)
+
+slow fnv(h: u32, value: f32) -> u32:
+  return wrap_mul(bit_xor(h, bitcast(u32, value)), 16777619)
+
+slow main() -> i32:
+  x: [1024]f32 := [0.0; 1024]
+  e: [1024]f32 := [0.0; 1024]
+  l: [1024]f32 := [0.0; 1024]
+  l2: [1024]f32 := [0.0; 1024]
+  t: [1024]f32 := [0.0; 1024]
+  seed: u32 := 12345
+  for i from 0 up to 1024:
+    seed <- wrap_add(wrap_mul(seed, 1664525), 1013904223)
+    if i < 512:
+      ~~ Moderate magnitudes: the polynomial ranges.
+      x[i] <- f32(i32(bit_and(seed, 65535)) - 32768) / 1024.0
+    else:
+      ~~ A NaN's payload is unspecified and a signaling NaN may be quieted, so the
+      ~~ patterns are quiet NaNs where they are NaNs.
+      bits: u32 := seed
+      if bit_and(bits, 2139095040) = 2139095040 and bit_and(bits, 8388607) != 0:
+        bits <- bit_or(bits, 4194304)
+      x[i] <- bitcast(f32, bits)
+  x[0] <- 0.0
+  x[1] <- -0.0
+  x[2] <- bitcast(f32, 2139095040)
+  x[3] <- bitcast(f32, 4286578688)
+  x[4] <- bitcast(f32, 2143289344)
+  x[5] <- bitcast(f32, 1)
+  x[6] <- 1.0
+  x[7] <- 8.0
+  rack_math(x, e, l, l2, t, <1024>)
+  h: u32 := 2166136261
+  for i from 0 up to 1024:
+    if bitcast(u32, e[i]) != bitcast(u32, exp(x[i])):
+      return 1000000 + i
+    if bitcast(u32, l[i]) != bitcast(u32, log(x[i])):
+      return 2000000 + i
+    if bitcast(u32, l2[i]) != bitcast(u32, log2(x[i])):
+      return 3000000 + i
+    if bitcast(u32, t[i]) != bitcast(u32, tanh(x[i])):
+      return 4000000 + i
+    h <- fnv(fnv(fnv(fnv(h, e[i]), l[i]), l2[i]), t[i])
+  return bitcast(i32, bit_and(h, 2147483647))

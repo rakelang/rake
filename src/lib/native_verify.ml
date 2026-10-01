@@ -179,6 +179,8 @@ let contains text needle =
 let is_alignment_padding decoded =
   match decoded.mnemonic with
   | "nop" | "nopl" | "nopw" -> true
+  (* 66 90, the two-byte nop, disassembles as xchg ax,ax. *)
+  | "xchg" -> String.trim decoded.operands = "ax,ax"
   | "cs" | "data16" -> contains decoded.operands "nop"
   | _ -> false
 

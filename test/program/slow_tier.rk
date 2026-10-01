@@ -1,0 +1,144 @@
+~~ The slow tier's scalar semantics, hashed: every result must agree between
+~~ the interpreter and WebAssembly.
+
+record Point {
+  i32: x, y;
+}
+
+record Shape {
+  [3]Point: corners;
+  u8: kind;
+  f32: weight;
+}
+
+const table: [5]i16 = [3, -1, 4, -1, 5]
+const limit: u64 = 18446744073709551615
+
+state calls: i32
+state history: [8]i64
+
+slow mix(h: u64, value: u64) -> u64:
+  return wrap_mul(bit_xor(h, value), 1099511628211)
+
+slow note(value: i64):
+  history[calls % 8] <- value
+  calls <- calls + 1
+
+slow area(shape: Shape) -> i32:
+  a: i32 := 0
+  for k from 0 up to 3:
+    let p = shape.corners[k]
+    let q = shape.corners[(k + 1) % 3]
+    a <- a + p.x * q.y - q.x * p.y
+  return abs(a)
+
+slow grow(shape: mut Shape, factor: i32):
+  for k from 0 up to 3:
+    shape.corners[k].x <- shape.corners[k].x * factor
+  shape.kind <- shape.kind + 1
+
+slow first_negative(values: []i16) -> i32:
+  for i from 0 up to count(values):
+    if values[i] < 0:
+      return i
+  return -1
+
+slow collatz(start: u32) -> i32:
+  n: u32 := start
+  steps: i32 := 0
+  while n != 1:
+    if n % 2 = 0:
+      n <- n / 2
+      continue
+    n <- 3 * n + 1
+    steps <- steps + 1
+    if steps > 1000:
+      break
+  return steps
+
+slow main() -> i32:
+  h: u64 := 14695981039346656037
+  ~~ Integers of every width: wrapping, shifts, rotations and bit counts.
+  a8: i8 := -100
+  h <- mix(h, u64(wrap(u8, wrap_add(a8, -100))))
+  b8: u8 := 200
+  h <- mix(h, u64(wrap_mul(b8, 3)))
+  h <- mix(h, u64(shift_bits_right(b8, 3)))
+  h <- mix(h, u64(wrap(u8, shift_bits_right_signed(a8, 2))))
+  c16: i16 := -30000
+  h <- mix(h, u64(wrap(u16, wrap_sub(c16, 10000))))
+  d16: u16 := 65535
+  h <- mix(h, u64(rotate_bits_left(d16, 5)))
+  e32: i32 := -123456789
+  h <- mix(h, u64(wrap(u32, e32 / 1000)))
+  h <- mix(h, u64(wrap(u32, e32 % 1000)))
+  h <- mix(h, u64(rotate_bits_right(bitcast(u32, e32), 7)))
+  h <- mix(h, u64(count_leading_zeros(bitcast(u32, 255))))
+  h <- mix(h, u64(count_trailing_zeros(bitcast(u32, 4096))))
+  h <- mix(h, u64(popcount(bitcast(u32, e32))))
+  f64v: i64 := -9000000000000000000
+  h <- mix(h, bitcast(u64, wrap_add(f64v, f64v)))
+  h <- mix(h, bitcast(u64, f64v / 7))
+  g64: u64 := limit
+  h <- mix(h, g64 / 3)
+  h <- mix(h, shift_bits_left(g64, 63))
+  h <- mix(h, rotate_bits_left(g64 - 1, 1))
+  h <- mix(h, u64(count_leading_zeros(shift_bits_right(g64, 9))))
+  ~~ Conversions: checked, wrapping and bit casts.
+  h <- mix(h, u64(i32(f32(1234.75))))
+  h <- mix(h, u64(wrap(u8, 513)))
+  h <- mix(h, u64(bitcast(u32, -2.5)))
+  h <- mix(h, bitcast(u64, i64(f32(-77))))
+  h <- mix(h, u64(bitcast(u32, f32(16777217))))
+  h <- mix(h, u64(bitcast(u32, f32(i64(9007199254740993)))))
+  h <- mix(h, u64(bitcast(u32, f32(u64(18446744073709551615)))))
+  ~~ Floats and the transcendental functions.
+  x: f32 := 0.1
+  for k from 0 up to 20:
+    x <- x * 1.5 + sqrt(x) - floor(x) / 3.0
+  h <- mix(h, u64(bitcast(u32, x)))
+  h <- mix(h, u64(bitcast(u32, exp(-2.5) + log(10.0) + log2(1000.0) + tanh(0.3))))
+  h <- mix(h, u64(bitcast(u32, min(-0.0, 0.0))))
+  h <- mix(h, u64(bitcast(u32, max(3.5, -1.0) + abs(-2.25) + ceil(1.2))))
+  ~~ Control flow.
+  h <- mix(h, u64(collatz(27)))
+  total: i32 := 0
+  for i from 0 up to 50 by 7:
+    if i = 21:
+      continue
+    else if i > 40:
+      break
+    else:
+      total <- total + i
+  h <- mix(h, u64(total))
+  flag := false
+  if not flag and (total > 10 or 1 / 0 = 0):
+    flag <- true
+  h <- mix(h, if flag then 1 else 2)
+  ~~ Records, nested arrays and borrowing.
+  shape: Shape := Shape { corners: [Point { x: 0, y: 0 }, Point { x: 4, y: 0 }, Point { x: 0, y: 3 }], kind: 1, weight: 0.5 }
+  h <- mix(h, u64(area(shape)))
+  copy := shape
+  grow(shape, 3)
+  h <- mix(h, u64(area(shape)))
+  h <- mix(h, u64(area(copy)))
+  h <- mix(h, u64(shape.kind))
+  ~~ Views, slices and constant tables.
+  values: [5]i16 := table
+  h <- mix(h, u64(wrap(u32, first_negative(values))))
+  h <- mix(h, u64(wrap(u32, first_negative(slice(values, 2, 3)))))
+  h <- mix(h, u64(wrap(u32, first_negative(slice(values, 4, 1)))))
+  ~~ Module state across calls.
+  for k from 0 up to 11:
+    note(i64(k) * 1000000007)
+  h <- mix(h, u64(calls))
+  for k from 0 up to 8:
+    h <- mix(h, bitcast(u64, history[k]))
+  ~~ != is ordered: a NaN is neither equal nor unequal to anything.
+  let quiet = 0.0 / 0.0
+  h <- mix(h, if quiet != quiet then 1 else 2)
+  h <- mix(h, if quiet != 1.0 or 1.0 != 2.0 then 3 else 4)
+  ~~ A minus before a digit is subtraction: n-1 is n - 1, and -2 a literal.
+  let n = 40
+  h <- mix(h, u64(n-1 - -2))
+  return bitcast(i32, wrap(u32, bit_xor(h, shift_bits_right(h, 32))))

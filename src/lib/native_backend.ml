@@ -34,7 +34,7 @@ let require_backend (config : Target.config) =
   match (config.target, config.profile, config.width) with
   | Target.Cpu, Target.X86_avx2, 8 -> Ok ()
   | Target.Cpu, Target.Aarch64_neon, 4 -> Ok ()
-  | Target.Cpu, Target.Wasm_simd128, 4 -> Ok ()
+  | Target.Cpu, (Target.Wasm_simd128 | Target.Wasm_simd128_relaxed), 4 -> Ok ()
   | _ ->
       Error
         {
@@ -47,6 +47,10 @@ let require_backend (config : Target.config) =
 
 let lower ~config program =
   let* () = require_backend config in
+  Native_lower.relaxed := config.Target.profile = Target.Wasm_simd128_relaxed;
+  Native_ir.floating_point_exceptions := not (Target.is_wasm config.Target.profile);
+  Wasm_simd128_c.relaxed := !Native_lower.relaxed;
+  Wasm_simd128_toolchain.relaxed := !Native_lower.relaxed;
   match Native_lower.lower_program program with
   | Ok native_ir -> (
       match Native_optimize.optimize ~profile:config.profile native_ir with
@@ -101,7 +105,7 @@ let allocate ~config native_ir =
   match config.Target.profile with
   | Target.X86_avx2 -> allocate_avx2 native_ir
   | Target.Aarch64_neon -> allocate_neon native_ir
-  | Target.Wasm_simd128 -> (
+  | Target.Wasm_simd128 | Target.Wasm_simd128_relaxed -> (
       match Wasm_simd128_isel.select native_ir with
       | Ok selected -> Ok (Wasm selected)
       | Error error ->
@@ -142,7 +146,7 @@ let emit_assembly ~source ~config program =
 
 let assemble ~source ~(config : Target.config) assembly =
   match config.profile with
-  | Target.Wasm_simd128 -> (
+  | Target.Wasm_simd128 | Target.Wasm_simd128_relaxed -> (
       match Wasm_simd128_toolchain.assemble assembly with
       | Ok object_bytes -> Ok object_bytes
       | Error error -> Error { stage = Assemble; message = Wasm_simd128_toolchain.format_error error })

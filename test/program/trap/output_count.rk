@@ -1,0 +1,19 @@
+~~ A run storing columns of a pack it doesn't traverse: the call traps
+~~ because the output column holds fewer elements than the count.
+stack In {
+  f32: x;
+}
+
+stack Out {
+  f32: y;
+}
+
+run copy(input: pack In, out: mut pack Out, <n: i64>):
+  for chunk in input using f32s up to <n>:
+    out.y <- chunk.x
+
+slow main() -> i32:
+  x: [8]f32 := [0.0; 8]
+  y: [5]f32 := [0.0; 5]
+  copy(In { x: x }, Out { y: y }, <8>)
+  return 0

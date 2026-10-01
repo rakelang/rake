@@ -1,0 +1,4 @@
+slow main() -> i32:
+  x: f32 := 1.0
+  x <- x / 0.0
+  return i32(x)

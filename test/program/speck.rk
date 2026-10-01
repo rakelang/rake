@@ -1,0 +1,45 @@
+~~ SPECK64/128 against its published test vector, and decryption inverting
+~~ encryption: u32 and u64 arithmetic, rotations, shifts and wrapping.
+
+slow expand_key(key: [4]u32, out: mut [27]u32):
+  words: [3]u32 := [key[2], key[1], key[0]]
+  round: u32 := key[3]
+  for index from 0 up to 27:
+    out[index] <- round
+    let mixed = bit_xor(wrap_add(round, rotate_bits_right(words[index % 3], 8)), u32(index))
+    round <- bit_xor(rotate_bits_left(round, 3), mixed)
+    words[index % 3] <- mixed
+
+slow encrypt(keys: [27]u32, plain: u64) -> u64:
+  x: u32 := wrap(u32, shift_bits_right(plain, 32))
+  y: u32 := wrap(u32, plain)
+  for i from 0 up to 27:
+    x <- bit_xor(wrap_add(rotate_bits_right(x, 8), y), keys[i])
+    y <- bit_xor(rotate_bits_left(y, 3), x)
+  return bit_or(shift_bits_left(u64(x), 32), u64(y))
+
+slow decrypt(keys: [27]u32, cipher: u64) -> u64:
+  x: u32 := wrap(u32, shift_bits_right(cipher, 32))
+  y: u32 := wrap(u32, cipher)
+  index: i32 := 26
+  while index >= 0:
+    y <- rotate_bits_right(bit_xor(y, x), 3)
+    x <- rotate_bits_left(wrap_sub(bit_xor(x, keys[index]), y), 8)
+    index <- index - 1
+  return bit_or(shift_bits_left(u64(x), 32), u64(y))
+
+slow main() -> i32:
+  keys: [27]u32 := [0; 27]
+  expand_key([454695192, 319951120, 185207048, 50462976], keys)
+  let cipher = encrypt(keys, 4283597746427216685)
+  if cipher != 10119488617543762571:
+    return 1
+  if decrypt(keys, cipher) != 4283597746427216685:
+    return 2
+  ~~ Round trips over many values.
+  value: u64 := 1
+  for i from 0 up to 200:
+    value <- wrap_add(wrap_mul(value, 6364136223846793005), 1442695040888963407)
+    if decrypt(keys, encrypt(keys, value)) != value:
+      return 3
+  return i32(wrap(u16, shift_bits_right(cipher, 48)))

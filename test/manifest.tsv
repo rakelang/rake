@@ -1,7 +1,5 @@
 path	category	targets	widths	stage	outcome	diagnostic
 test/frontend/byte_domain.rk	frontend	x86-avx2	8	frontend	pass	-
-test/frontend/docs_pack_over.rk	frontend	x86-avx2	8	frontend	pass	-
-test/frontend/docs_safe_root.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/predicated_select.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/masked_partial_ops.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/mixed_storage_widen.rk	frontend	x86-avx2	8	frontend	pass	-
@@ -12,7 +10,6 @@ test/frontend/supported_run_int64.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/sweep_overlap_priority.rk	frontend	x86-avx2	8	frontend	pass	-
 test/native/capability_fused.rk	native	x86-avx2	8	native-object	pass	-
 test/native/contracted_fma.rk	native	x86-avx2	8	native-object	pass	-
-test/native/docs_crunch.rk	native	x86-avx2	8	native-object	pass	-
 test/native/fused_contract.rk	native	x86-avx2	8	native-object	pass	-
 test/native/fused_fma.rk	native	x86-avx2	8	native-object	pass	-
 test/native/identity.rk	native	x86-avx2	8	native-object	pass	-
@@ -43,3 +40,31 @@ examples/future/field_access.rk	future	-	-	design	excluded	Uses unavailable sing
 examples/future/lane_insertion.rk	future	-	-	design	excluded	Uses unavailable lane insertion
 examples/future/reductions.rk	future	-	-	design	excluded	Uses unavailable reductions and scans
 examples/future/rearrangements.rk	future	-	-	design	excluded	Uses unavailable static lane rearrangements
+test/program/math.rk	program	wasm-simd128	4	program	differential	-
+test/program/pack_and_dense.rk	program	wasm-simd128	4	program	differential	-
+test/program/trap/add_overflow.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/convert_range.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/divide_zero.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/float_convert.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/gather_bounds.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/index_bounds.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/rack_load_bounds.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/slice_bounds.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/traversal_count.rk	trap	wasm-simd128	4	program	trap	-
+test/program/network.rk	program	wasm-simd128	4	program	differential	-
+test/program/speck.rk	program	wasm-simd128	4	program	differential	-
+test/abi/runs.rk	abi	wasm-simd128	4	program	boundary	-
+test/program/slow_tier.rk	program	wasm-simd128	4	program	differential	-
+test/program/vector_tier.rk	program	wasm-simd128	4	program	differential	-
+test/program/frames.rk	program	wasm-simd128	4	program	differential	-
+test/abi/interop.rk	abi	wasm-simd128	4	program	c-interop	-
+test/reject/slow_rack_parameter.rk	reject	wasm-simd128	4	frontend	reject	slow code can't take f32s values
+test/reject/slow_unmarked_uniform.rk	reject	wasm-simd128	4	frontend	reject	a scalar passed to vector code becomes a rack there: mark it <...> at the call
+test/reject/slow_marked_scalar.rk	reject	wasm-simd128	4	frontend	reject	marks a uniform scalar for vector code; every slow value is scalar
+test/reject/run_reads_state.rk	reject	wasm-simd128	4	frontend	reject	vector code can't read module state 'scale'; pass it as a parameter
+test/reject/run_calls_slow.rk	reject	wasm-simd128	4	frontend	reject	vector code can't call 'twice' as a uniform scalar function
+test/reject/run_branch_read.rk	reject	wasm-simd128	4	frontend	reject	an if's branches compute on values: read memory before the if
+test/reject/run_scatter.rk	reject	wasm-simd128	4	frontend	reject	wasm-simd128 has no scatter: a store takes a uniform index
+test/reject/run_while.rk	reject	wasm-simd128	4	frontend	reject	vector code loops are counted
+test/reject/run_nested_yield.rk	reject	wasm-simd128	4	frontend	reject	a nested traversal can't yield or store
+test/program/trap/output_count.rk	trap	wasm-simd128	4	program	trap	-

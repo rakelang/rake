@@ -1,0 +1,5 @@
+run choose(x: []f32, out: mut []f32, <late: i32>):
+  out[<0>] <- if <late> > <0> then x[<0>] else x[<4>]
+
+slow main() -> i32:
+  return 0

@@ -32,9 +32,9 @@ different compiler contract or an explicit FMA intrinsic. This contrast is the
 point of the positive case: Rake chooses the faster legal graph without making
 the source spell a target width or an optimization request.
 
-Native `run`/pack traversal is still unavailable, so the 400-element Rake
-source is checked only by the frontend. It must not be presented as a completed
-end-to-end traversal comparison yet.
+Runs and pack traversal compile only for `wasm-simd128`, and this harness
+compares x86 code, so the 400-element Rake source is only type-checked here.
+It isn't an end-to-end traversal comparison.
 
 The primary negative comparison is strict sine. C and Rust accept an ordinary
 runtime-count `sin` loop; under the recorded strict builds they emit scalar
@@ -62,7 +62,7 @@ nix develop -c bash demo/soa-proof/run_demo.sh
 
 The runner:
 
-1. checks the Rake pack source at its honest frontend stage;
+1. type-checks the Rake pack source;
 2. verifies the current AVX2 rack object;
 3. requires the Rake sine and pressure cases to reject;
 4. runs C and Rust correctness checks at counts 400 and 403; and
@@ -87,7 +87,7 @@ subjective “better assembly” score.
   alias one complete input field. Partial overlap is invalid.
 - ISA ceilings are recorded per object. An AVX2 row may not use AVX-512.
 - Stable Rust 1.96 does not expose stable AVX-512 intrinsics/target-feature
-  annotations, so the Rust intrinsic comparison honestly stops at AVX2.
+  annotations, so the Rust intrinsic comparison stops at AVX2.
 - Assembly evidence is not benchmark evidence. No performance claim is made.
 - C/Rust scalar, autovectorized, and hand-intrinsic rows are reported
   separately because they operate at different abstraction levels.

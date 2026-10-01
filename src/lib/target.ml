@@ -13,6 +13,7 @@ type profile =
   | X86_avx512
   | Aarch64_neon
   | Wasm_simd128
+  | Wasm_simd128_relaxed
 
 type selection = Native | Explicit of profile
 
@@ -84,10 +85,21 @@ let info = function
         register_bits = Some 128;
         f32_lanes = 4;
         mir_register_class = Some "v128";
-        description = "WebAssembly SIMD128, one v128 rack, emitted as C with inline WebAssembly";
+        description = "WebAssembly SIMD128, one v128 rack, emitted as C with wasm_simd128.h intrinsics";
+      }
+  | Wasm_simd128_relaxed ->
+      {
+        profile = Wasm_simd128_relaxed;
+        id = "wasm-simd128-relaxed";
+        register_bits = Some 128;
+        f32_lanes = 4;
+        mir_register_class = Some "v128";
+        description = "wasm-simd128 plus relaxed SIMD, opt-in: not validated on the online judge";
       }
 
-let profiles = [ Scalar; X86_sse2; X86_avx2; X86_avx512; Aarch64_neon; Wasm_simd128 ]
+let profiles = [ Scalar; X86_sse2; X86_avx2; X86_avx512; Aarch64_neon; Wasm_simd128; Wasm_simd128_relaxed ]
+
+let is_wasm = function Wasm_simd128 | Wasm_simd128_relaxed -> true | _ -> false
 let profile_name profile = (info profile).id
 let name Cpu = "cpu"
 
@@ -95,7 +107,7 @@ let profile_list () =
   profiles
   |> List.map (fun profile ->
          let p = info profile in
-         Printf.sprintf "%-16s %s" p.id p.description)
+         Printf.sprintf "%-21s %s" p.id p.description)
   |> String.concat "\n"
 
 let selection_of_string = function

@@ -1,143 +1,123 @@
-# Native backend contract
+# The backend
 
-Rake's production compiler owns the path from typed vector operations to
-scheduled target instructions. The language contract defines the permitted
-source evaluation graphs; verified optimized native IR records the graph
-selected for a target. The scalar interpreter independently executes explicit
-operations and graph-stable fixtures. Native MIR, physical allocation,
-assembly, and disassembly establish the generated-machine properties of an
-accepted program.
+This page describes how `rakec` turns source into machine code, and which
+stage checks each promise from [the goals](GOALS.md).
+
+## Crunches and rakes
 
 ```text
-Rake source
-  -> typed AST
-  -> target-independent Rake vector SSA
-  -> fused-graph substitution and target-costed rewriting
-  -> profile legalization
-  -> target machine IR
-  -> instruction selection and scheduling
-  -> register allocation
-  -> post-allocation contract verification
-  -> textual assembly
-  -> system assembler and linker
+source
+  -> layout check, lexer and layout tokens, parser       the AST
+  -> type checker                                        types and capabilities
+  -> native lowering                                     typed native IR
+  -> native IR verifier
+  -> optimiser                                           names substituted, fused multiply-adds formed, dead code removed
+  -> instruction selection for the profile
+       x86-avx2      machine IR -> no-spill YMM allocation -> GNU assembly -> as
+       aarch64-neon  machine IR -> no-spill vector allocation -> GNU assembly -> as
+       wasm-simd128  WebAssembly instructions -> C with one intrinsic each -> clang
+  -> object verifier                                     the disassembled object
 ```
 
-The first production profile is `x86-avx2`. Its first ABI variant is
-`x86_64-avx2-fma-sysv`; the shorter name is the compiler's profile identifier,
-while the longer name fixes the platform calling convention. An `f32s` is exactly
-one 256-bit YMM register with eight lanes, an `f64s` has four lanes, and
-comparison masks remain YMM values. The profile requires AVX2 and FMA3. It
-selects native vector operations or rejects the program: it must not split a
-rack, scalarize an unsupported operation, or silently insert a fallback call.
-An ordinary fused multiply-add graph may select one FMA3 instruction. Explicit
-`fma` requires that instruction's one-rounding arithmetic semantics.
+The type checker accepts a program only when every construct it uses has a
+type rule and is available, and `rakec --print-capabilities` lists that
+status for each feature. Native lowering turns a crunch or rake into typed
+SSA, inlining the crunches and rakes it calls. The IR verifier checks that
+every value is defined once and before its uses, that each operation has
+operands of the right types, that a fused region is contiguous and holds only
+pure rack or mask operations, that every block ends in exactly one
+terminator, and, on profiles with floating-point exceptions, that each
+exception-capable operation under a mask has replaced its inactive operands.
+`--emit-native-ir` prints the IR after optimisation. For the `advance` crunch
+of [fused bindings](spec/04_fused_bindings.md), on `x86-avx2`:
 
-The second production profile is `aarch64-neon`. Its
-`aarch64-neon-aapcs64` boundary maps an `f32s` to one four-lane 128-bit
-vector register, passes as many as eight rack or uniform f32 arguments in
-`v0` through `v7`, and returns a rack in `v0`. Its no-spill allocator uses the
-24 caller-clobbered full-vector registers `v0` through `v7` and `v16` through
-`v31`. Fused multiply-add graphs may select one `fmla`; explicit `fma` requires
-its one-rounding semantics. GNU cross-binutils encode and inspect
-the object, and a static AArch64 harness compares exact result bits under QEMU.
+```text
+func @advance(%0 : rack<f32> positions, %1 : rack<f32> velocities) -> rack<f32> {
+  %2 : rack<f32> = rack.splat f32:0x3f000000
+  %4 : rack<f32> = rack.fma %1, %2, %0 {fused=0}
+  return %4
+}
+```
 
-The third profile, `wasm-simd128`, maps a rack to one `v128` value: four f32
-lanes, sixteen `u8` lanes, eight `i16` lanes, four `i32` or `u32` lanes or two 64-bit lanes. It has no register allocator, because WebAssembly
-locals are unlimited, and it emits C with one SIMD intrinsic per selected
-instruction instead of assembly text, for judges and toolchains that accept
-only C. Verification compiles that C with Clang and checks the disassembled
-object against a locals-constants-and-SIMD allow-list. Its byte racks, shuffles
-and bitmasks, and its integer racks and dot products, are proposals described in
-[the racks and targets specification](spec/01_racks_targets_and_abi.md#byte-racks-shuffles-and-bitmasks).
+Each value is numbered and typed, constants show their bits, and `{fused=0}`
+or `{through=%3}` records the fused region or the mask an instruction belongs
+to. On `wasm-simd128` the same function keeps its `mul` and `add`, because
+that profile forms no fused multiply-adds.
 
-An angle-bracket `f32` parameter is uniform rather than a rack. On the SysV
-boundary it occupies the next SSE-class argument slot as an XMM value. Its
-source use emits `vbroadcastss` into one YMM rack. XMM and YMM names with the
-same number alias one physical register, so allocation tracks both forms as a
-single live register family.
+Instruction selection either finds a native form for every operation or
+rejects the function and reports the operation. Nothing falls back to scalar
+code or a helper call. The x86 and AArch64 allocators place every live rack
+in one register and reject a function that would need more registers than the
+profile has, or arguments on the stack. `--emit-asm` prints the assembly, or
+the C on wasm, and the system assembler or clang only encodes it.
 
-## Pipeline invariants
+## Whole programs
 
-- Rack identity survives every target-independent and machine-IR pass. Only an
-  explicit extract, insert, reduction, scan, gather, scatter, or profile-defined
-  layout operation may cross the rack/scalar or rack/memory boundary.
-- Scalars, broadcasts, masks, and pointers have distinct IR types. Hidden
-  broadcasts and lane extraction are verifier errors.
-- Definitions dominate uses in the deliberately linear SSA form. Loops are
-  structured regions, not arbitrary control-flow graphs.
-- A block has exactly one terminator. Functions return; loop bodies yield.
-- Fused provenance describes a contiguous, pure rack/mask SSA region. Calls,
-  memory operations, loops, scalar results, spills, and reloads are forbidden.
-  Fused names do not survive as evaluation boundaries. Graph optimization may
-  apply any rewrite allowed by the language arithmetic contract before
-  legalization. The current alpha substitutes transparent aliases, removes
-  dead intermediates, and contracts multiply-add graphs to target-native FMA;
-  general reassociation and algebraic restructuring remain unimplemented.
-  Legalization checks the resulting operation set and the allocator rejects it
-  when its live rack count exceeds the profile budget.
-- Through provenance names a mask. Legalization classifies each masked
-  operation as total, sanitizable, mask-native, or unsupported. Inactive lanes
-  must not trap, access memory, or have observable effects.
-- Target legalization is explicit and fallible. Every rejected obligation names
-  the source construct, profile, and unsupported operation or resource limit.
-- After allocation, a machine-code verifier proves rack register classes and
-  spill-freedom for every rack value, plus fused-region call-freedom, required
-  single-instruction operations, and absence of scalarized lane control flow
-  before an object is accepted.
+```text
+source
+  -> parser and type checker
+  -> tier checker                  runs and slow code in tier IR; each pure rack
+                                   expression in a run goes through the crunch
+                                   pipeline above
+  -> C emitter                     one C file with int main(void)
+  -> clang for wasm32 with SIMD128
+  -> object verifier               crunches, rakes and runs in the object
+```
 
-The initial IR is intentionally MIR-neutral. It represents arithmetic, FMA,
-comparison and selection, rack memory and lane operations, shuffles, reductions,
-scans, gather/scatter, calls, and structured loops without claiming that every
-operation is already legal for AVX2. The profile support matrix, not mere IR
-representability, decides acceptance.
+The tier checker enforces the rules of [the slow tier](spec/09_slow_tier.md):
+slow code holds no racks, a scalar becomes a rack only at a marked argument,
+and vector code calls nothing and reads no module state. The C emitter forms a
+run's addresses, writes its loops, tails and checks, and inlines its rack
+expressions, which native lowering and wasm selection compile as they compile
+a crunch. `rakec --interpret` runs `main` in Rake's executable semantics,
+evaluating rack expressions in the same reference semantics as crunches, and
+`test/program_test.sh` compares it with the compiled program.
 
-## Authorities and ownership boundaries
+## Profiles
 
-The type checker proves source-level typing and capability obligations. The
-typed native IR verifier proves rack identity, value types, dominance,
-  structured control flow, and fused or predicated provenance. The native IR
-  represents benign-operand substitution with an explicit `sanitize`
-  operation, and its verifier rejects masked exception-capable operands that
-  bypass that operation. The scalar interpreter evaluates explicit operations
-  with the language's rounding rules. It is not a bit-exact oracle for an
-  ordinary fused expression when optimization legally changes its rounding
-  graph.
-Runtime fixtures whose fused graphs admit alternate evaluation orders derive
-their expected results from the verified optimized graph or choose inputs for
-which every permitted graph agrees. Every extension to the executable surface
-must add cases to this differential gate. The AVX2 and NEON predication gates also
-check total sweep priority, exact result bits, inactive-lane floating-point
-flags, and the absence of calls, stack use, spills, and scalar lane branches.
+On `x86-avx2`, an `f32s` rack is one YMM register and a mask is a YMM value.
+Arguments follow the System V convention in eight SSE-class registers, and a
+uniform `f32` arrives in an XMM register, whose YMM name is the same physical
+register, so the allocator tracks the pair as one. A uniform's use is a
+`vbroadcastss`. The profile needs AVX2 and FMA3.
 
-The target backend proves a different set of facts. Legalization and
-instruction selection establish target support; allocation establishes the
-physical register assignment; assembly records Rake's instruction decisions;
-and disassembly verifies the encoded object. A frontend acceptance test cannot
-stand in for any of these machine checks.
+On `aarch64-neon`, an `f32s` rack is one 128-bit vector register. Arguments
+take `v0` to `v7` and the result returns in `v0`. The allocator uses the 24
+registers that a call may clobber, `v0` to `v7` and `v16` to `v31`. GNU
+cross-binutils assemble and disassemble the object, and
+`test/neon_backend_test.sh` compares exact result bits under QEMU.
 
-Rake initially owns vector SSA, rewriting, target legalization, instruction
-selection, pressure-aware scheduling, register allocation, textual assembly
-emission, and machine-contract verification. It intentionally delegates object
-formats, relocation encoding, platform linking, and operating-system startup to
-the system assembler and linker. Debug information and exception unwinding are
-outside the initial backend.
+On `wasm-simd128`, a rack is one `v128`. WebAssembly's locals are typed and
+unlimited, so there is no register allocation and no spill to rule out.
+Selection orders the value stack: a value used once is computed where it is
+used, and one used more than once is kept in a local. The output is C, one
+`wasm_simd128.h` intrinsic for each selected instruction, because some wasm32
+toolchains accept only C and reject `v128` operands to inline assembly.
 
-The compiler has no alternate code-generation path. A construct that has
-frontend semantics but lacks a complete native lowering remains
-frontend-checkable and production-unavailable. Native compilation reports the
-missing obligation at its source location.
+## Object verification
 
-## Pack and `run` boundary
+`--verify-native` disassembles the object and checks each function against
+its profile's list of instructions:
 
-Rake's intended first pack and `run` boundary is specified in
-[`spec/02_packs_and_run.md`](spec/02_packs_and_run.md). It uses a
-source-order structure-of-arrays descriptor, a caller-owned implicit output
-stream, and the Linux x86-64 System V classifier. Full chunks remain YMM rack
-operations. A tail must mask memory and sanitize inactive exceptional
-arithmetic.
+- On `x86-avx2` and `aarch64-neon`: no calls, no stack, every rack in one
+  whole register, no scalar arithmetic on rack lanes, cross-lane instructions
+  only in reductions and scans, and exactly the fused multiply-adds that the
+  compiler selected.
+- For a `wasm-simd128` crunch or rake: only locals, constants and register
+  instructions, with no calls, memory or branches.
+- For a `wasm-simd128` run: no calls and no C stack, only the vector
+  instructions its source selected or their documented equivalents, and no
+  more lane operations or loops than its source states.
 
-The current native backend still rejects `run`, pack traversal, stack, and pack
-definitions before object emission. The published boundary becomes a
-production capability only after typed-IR traversal, executable semantics,
-AVX2 loop and tail lowering, runtime comparison, and object verification all
-implement the normative contract.
+[Racks and targets](spec/01_racks_targets_and_abi.md#verification) and [the
+slow tier](spec/09_slow_tier.md#verification) give the details.
+
+## Ownership
+
+Rake owns the IR, its rewrites, instruction selection, register allocation,
+assembly and verification. The system assembler, clang and the linker own
+object formats, relocations, linking and start-up. Debug information and
+exception unwinding aren't produced. The x86 and AArch64 backends compile
+crunches and rakes only. Runs and whole programs compile on `wasm-simd128`,
+and the [planned x86-64 run boundary](spec/02_packs_and_run.md#planned-x86-64-boundary)
+is a design.

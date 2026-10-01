@@ -1,0 +1,9 @@
+run copy(source: []i32, target: mut []i32, <n: i32>):
+  for <i: i32> from <0> up to <n> by <4>:
+    target[<i>] <- source[<i> + <1>]
+
+slow main() -> i32:
+  a: [8]i32 := [1, 2, 3, 4, 5, 6, 7, 8]
+  b: [8]i32 := [0; 8]
+  copy(a, b, <8>)
+  return b[0]

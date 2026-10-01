@@ -1,0 +1,5 @@
+run spread(x: []f32, places: []i32, out: mut []f32):
+  out[places[<0>]] <- x[<0>]
+
+slow main() -> i32:
+  return 0

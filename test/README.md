@@ -1,50 +1,51 @@
-# Rake conformance tests
+# Rake's tests
 
-`manifest.tsv` is the source of truth for every `.rk` fixture under `test/`
-and `examples/`. Its classes are:
+`manifest.tsv` lists every `.rk` file under `test/` and `examples/`, once
+each, with the category its directory implies:
 
-- `frontend`: must parse and pass the typechecker, but is not claimed to be
-  production-executable yet;
-- `native`: must emit rack-preserving native SSA and a verified production
-  object for `x86-avx2`;
-- `reject`: must stop in the checker with the recorded diagnostic substring;
-- `future`: is a design sketch under `examples/future` and is not executable
-  language documentation.
+| Category | Directory | What passing means |
+| --- | --- | --- |
+| `frontend` | `test/frontend/` | parses and type-checks |
+| `native` | `test/native/` | emits native IR and a verified object for its targets |
+| `reject` | `test/reject/` | the checker rejects it with the recorded diagnostic substring |
+| `program` | `test/program/` | `main` gives the same result in `rakec --interpret` and as WebAssembly built from the emitted C |
+| `trap` | `test/program/trap/` | traps in both |
+| `abi` | `test/abi/` | a C harness calls its runs and checks the results |
+| `future` | `examples/future/` | a design sketch, not compiled |
 
-From the pinned development shell, build once and run the concise default
-suite:
+To add a case, put one `.rk` file in its directory and one row in
+`manifest.tsv`. A rejection records a stable substring of the diagnostic,
+without its location.
+
+The suites run from the development shell. `test/run_tests.sh` checks the
+release identity, the manifest's fixtures and the documentation's examples:
 
 ```sh
 nix develop --command bash -c 'dune build && bash test/run_tests.sh'
 ```
 
-Run focused target-profile and native C ABI execution explicitly:
+`test/full_tests.sh` adds the target profiles, the x86 backend's runtime
+differential, the whole-program differential and the C boundary of runs:
 
 ```sh
 nix develop --command bash -c 'dune build && bash test/full_tests.sh'
 ```
 
-Compare the Menhir and Tree-sitter parsers from a checkout where the `rake`
-and `tree-sitter-rake` repositories are siblings:
+`tools/release_gate.sh` runs every check, including the OCaml unit tests
+(`dune runtest`), the AArch64 differential under QEMU, the capability
+evidence in `capability_evidence.tsv`, the parser differential and the
+website.
+
+`tools/check_documentation_examples.sh` compiles every ` ```rake ` block in
+the README, the documentation and the website's pages. The pages own their
+examples, so a change to the language that breaks one fails here until the
+page is updated. Its header lists the checks a page can ask for.
+
+`test/parser_differential.sh` compares the compiler's parser with the
+Tree-sitter grammar in a sibling `tree-sitter-rake` checkout. It parses every
+manifest fixture and the malformed sources in `parser/manifest.tsv`, and the
+two parsers must accept and reject the same sources:
 
 ```sh
 nix shell nixpkgs#tree-sitter --command bash test/parser_differential.sh
 ```
-
-The parser runner derives supported and proposed examples from `manifest.tsv`,
-then checks the malformed constructs in `parser/manifest.tsv`. Extra source
-paths on the command line are treated as supported examples, which lets the
-website example extractor use the same check without copying source files.
-
-`tools/check_documentation_examples.sh` is the source-conformance gate for the
-named examples in the README, specifications, and website. It fails whenever
-an executable fixture lags the canonical documented syntax; a documentation
-change therefore creates a visible compiler-migration obligation instead of
-silently preserving an obsolete example. `tools/check_website.sh` adds static
-HTML reference, asset, release-identity, and stale-claim checks.
-
-To add a case, place one canonical `.rk` source in its class directory and add
-one row to `manifest.tsv`. For a rejection, record a stable checker diagnostic
-substring rather than an entire location-bearing message. Put a fixture in
-`native/` only when both native SSA emission and verified object emission pass;
-plain checker acceptance belongs in `frontend/`.

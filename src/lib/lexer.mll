@@ -58,6 +58,13 @@ let () = List.iter (fun (k, v) -> Hashtbl.add keywords k v) [
   (* Boolean *)
   ("true", TRUE); ("false", FALSE);
   ("not", NOT); ("and", AND); ("or", OR);
+
+  (* The slow scalar tier and general control flow *)
+  ("slow", SLOW); ("extern", EXTERN); ("record", RECORD); ("state", STATE);
+  ("embed", EMBED); ("const", CONST); ("if", IF); ("then", THEN);
+  ("while", WHILE); ("break", BREAK); ("continue", CONTINUE);
+  ("from", FROM); ("by", BY); ("repeat", REPEAT); ("unchecked", UNCHECKED);
+  ("ptr", PTR); ("mut", MUT);
 ]
 
 (** Update lexer position on newline *)
@@ -71,6 +78,12 @@ let newline lexbuf =
 
 (** Get current position *)
 let get_pos lexbuf = lexbuf.Lexing.lex_curr_p
+
+(* Decimal literals above 2^63 - 1 are u64 bit patterns. *)
+let integer_literal text =
+  match Int64.of_string_opt text with
+  | Some value -> value
+  | None -> Int64.of_string ("0u" ^ text)
 }
 
 (* Character classes *)
@@ -84,10 +97,12 @@ let whitespace = [' ' '\t']+
 let newline = '\r'? '\n'
 
 (* Number literals *)
-let int_lit = '-'? digit+
+(* Literals are unsigned: the parser folds a minus before one, so n-1 is a
+   subtraction. A scalar marker such as <-1.0> keeps its sign. *)
+let int_lit = digit+
 let hex_lit = "0x" hex+
-let float_lit = '-'? digit+ '.' digit* (['e' 'E'] ['+' '-']? digit+)?
-              | '-'? digit+ ['e' 'E'] ['+' '-']? digit+
+let float_lit = digit+ '.' digit* (['e' 'E'] ['+' '-']? digit+)?
+              | digit+ ['e' 'E'] ['+' '-']? digit+
 
 rule token = parse
   (* Whitespace and newlines *)
@@ -100,8 +115,8 @@ rule token = parse
 
   (* Numeric scalar markers are single lexical units. This keeps <-1.0>
      distinct from the location-assignment operator <-. *)
-  | '<' (float_lit as f) '>' { SCALAR_FLOAT_LIT (float_of_string f) }
-  | '<' (int_lit as i) '>' { SCALAR_INT_LIT (Int64.of_string i) }
+  | '<' ('-'? float_lit as f) '>' { SCALAR_FLOAT_LIT (float_of_string f) }
+  | '<' ('-'? int_lit as i) '>' { SCALAR_INT_LIT (Int64.of_string i) }
 
   (* Multi-character operators *)
   | "<|" { FUSED_LEFT }
@@ -112,6 +127,15 @@ rule token = parse
   | ">=" { GE }
   | "<=" { LE }
   | "!=" { NE }
+
+  (* wrap and bitcast are conversions only before a parenthesis, so a
+     parameter may still be called wrap. The parenthesis is put back. *)
+  | ("wrap" | "bitcast" as conversion) [' ' '\t']* '(' {
+      lexbuf.Lexing.lex_curr_pos <- lexbuf.Lexing.lex_curr_pos - 1;
+      lexbuf.Lexing.lex_curr_p <- { lexbuf.Lexing.lex_curr_p with
+        Lexing.pos_cnum = lexbuf.Lexing.lex_curr_p.Lexing.pos_cnum - 1 };
+      if conversion = "wrap" then WRAP else BITCAST
+    }
 
   (* Tine reference: #name (grid-line evokes SIMD lanes) *)
   | '#' (ident as id) { TINE_REF id }
@@ -145,7 +169,7 @@ rule token = parse
   (* Number literals *)
   | float_lit as f { FLOAT_LIT (float_of_string f) }
   | hex_lit as h { INT_LIT (Int64.of_string h) }
-  | int_lit as i { INT_LIT (Int64.of_string i) }
+  | int_lit as i { INT_LIT (integer_literal i) }
 
   (* Identifiers and keywords *)
   | type_ident as id { TYPE_IDENT id }
@@ -153,6 +177,9 @@ rule token = parse
       try Hashtbl.find keywords id
       with Not_found -> IDENT id
     }
+
+  (* String literals name embedded files and C strings; escapes are kept as written. *)
+  | '"' { STRING_LIT (string_literal (Buffer.create 32) lexbuf) }
 
   (* End of file *)
   | eof { EOF }
@@ -172,6 +199,16 @@ and block_comment depth = parse
   | newline { newline lexbuf; block_comment depth lexbuf }
   | eof { raise (LexError ("Unterminated comment", get_pos lexbuf)) }
   | _ { block_comment depth lexbuf }
+
+and string_literal buffer = parse
+  | '"' { Buffer.contents buffer }
+  | '\\' (_ as c) {
+      Buffer.add_char buffer '\\';
+      Buffer.add_char buffer c;
+      string_literal buffer lexbuf
+    }
+  | newline | eof { raise (LexError ("Unterminated string literal", get_pos lexbuf)) }
+  | _ as c { Buffer.add_char buffer c; string_literal buffer lexbuf }
 
 (* Line comments: ~~ rake marks in sand *)
 and line_comment = parse
@@ -219,6 +256,13 @@ let show_token = function
   | TYPE_IDENT s -> Printf.sprintf "TYPE_IDENT(%s)" s
   | SCALAR_IDENT s -> Printf.sprintf "SCALAR_IDENT(%s)" s
   | EOF -> "EOF"
+  | NEWLINE -> "NEWLINE" | INDENT -> "INDENT" | DEDENT -> "DEDENT"
+  | STRING_LIT s -> Printf.sprintf "STRING_LIT(%S)" s
+  | SLOW -> "SLOW" | EXTERN -> "EXTERN" | RECORD -> "RECORD" | STATE -> "STATE"
+  | EMBED -> "EMBED" | CONST -> "CONST" | IF -> "IF" | THEN -> "THEN"
+  | WHILE -> "WHILE" | BREAK -> "BREAK" | CONTINUE -> "CONTINUE"
+  | FROM -> "FROM" | BY -> "BY" | REPEAT -> "REPEAT" | UNCHECKED -> "UNCHECKED"
+  | PTR -> "PTR" | MUT -> "MUT" | WRAP -> "WRAP" | BITCAST -> "BITCAST"
 
 let emit lexbuf =
   let buf = Buffer.create 256 in

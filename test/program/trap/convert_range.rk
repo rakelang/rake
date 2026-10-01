@@ -1,0 +1,5 @@
+slow narrow(x: i32) -> u8:
+  return u8(x)
+
+slow main() -> i32:
+  return i32(narrow(300))

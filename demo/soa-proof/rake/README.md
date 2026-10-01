@@ -9,9 +9,8 @@ the source does not name SSE, AVX2, or AVX-512 vector types.
 
 - `particles_400_run.rk` is the canonical `advance_x` SoA source. It declares
   two columnar fields, accepts a runtime count and scalar `dt`, and traverses
-  the pack in target-native chunks. Native `run`/pack
-  traversal, loads, stores, loop control, and masked tails remain unavailable,
-  so it is not yet executable through the native backend.
+  the pack in target-native chunks. Runs compile for `wasm-simd128` only, so
+  on x86 this harness only type-checks it.
 - `advance_rack.rk` is the same arithmetic body as a straight-line `crunch`.
   The current AVX2 backend emits an object for it and verifies that its rack
   operations stay in YMM registers without calls, spills, stack use, or scalar
@@ -30,7 +29,7 @@ the source does not name SSE, AVX2, or AVX-512 vector types.
   region because it would need 17 simultaneously live YMM registers while the
   profile provides 16. There is no spill fallback.
 
-## Honest verification
+## Verification
 
 From the repository root inside `nix develop`:
 

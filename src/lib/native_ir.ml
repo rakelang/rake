@@ -31,6 +31,7 @@ type binary = Add | Sub | Mul | Div | Min | Max | And | Or | Xor
 type shift = Shift_left | Shift_right | Shift_right_signed
 
 type unary = Neg | Sqrt
+  | Abs | Floor | Ceil | Trunc | Nearest  (** lane-wise; Abs and Neg also take integer racks on wasm-simd128 *)
 
 type comparison = Eq | Ne | Lt | Le | Gt | Ge
 
@@ -74,6 +75,12 @@ type op =
       (** An i32 rack to f32, or an f32 rack to i32 rounded to nearest, ties to even, and saturated. *)
   | Shift of { operand : value; count : value; shift : shift }
       (** Each lane of an integer rack shifted by the i32 scalar [count], taken modulo the lane's bits. *)
+  | Reinterpret of { operand : value; element : element }
+      (** The same 128 bits read as a rack of another element; no instruction. *)
+  | Relaxed of { name : string; operands : value list }
+      (** A relaxed-SIMD f32 operation (relaxed_madd, relaxed_nmadd, relaxed_min,
+          relaxed_max), whose results the instruction set leaves partly to the
+          implementation; only the opt-in relaxed profile selects it. *)
   | Extract of { rack : value; lane : value }
   | Insert of { rack : value; inserted : value; lane : value }
   | Gather of { base : value; indices : value; mask : value option }
@@ -170,7 +177,7 @@ let is_float_rack = function Rack F32 | Rack F64 -> true | _ -> false
 let operands = function
   | Const _ | Mask_const _ | Rack_const _ | Rack_splat _ -> []
   | Broadcast value | Unary (_, value) | Reduce (_, value) | Scan (_, value) | Mask_not value
-  | Widen { operand = value; _ } | Convert { operand = value; _ } -> [ value ]
+  | Widen { operand = value; _ } | Convert { operand = value; _ } | Reinterpret { operand = value; _ } -> [ value ]
   | Shift { operand; count; _ } -> [ operand; count ]
   | Dot (left, right) | Narrow (left, right)
   | Binary (_, left, right)
@@ -187,6 +194,7 @@ let operands = function
   | Gather { base; indices; mask } -> base :: indices :: Option.to_list mask
   | Scatter { base; indices; stored; mask } -> base :: indices :: stored :: Option.to_list mask
   | Call { arguments; _ } -> arguments
+  | Relaxed { operands; _ } -> operands
   | Loop { start; stop; _ } -> [ start; stop ]
 
 let require_type verifier context environment value expected =
@@ -254,6 +262,8 @@ let instruction_name = function
   | Widen _ -> "rack.widen"
   | Convert _ -> "rack.convert"
   | Shift _ -> "rack.shift"
+  | Reinterpret _ -> "rack.reinterpret"
+  | Relaxed _ -> "rack.relaxed"
   | Extract _ -> "rack.extract"
   | Insert _ -> "rack.insert"
   | Gather _ -> "rack.gather"
@@ -266,7 +276,7 @@ let instruction_name = function
 let effectful = function
   | Load _ | Store _ | Gather _ | Scatter _ | Call _ | Loop _ -> true
   | Const _ | Mask_const _ | Rack_const _ | Rack_splat _ | Broadcast _ | Unary _ | Binary _ | Fma _ | Compare _ | Select _ | Sanitize _ | Shuffle _
-  | Reduce _ | Scan _ | Dot _ | Narrow _ | Widen _ | Convert _ | Shift _ | Extract _ | Insert _ | Mask_binary _ | Mask_not _ -> false
+  | Reduce _ | Scan _ | Dot _ | Narrow _ | Widen _ | Convert _ | Shift _ | Reinterpret _ | Relaxed _ | Extract _ | Insert _ | Mask_binary _ | Mask_not _ -> false
 
 let check_provenance verifier context environment (instruction : instruction) =
   Option.iter (fun tine -> require_type verifier context environment tine Mask) instruction.provenance.through;
@@ -282,11 +292,16 @@ let check_provenance verifier context environment (instruction : instruction) =
             ("fused regions must retain rack identity; found " ^ string_of_typ typ ^ " result")
       | None -> complain verifier context "a fused instruction must define a rack or mask result")
 
+(* A constant has no place in the data flow: lowering emits it where it is
+   first needed, and it neither ends nor interrupts a fused region. *)
+let is_constant = function Const _ | Mask_const _ | Rack_const _ | Rack_splat _ -> true | _ -> false
+
 let check_fused_contiguity verifier context (instructions : instruction list) =
   let _, closed =
     List.fold_left
       (fun (active, closed) instruction ->
         match instruction.provenance.fused with
+        | None when is_constant instruction.op -> (active, closed)
         | None -> (None, Option.fold ~none:closed ~some:(fun id -> IntSet.add id closed) active)
         | Some id when Some id = active -> (active, closed)
         | Some id ->
@@ -297,6 +312,11 @@ let check_fused_contiguity verifier context (instructions : instruction list) =
       (None, IntSet.empty) instructions
   in
   ignore closed
+
+(** Whether the target keeps floating-point exception state. WebAssembly has
+    none: its floating-point instructions never trap or set flags, so an
+    inactive lane can't raise anything and needs no sanitising. *)
+let floating_point_exceptions = ref true
 
 let rec verify_instruction verifier context environment (instruction : instruction) =
   List.iter
@@ -324,14 +344,27 @@ let rec verify_instruction verifier context environment (instruction : instructi
       in
       if expected = None then complain verifier context "broadcast requires a numeric scalar";
       Option.iter (fun typ -> check_result verifier context instruction (Some typ)) expected
-  | Unary (Neg, value) ->
-      (match lookup value with
-      | Some (Rack (F32 | F64) as typ) -> check_result verifier context instruction (Some typ)
-      | _ -> complain verifier context "neg requires a floating-point rack")
   | Unary (Sqrt, value) ->
       (match lookup value with
       | Some (Rack (F32 | F64) as typ) -> check_result verifier context instruction (Some typ)
       | _ -> complain verifier context "sqrt requires a floating-point rack")
+  | Unary ((Abs | Neg), value) ->
+      (match lookup value with
+      | Some (Rack _ as typ) -> check_result verifier context instruction (Some typ)
+      | _ -> complain verifier context "abs and neg require a rack")
+  | Unary ((Floor | Ceil | Trunc | Nearest), value) ->
+      (match lookup value with
+      | Some (Rack (F32 | F64) as typ) -> check_result verifier context instruction (Some typ)
+      | _ -> complain verifier context "rounding requires a floating-point rack")
+  | Reinterpret { operand; element } ->
+      (match lookup operand with
+      | Some (Rack _ | Mask) -> check_result verifier context instruction (Some (Rack element))
+      | _ -> complain verifier context "reinterpret requires a rack")
+  | Relaxed { name; operands } ->
+      List.iter (fun operand -> require_type verifier context environment operand (Rack F32)) operands;
+      let arity = if name = "relaxed_min" || name = "relaxed_max" then 2 else 3 in
+      if List.length operands <> arity then complain verifier context (name ^ " has the wrong operand count");
+      check_result verifier context instruction (Some (Rack F32))
   | Binary ((And | Or | Xor | Andnot), left, right) ->
       let types = List.filter_map lookup [ left; right ] in
       require_same verifier context "bitwise" types;
@@ -383,7 +416,10 @@ let rec verify_instruction verifier context environment (instruction : instructi
       require_same verifier context "select" arm_types;
       (match arm_types with
       | (Rack _ as typ) :: _ ->
-          require_type verifier context environment condition Mask;
+          (* A mask chooses each lane; a scalar condition chooses the whole rack. *)
+          (match lookup condition with
+           | Some (Scalar I1) -> ()
+           | _ -> require_type verifier context environment condition Mask);
           check_result verifier context instruction (Some typ)
       | (Scalar _ as typ) :: _ ->
           require_type verifier context environment condition (Scalar I1);
@@ -533,10 +569,23 @@ and verify_block verifier context ~expected_result ~yielding environment block =
              "masked exception-capable operand %%%d is not produced by sanitize for mask %%%d"
              operand mask)
   in
+  (* Integer lanes raise no exceptions; only floating-point operands under
+     predication must come from sanitize, on a target with floating-point
+     exception state. *)
+  let types =
+    List.fold_left
+      (fun types (instruction : instruction) ->
+        match instruction.result with Some (id, typ) -> IntMap.add id typ types | None -> types)
+      environment block.instructions
+  in
+  let float_operands values =
+    List.exists (fun v -> match IntMap.find_opt v types with Some (Rack (F32 | F64)) -> true | _ -> false) values
+  in
   List.iter
     (fun (instruction : instruction) ->
       match instruction.provenance.through with
       | None -> ()
+      | Some _ when (match instruction.op with Load _ | Store _ | Gather _ | Scatter _ -> false | op -> not (!floating_point_exceptions && float_operands (operands op))) -> ()
       | Some mask ->
           (match instruction.op with
           | Unary (Sqrt, operand) -> require_sanitized mask 0x3f800000l operand
@@ -638,7 +687,9 @@ let string_of_shift = function
   | Shift_right -> "shr"
   | Shift_right_signed -> "shr_s"
 
-let string_of_unary = function Neg -> "neg" | Sqrt -> "sqrt"
+let string_of_unary = function
+  | Neg -> "neg" | Sqrt -> "sqrt" | Abs -> "abs" | Floor -> "floor" | Ceil -> "ceil"
+  | Trunc -> "trunc" | Nearest -> "nearest"
 
 let string_of_comparison = function Eq -> "eq" | Ne -> "ne" | Lt -> "lt" | Le -> "le" | Gt -> "gt" | Ge -> "ge"
 
@@ -684,6 +735,8 @@ let rec string_of_instruction indent (instruction : instruction) =
     | Widen { operand; high } -> "rack.widen." ^ (if high then "high " else "low ") ^ value operand
     | Convert { operand; element } -> "rack.convert." ^ string_of_element element ^ " " ^ value operand
     | Shift { operand; count; shift } -> "rack." ^ string_of_shift shift ^ " " ^ values [ operand; count ]
+    | Reinterpret { operand; element } -> "rack.reinterpret." ^ string_of_element element ^ " " ^ value operand
+    | Relaxed { name; operands } -> "rack." ^ name ^ " " ^ values operands
     | Compare (comparison, left, right) -> "compare." ^ string_of_comparison comparison ^ " " ^ values [ left; right ]
     | Select { condition; if_true; if_false } -> "select " ^ values [ condition; if_true; if_false ]
     | Sanitize { mask; active; benign } ->

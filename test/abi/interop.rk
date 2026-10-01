@@ -1,0 +1,56 @@
+~~ Slow code calling C: extern functions with pointers and a string literal,
+~~ a record whose layout C owns, embedded bytes, unchecked access through a
+~~ pointer and module state across calls. main returns 0, or the failing check.
+
+record Point from "interop.h" {
+  i32: x, y;
+}
+
+extern slow interop_sum(p: ptr i32, n: i32) -> i32 from "interop.h"
+extern slow interop_length(text: ptr u8) -> i32 from "interop.h"
+extern slow interop_point(p: ptr Point, x: i32, y: i32) from "interop.h"
+extern slow interop_bytes(p: ptr u8, n: i32) -> i32 from "interop.h"
+extern slow interop_buffer() -> ptr i32 from "interop.h"
+
+embed blob from "interop.bin"
+
+state calls: i32 := 0
+
+slow count_call() -> i32:
+  calls <- calls + 1
+  return calls
+
+slow main() -> i32:
+  values: [6]i32 := [4, 8, 15, 16, 23, 42]
+  if interop_sum(addr(values[0]), 6) != 108:
+    return 1
+  if interop_length("rake") != 4:
+    return 2
+  p: Point := Point { x: 0, y: 0 }
+  interop_point(addr(p), 3, -4)
+  if p.x != 3 or p.y != -4:
+    return 3
+  if count(blob) != 16 or blob[15] != 15:
+    return 4
+  weighted: i32 := 0
+  for i from 0 up to count(blob):
+    weighted <- weighted + i32(blob[i]) * (i + 1)
+  if interop_bytes(addr(blob[0]), count(blob)) != weighted:
+    return 5
+  let buffer = interop_buffer()
+  if buffer[unchecked 3] != 8:
+    return 6
+  buffer[unchecked 7] <- 100
+  let view = unchecked_view(buffer, 8)
+  total: i32 := 0
+  for i from 0 up to count(view):
+    total <- total + view[i]
+  if total != 156:
+    return 7
+  if values[unchecked 5] != 42:
+    return 8
+  let first = count_call()
+  let second = count_call()
+  if first != 1 or second != 2 or calls != 2:
+    return 9
+  return 0

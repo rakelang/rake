@@ -27,3 +27,10 @@ crunch complex_arith(a: f32s, b: f32s, c: f32s) -> f32s:
 crunch multiply_add(a: f32s, b: f32s, c: f32s) -> f32s:
   | result: f32s <| a * b + c
   return result
+
+~~ An unrolled repeat whose copies never read the index.
+crunch cube(a: f32s) -> f32s:
+  power := a
+  repeat <i: i32> from <0> up to <2>:
+    power <- power * a
+  return power

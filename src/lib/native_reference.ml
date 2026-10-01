@@ -15,9 +15,11 @@ type value =
   | I16_rack of int array  (** lanes -32768 to 32767; two per f32 lane *)
   | I32_rack of int array  (** lanes -2^31 to 2^31 - 1; one per f32 lane *)
   | I64_rack of int64 array  (** 64-bit two's complement lanes; one per two f32 lanes *)
+  | Int_scalar of Types.scalar * int64  (** a uniform integer or bool, normalised to its type *)
 
 type value_kind =
   | Scalar | Rack | Mask_kind | U8_rack_kind | U32_scalar_kind | I16_rack_kind | I32_rack_kind | I64_rack_kind
+  | Int_scalar_kind
 
 type error_kind =
   | Invalid_lane_count of int
@@ -52,6 +54,7 @@ let value_kind = function
   | I16_rack _ -> I16_rack_kind
   | I32_rack _ -> I32_rack_kind
   | I64_rack _ -> I64_rack_kind
+  | Int_scalar _ -> Int_scalar_kind
 
 let string_of_value_kind = function
   | Scalar -> "f32 scalar"
@@ -62,6 +65,7 @@ let string_of_value_kind = function
   | I16_rack_kind -> "i16 rack"
   | I32_rack_kind -> "i32 rack"
   | I64_rack_kind -> "i64 rack"
+  | Int_scalar_kind -> "uniform integer"
 
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let scalar x = F32_scalar (f32 x)
@@ -109,15 +113,16 @@ let validate_width loc lanes = function
       if actual = lanes then Ok value
       else error loc (Lane_count_mismatch { expected = lanes; actual })
   | Mask xs as value ->
-      (* A mask has one lane per lane of the racks compared to make it: f32 or u8. *)
+      (* A mask has one lane per lane of the racks compared to make it. *)
       let actual = Array.length xs in
-      if actual = lanes || actual = 4 * lanes then Ok value
+      if actual = lanes || actual = 4 * lanes || actual = 2 * lanes || 2 * actual = lanes then Ok value
       else error loc (Lane_count_mismatch { expected = lanes; actual })
   | U8_rack xs as value ->
       let actual = Array.length xs in
       if actual = 4 * lanes then Ok value
       else error loc (Lane_count_mismatch { expected = 4 * lanes; actual })
   | U32_scalar _ as value -> Ok value
+  | Int_scalar _ as value -> Ok value
   | I16_rack xs as value ->
       let actual = Array.length xs in
       if actual = 2 * lanes then Ok value
@@ -161,6 +166,7 @@ let normalize_value = function
   | I16_rack xs -> I16_rack (Array.map wrap16 xs)
   | I32_rack xs -> I32_rack (Array.map wrap32 xs)
   | I64_rack xs -> I64_rack (Array.copy xs)
+  | Int_scalar (s, v) -> Int_scalar (s, v)
 
 let lookup loc lanes env name =
   match List.assoc_opt name env with
@@ -174,7 +180,7 @@ let as_rack loc lanes operation = function
   | F32_rack xs ->
       let* value = validate_width loc lanes (F32_rack xs) in
       (match value with F32_rack ys -> Ok ys | _ -> assert false)
-  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _) as value ->
+  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _ | Int_scalar _) as value ->
       error loc
         (Operand_kind_mismatch {
            operation;
@@ -188,7 +194,7 @@ let unary_f32 loc lanes operation f value =
   | F32_rack xs ->
       let* xs = as_rack loc lanes operation (F32_rack xs) in
       Ok (F32_rack (Array.map (fun x -> f32 (f x)) xs))
-  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _) as value ->
+  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _ | Int_scalar _) as value ->
       error loc
         (Operand_kind_mismatch {
            operation;
@@ -388,17 +394,277 @@ let shuffle_racks loc racks indices =
       error loc
         (Operand_kind_mismatch { operation = "shuffle"; left = value_kind first; right = None })
 
+(* ─── Integer racks of every width, bit reinterpretation and literals ── *)
+
+(** The callable crunches and rakes, for inlined calls. *)
+let definitions : def list ref = ref []
+
+let eval_crunch_ref : (lanes:int -> def -> value list -> (value, error) result) ref =
+  ref (fun ~lanes:_ (d : def) _ -> error d.loc (Unsupported_definition "inline call"))
+
+let eval_rake_ref : (lanes:int -> def -> value list -> (value, error) result) ref =
+  ref (fun ~lanes:_ (d : def) _ -> error d.loc (Unsupported_definition "inline call"))
+
+let int_lanes = function
+  | U8_rack xs -> Some (Types.SUint8, Array.map Int64.of_int xs)
+  | I16_rack xs -> Some (Types.SInt16, Array.map Int64.of_int xs)
+  | I32_rack xs -> Some (Types.SInt, Array.map Int64.of_int xs)
+  | I64_rack xs -> Some (Types.SInt64, Array.copy xs)
+  | _ -> None
+
+let int_rack element xs =
+  match element with
+  | Types.SUint8 | SInt8 -> U8_rack (Array.map (fun x -> Int64.to_int x land 0xff) xs)
+  | SInt16 | SUint16 -> I16_rack (Array.map (fun x -> wrap16 (Int64.to_int (Int64.logand x 0xffffL))) xs)
+  | SInt | SUint -> I32_rack (Array.map (fun x -> wrap32 (Int64.to_int (Int64.logand x 0xffffffffL))) xs)
+  | _ -> I64_rack xs
+
+let element_lanes = function
+  | Types.SUint8 | SInt8 -> 16 | SInt16 | SUint16 -> 8 | SInt64 | SUint64 | SDouble -> 2 | _ -> 4
+
+let splat_int element value = int_rack element (Array.make (element_lanes element) value)
+
+(** A normalised uniform integer of type [s]. *)
+let int_scalar s value =
+  let open Int64 in
+  let bits = match s with Types.SInt8 | SUint8 -> 8 | SInt16 | SUint16 -> 16 | SInt | SUint -> 32 | SBool -> 1 | _ -> 64 in
+  if bits = 64 then Int_scalar (s, value)
+  else
+    let m = sub (shift_left 1L bits) 1L in
+    let low = logand value m in
+    let signed = match s with Types.SInt8 | SInt16 | SInt -> true | _ -> false in
+    Int_scalar (s, if signed && logand low (shift_left 1L (bits - 1)) <> 0L then sub low (shift_left 1L bits) else low)
+
+(** The 16 bytes of a rack or mask, little-endian. *)
+let rack_bytes = function
+  | F32_rack xs ->
+      Some (Array.init 16 (fun i -> Int32.to_int (Int32.logand (Int32.shift_right_logical (Int32.bits_of_float xs.(i / 4)) (8 * (i mod 4))) 0xffl)))
+  | Mask ms ->
+      let width = 16 / Array.length ms in
+      Some (Array.init 16 (fun i -> if ms.(i / width) then 0xff else 0))
+  | value -> (
+      match int_lanes value with
+      | Some (element, xs) ->
+          let width = 16 / element_lanes element in
+          Some (Array.init 16 (fun i -> Int64.to_int (Int64.logand (Int64.shift_right_logical xs.(i / width) (8 * (i mod width))) 0xffL)))
+      | None -> None)
+
+let rack_of_bytes element bytes =
+  match element with
+  | Types.SFloat ->
+      F32_rack
+        (Array.init 4 (fun lane ->
+             let word = ref 0l in
+             for b = 3 downto 0 do
+               word := Int32.logor (Int32.shift_left !word 8) (Int32.of_int bytes.((lane * 4) + b))
+             done;
+             Int32.float_of_bits !word))
+  | _ ->
+      let lanes = element_lanes element in
+      let width = 16 / lanes in
+      int_rack element
+        (Array.init lanes (fun lane ->
+             let v = ref 0L in
+             for b = width - 1 downto 0 do
+               v := Int64.logor (Int64.shift_left !v 8) (Int64.of_int bytes.((lane * width) + b))
+             done;
+             (* Sign-extend from the lane width before wrapping. *)
+             if width < 8 && Int64.logand !v (Int64.shift_left 1L ((8 * width) - 1)) <> 0L then
+               Int64.sub !v (Int64.shift_left 1L (8 * width))
+             else !v))
+
+(** A literal typed by the value it meets. *)
+let typed_literal_value other value =
+  match other with
+  | F32_rack xs -> Some (F32_rack (Array.make (Array.length xs) (f32 (Int64.to_float value))))
+  | F32_scalar _ -> Some (F32_scalar (f32 (Int64.to_float value)))
+  | Int_scalar (s, _) -> Some (int_scalar s value)
+  | other -> (match int_lanes other with Some (element, _) -> Some (splat_int element value) | None -> None)
+
+(** A uniform integer broadcast to the integer rack beside it. *)
+let broadcast_to other value =
+  match (value, int_lanes other) with
+  | Int_scalar (_, v), Some (element, _) -> splat_int element v
+  | U32_scalar v, Some (element, _) -> splat_int element (Int64.of_int v)
+  | _ -> value
+
+let round_half_even x =
+  if Float.is_nan x || Float.is_integer x then x
+  else
+    let floor = Float.floor x in
+    let diff = x -. floor in
+    if diff > 0.5 then floor +. 1.0
+    else if diff < 0.5 then floor
+    else if Float.rem floor 2.0 = 0.0 then floor
+    else floor +. 1.0
+
 let rec eval_expr ~lanes env (expr : expr) =
   if lanes <= 0 then error expr.loc (Invalid_lane_count lanes)
   else
     match expr.v with
+    | EInt value | EBroadcast { v = EInt value; _ } -> Ok (splat_int Types.SInt value)
+    | EScalarVar name when (match List.assoc_opt name env with Some (Int_scalar _ | U32_scalar _) -> true | _ -> false) ->
+        Ok (List.assoc name env)
+    | EBroadcast { v = EScalarVar name; _ } when (match List.assoc_opt name env with Some (Int_scalar _ | U32_scalar _) -> true | _ -> false) ->
+        Ok (List.assoc name env)
+    | EBinop (left_expr, ((Add | Sub | Mul | Lt | Le | Gt | Ge | Eq | Ne) as op), right_expr)
+      when is_integer_operation ~lanes env left_expr right_expr ->
+        let* left, right = operands ~lanes env left_expr right_expr in
+        let left = broadcast_to right left and right = broadcast_to left right in
+        (match (int_lanes left, int_lanes right) with
+         | Some (element, xs), Some (_, ys) when Array.length xs = Array.length ys -> (
+             match op with
+             | Add | Sub | Mul ->
+                 let f = match op with Add -> Int64.add | Sub -> Int64.sub | _ -> Int64.mul in
+                 Ok (int_rack element (Array.map2 f xs ys))
+             | _ ->
+                 let p = match op with
+                   | Lt -> ( < ) | Le -> ( <= ) | Gt -> ( > ) | Ge -> ( >= ) | Eq -> ( = ) | _ -> ( <> ) in
+                 Ok (Mask (Array.map2 (fun x y -> p (Int64.compare x y) 0) xs ys)))
+         | _ -> error expr.loc (Operand_kind_mismatch { operation = Ast.show_binop op; left = value_kind left; right = Some (value_kind right) }))
+    | EBinop (left_expr, ((Add | Sub | Mul | Div | Lt | Le | Gt | Ge | Eq | Ne) as op), right_expr)
+      when (integer_literal left_expr <> None) <> (integer_literal right_expr <> None) ->
+        (* An integer literal beside an f32 rack is an f32 constant. *)
+        let* left, right = operands ~lanes env left_expr right_expr in
+        (match op with
+         | Add -> binary_f32 expr.loc lanes "add" ( +. ) left right
+         | Sub -> binary_f32 expr.loc lanes "sub" ( -. ) left right
+         | Mul -> binary_f32 expr.loc lanes "mul" ( *. ) left right
+         | Div -> binary_f32 expr.loc lanes "div" ( /. ) left right
+         | Lt -> compare_f32 expr.loc lanes "lt" ( < ) left right
+         | Le -> compare_f32 expr.loc lanes "le" ( <= ) left right
+         | Gt -> compare_f32 expr.loc lanes "gt" ( > ) left right
+         | Ge -> compare_f32 expr.loc lanes "ge" ( >= ) left right
+         | Eq -> compare_f32 expr.loc lanes "eq" Float.equal left right
+         | _ -> compare_f32 expr.loc lanes "ne" (fun x y -> not (Float.equal x y)) left right)
+    | EUnop ((Neg | FNeg), inner) when (match eval_expr ~lanes env inner with Ok v -> int_lanes v <> None | _ -> false) ->
+        let* value = eval_expr ~lanes env inner in
+        let element, xs = Option.get (int_lanes value) in
+        Ok (int_rack element (Array.map Int64.neg xs))
+    | ECall ("abs", [ inner ]) when (match eval_expr ~lanes env inner with Ok v -> int_lanes v <> None | _ -> false) ->
+        let* value = eval_expr ~lanes env inner in
+        let element, xs = Option.get (int_lanes value) in
+        Ok (int_rack element (Array.map Int64.abs xs))
+    | ECall (("relaxed_madd" | "relaxed_nmadd") as name, [ a; b; c ]) ->
+        (* Either rounding is the instruction's; the interpreter rounds the product and the sum. *)
+        let* a = eval_expr ~lanes env a in
+        let* b = eval_expr ~lanes env b in
+        let* c = eval_expr ~lanes env c in
+        let* product = binary_f32 expr.loc lanes "mul" ( *. ) a b in
+        let* product = if name = "relaxed_nmadd" then unary_f32 expr.loc lanes "neg" Float.neg product else Ok product in
+        binary_f32 expr.loc lanes "add" ( +. ) product c
+    | ECall (("relaxed_min" | "relaxed_max") as name, [ a; b ]) ->
+        let* a = eval_expr ~lanes env a in
+        let* b = eval_expr ~lanes env b in
+        binary_f32 expr.loc lanes name (if name = "relaxed_min" then Float.min else Float.max) a b
+    | ECall (("abs" | "floor" | "ceil" | "trunc" | "nearest" | "exp" | "log" | "log2" | "tanh") as name, [ inner ]) ->
+        let* value = eval_expr ~lanes env inner in
+        let f =
+          match name with
+          | "abs" -> Float.abs | "floor" -> Float.floor | "ceil" -> Float.ceil | "trunc" -> Float.trunc
+          | "nearest" -> round_half_even | "exp" -> Rake_math.exp | "log" -> Rake_math.log
+          | "log2" -> Rake_math.log2 | _ -> Rake_math.tanh
+        in
+        unary_f32 expr.loc lanes name f value
+    | ECall ("select", [ condition; if_true; if_false ])
+      when (match eval_expr ~lanes env if_true with Ok v -> int_lanes v <> None | _ -> false) ->
+        eval_expr ~lanes env { expr with v = EIf (condition, if_true, if_false) }
+    | EIf (condition, if_true, if_false) -> (
+        let* c = eval_expr ~lanes env condition in
+        match c with
+        | Int_scalar (_, v) -> eval_expr ~lanes env (if v <> 0L then if_true else if_false)
+        | Mask ms ->
+            let* a, b = operands ~lanes env if_true if_false in
+            (match (a, b) with
+             | F32_rack xs, F32_rack ys -> Ok (F32_rack (Array.mapi (fun i x -> if ms.(i) then x else ys.(i)) xs))
+             | Mask xs, Mask ys -> Ok (Mask (Array.mapi (fun i x -> if ms.(i mod Array.length ms) then x else ys.(i)) xs))
+             | _ -> (
+                 match (int_lanes a, int_lanes b) with
+                 | Some (element, xs), Some (_, ys) ->
+                     (* A mask from a comparison of other lanes selects each byte group it covers. *)
+                     let ratio = Array.length xs / Array.length ms in
+                     let ratio = max 1 ratio in
+                     Ok (int_rack element (Array.mapi (fun i x -> if ms.(min (Array.length ms - 1) (i / ratio)) then x else ys.(i)) xs))
+                 | _ -> error expr.loc (Operand_kind_mismatch { operation = "if"; left = value_kind a; right = Some (value_kind b) })))
+        | value -> error expr.loc (Operand_kind_mismatch { operation = "if"; left = value_kind value; right = None }))
+    | EExtract (rack_expr, lane_expr) -> (
+        let* r = eval_expr ~lanes env rack_expr in
+        match (integer_literal lane_expr, r) with
+        | Some lane, F32_rack xs -> Ok (F32_scalar xs.(lane))
+        | Some lane, value -> (
+            match int_lanes value with
+            | Some (element, xs) -> Ok (int_scalar element xs.(lane))
+            | None -> error expr.loc (Operand_kind_mismatch { operation = "extract"; left = value_kind value; right = None }))
+        | None, _ -> error lane_expr.loc (Unsupported_expression "a lane is chosen by an integer literal"))
+    | EInsert (rack_expr, lane_expr, value_expr) -> (
+        let* r = eval_expr ~lanes env rack_expr in
+        let* v =
+          match integer_literal value_expr with
+          | Some n ->
+              let n = Int64.of_int n in
+              Ok (Option.value (typed_literal_value (match r with F32_rack _ -> F32_scalar 0.0 | _ -> Int_scalar (Types.SInt64, 0L)) n) ~default:(Int_scalar (Types.SInt64, n)))
+          | None -> eval_expr ~lanes env value_expr
+        in
+        match (integer_literal lane_expr, r, v) with
+        | Some lane, F32_rack xs, F32_scalar x -> let ys = Array.copy xs in ys.(lane) <- x; Ok (F32_rack ys)
+        | Some lane, F32_rack xs, F32_rack x -> let ys = Array.copy xs in ys.(lane) <- x.(0); Ok (F32_rack ys)
+        | Some lane, value, Int_scalar (_, x) -> (
+            match int_lanes value with
+            | Some (element, xs) -> let ys = Array.copy xs in ys.(lane) <- x; Ok (int_rack element ys)
+            | None -> error expr.loc (Operand_kind_mismatch { operation = "insert"; left = value_kind value; right = None }))
+        | _ -> error expr.loc (Operand_kind_mismatch { operation = "insert"; left = value_kind r; right = Some (value_kind v) }))
+    | EConvert (Convert_bitcast, { v = TRack prim; _ }, inner) -> (
+        let* value = eval_expr ~lanes env inner in
+        let element = Types.of_prim prim in
+        (* A uniform operand is broadcast in its own type first. *)
+        let value =
+          match value with
+          | F32_scalar x -> F32_rack (Array.make 4 x)
+          | Int_scalar (s, v) -> splat_int s v
+          | U32_scalar v -> splat_int Types.SUint (Int64.of_int v)
+          | v -> v
+        in
+        match rack_bytes value with
+        | Some bytes -> Ok (rack_of_bytes element bytes)
+        | None -> error expr.loc (Operand_kind_mismatch { operation = "bitcast"; left = value_kind value; right = None }))
+    | EReduce (((RAnd | ROr) as operation), operand) -> (
+        let* value = eval_expr ~lanes env operand in
+        match value with
+        | Mask ms ->
+            let all = Array.for_all Fun.id ms and any = Array.exists Fun.id ms in
+            Ok (Int_scalar (Types.SBool, if (if operation = RAnd then all else any) then 1L else 0L))
+        | value -> error expr.loc (Operand_kind_mismatch { operation = "mask reduction"; left = value_kind value; right = None }))
+    | ECall (name, arguments) when List.exists (fun (d : def) -> match d.v with DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions ->
+        let definition = List.find (fun (d : def) -> match d.v with DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions in
+        let* values =
+          List.fold_right (fun a acc -> let* rest = acc in let* v = eval_expr ~lanes env a in Ok (v :: rest)) arguments (Ok [])
+        in
+        (* A uniform passed to a rack parameter is broadcast at the call. *)
+        let parameters = match definition.v with DCrunch (_, ps, _, _) | DRake (_, ps, _, _, _, _, _) -> ps | _ -> [] in
+        let values =
+          List.map2
+            (fun parameter value ->
+              match (parameter, value) with
+              | PRack (_, Some { v = TRack p; _ }), F32_scalar x when Types.of_prim p = Types.SFloat -> F32_rack (Array.make lanes x)
+              | PRack (_, Some { v = TRack p; _ }), Int_scalar (_, x) -> splat_int (Types.of_prim p) x
+              | PRack (_, Some { v = TRack p; _ }), U32_scalar x -> splat_int (Types.of_prim p) (Int64.of_int x)
+              (* A marked uniform evaluates as a splat here; a scalar parameter takes one lane. *)
+              | PScalar _, F32_rack xs when Array.length xs > 0 -> F32_scalar xs.(0)
+              | PScalar _, value when (match int_lanes value with Some (_, xs) -> Array.length xs > 0 | None -> false) ->
+                  (match int_lanes value with Some (element, xs) -> int_scalar element xs.(0) | None -> value)
+              | _ -> value)
+            parameters values
+        in
+        (match definition.v with
+         | DCrunch _ -> !eval_crunch_ref ~lanes definition values
+         | _ -> !eval_rake_ref ~lanes definition values)
     | EFloat value -> Ok (splat lanes value)
     | EBool value -> Ok (Mask (Array.make lanes value))
     | EVar name ->
         let* value = lookup expr.loc lanes env name in
         (match value with
          | F32_rack _ | Mask _ | U8_rack _ | I16_rack _ | I32_rack _ | I64_rack _ -> Ok value
-         | U32_scalar _ ->
+         | U32_scalar _ | Int_scalar _ ->
              error expr.loc
                (Expected_variable_kind {
                   name;
@@ -428,7 +694,7 @@ let rec eval_expr ~lanes env (expr : expr) =
         (match value with
          | F32_scalar value -> Ok (splat lanes value)
          | F32_rack _ as value -> Ok value
-         | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _) as value ->
+         | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _ | Int_scalar _) as value ->
              error expr.loc
                (Operand_kind_mismatch {
                   operation = "broadcast";
@@ -462,12 +728,13 @@ let rec eval_expr ~lanes env (expr : expr) =
          | _ -> error expr.loc (Operand_kind_mismatch { operation = Ast.show_binop op; left = value_kind left; right = Some (value_kind right) }))
     | ECall (("min" | "max") as name, [ a; b ])
       when integer_literal a <> None || integer_literal b <> None
-           || (match eval_expr ~lanes env a with Ok (I16_rack _ | I32_rack _ | F32_rack _) -> true | _ -> false) ->
+           || (match eval_expr ~lanes env a with Ok (U8_rack _ | I16_rack _ | I32_rack _ | F32_rack _) -> true | _ -> false) ->
         let literal_first = integer_literal a <> None in
         let rack_expr, other_expr = if literal_first then (b, a) else (a, b) in
         let* rack = eval_expr ~lanes env rack_expr in
         let* other =
           match (integer_literal other_expr, rack) with
+          | Some value, U8_rack xs -> Ok (U8_rack (Array.make (Array.length xs) value))
           | Some value, I16_rack xs -> Ok (I16_rack (Array.make (Array.length xs) value))
           | Some value, I32_rack xs -> Ok (I32_rack (Array.make (Array.length xs) value))
           | Some _, value -> error expr.loc (Operand_kind_mismatch { operation = name; left = value_kind value; right = None })
@@ -478,12 +745,22 @@ let rec eval_expr ~lanes env (expr : expr) =
          | F32_rack xs, F32_rack ys when Array.length xs = Array.length ys ->
              (* IEEE 754 minimum and maximum, as wasm's f32x4.min and f32x4.max: NaN if either is, -0 below +0. *)
              Ok (F32_rack (Array.map2 (if name = "min" then Float.min else Float.max) xs ys))
+         | U8_rack xs, U8_rack ys when Array.length xs = Array.length ys -> Ok (U8_rack (Array.map2 f xs ys))
          | I16_rack xs, I16_rack ys when Array.length xs = Array.length ys -> Ok (I16_rack (Array.map2 f xs ys))
          | I32_rack xs, I32_rack ys when Array.length xs = Array.length ys -> Ok (I32_rack (Array.map2 f xs ys))
          | _ -> error expr.loc (Operand_kind_mismatch { operation = name; left = value_kind rack; right = Some (value_kind other) }))
     | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot") as name, [ a; b ]) ->
-        let* a = eval_expr ~lanes env a in
-        let* b = eval_expr ~lanes env b in
+        let literal_beside rack_expr literal =
+          let* rack = eval_expr ~lanes env rack_expr in
+          let value = Option.bind (integer_literal literal) (fun n -> typed_literal_value rack (Int64.of_int n)) in
+          match value with Some v -> Ok (rack, v) | None -> let* v = eval_expr ~lanes env literal in Ok (rack, v)
+        in
+        let* a, b =
+          match (integer_literal a, integer_literal b) with
+          | Some _, None -> let* b, a = literal_beside b a in Ok (a, b)
+          | None, Some _ -> literal_beside a b
+          | _ -> let* a = eval_expr ~lanes env a in let* b = eval_expr ~lanes env b in Ok (a, b)
+        in
         let f x y =
           match name with
           | "bit_and" -> x land y | "bit_or" -> x lor y | "bit_xor" -> x lxor y | _ -> x land lnot y
@@ -508,6 +785,7 @@ let rec eval_expr ~lanes env (expr : expr) =
           | None, (EScalarVar scalar | EBroadcast { v = EScalarVar scalar; _ }) -> (
               match List.assoc_opt scalar env with
               | Some (U32_scalar value) -> Ok value
+              | Some (Int_scalar (_, value)) -> Ok (Int64.to_int value)
               | Some value -> error count.loc (Operand_kind_mismatch { operation = name; left = value_kind value; right = None })
               | None -> error count.loc (Undefined_variable scalar))
           | None, _ -> error count.loc (Unsupported_expression (name ^ " with a count that is not a literal or uniform u32"))
@@ -674,9 +952,6 @@ let rec eval_expr ~lanes env (expr : expr) =
     | EReduce (((RAdd | RMul | RMin | RMax) as operation), operand) ->
         let* value = eval_expr ~lanes env operand in
         eval_f32_reduction expr.loc operation value
-    | EReduce ((RAnd | ROr), _) ->
-        error expr.loc
-          (Unsupported_expression "logical mask reduction in f32 native slice")
     | EScan (((RAdd | RMul | RMin | RMax) as operation), operand) ->
         let* value = eval_expr ~lanes env operand in
         eval_f32_scan expr.loc operation value
@@ -684,11 +959,45 @@ let rec eval_expr ~lanes env (expr : expr) =
         error expr.loc (Unsupported_expression "logical prefix scan")
     | kind -> error expr.loc (Unsupported_expression (Ast.show_expr_kind kind))
 
+(** Two operands, an integer literal among them typed by the other. *)
+and operands ~lanes env left_expr right_expr =
+  match (integer_literal left_expr, integer_literal right_expr) with
+  | Some value, None ->
+      let* right = eval_expr ~lanes env right_expr in
+      (match typed_literal_value right (Int64.of_int value) with
+       | Some left -> Ok (left, right)
+       | None -> error left_expr.loc (Unsupported_expression "an integer literal needs an integer or f32 rack beside it"))
+  | None, Some value ->
+      let* left = eval_expr ~lanes env left_expr in
+      (match typed_literal_value left (Int64.of_int value) with
+       | Some right -> Ok (left, right)
+       | None -> error right_expr.loc (Unsupported_expression "an integer literal needs an integer or f32 rack beside it"))
+  | _ ->
+      let* left = eval_expr ~lanes env left_expr in
+      let* right = eval_expr ~lanes env right_expr in
+      Ok (left, right)
+
+(** Whether a binary operation is on integer lanes: an integer rack, or a
+    uniform integer beside one. *)
+and is_integer_operation ~lanes env left_expr right_expr =
+  let integer (e : expr) =
+    match integer_literal e with
+    | Some _ -> `Literal
+    | None -> (
+        match eval_expr ~lanes env e with
+        | Ok v when int_lanes v <> None -> `Rack
+        | Ok (Int_scalar _ | U32_scalar _) -> `Uniform
+        | _ -> `Other)
+  in
+  match (integer left_expr, integer right_expr) with
+  | `Rack, (`Rack | `Literal | `Uniform) | (`Literal | `Uniform), `Rack -> true
+  | _ -> false
+
 let bind_parameter ~lanes env parameter argument loc =
   let* argument = validate_width loc lanes (normalize_value argument) in
   match (parameter, argument) with
   | PRack (name, _), (F32_rack _ | Mask _ | U8_rack _ | I16_rack _ | I32_rack _ | I64_rack _) -> Ok ((name, argument) :: env)
-  | PRack (name, _), U32_scalar _ ->
+  | PRack (name, _), (U32_scalar _ | Int_scalar _) ->
       error loc
         (Expected_variable_kind {
            name;
@@ -702,7 +1011,7 @@ let bind_parameter ~lanes env parameter argument loc =
            expected = Rack;
            actual = Scalar;
          })
-  | PScalar (name, _), F32_scalar _ -> Ok ((name, argument) :: env)
+  | PScalar (name, _), (F32_scalar _ | Int_scalar _ | U32_scalar _) -> Ok ((name, argument) :: env)
   | PScalar (name, _), argument ->
       error loc
         (Expected_variable_kind {
@@ -739,12 +1048,59 @@ let eval_crunch ~lanes definition arguments =
               | SFused binding ->
                   let* value = eval_expr ~lanes env binding.fused_expr in
                   eval_body ((binding.fused_name, value) :: env) rest
+              | SUniform binding ->
+                  let* value = eval_expr ~lanes env binding.bind_expr in
+                  eval_body ((binding.bind_name, value) :: env) rest
+              | SLocBind location ->
+                  let* value = eval_expr ~lanes env location.loc_expr in
+                  eval_body ((location.loc_name, value) :: env) rest
+              | SAssign (name, expression) ->
+                  let* value = eval_expr ~lanes env expression in
+                  eval_body ((name, value) :: env) rest
+              | SLoop ({ loop_repeat = true; _ } as loop) -> (
+                  match (integer_literal loop.loop_from, integer_literal loop.loop_to) with
+                  | Some first, Some stop ->
+                      (* Names bound in an iteration end with it; assignments to outer names carry on. *)
+                      let rec iterations env k =
+                        if k >= stop then Ok env
+                        else
+                          let* inner = eval_body_statements ((loop.loop_var, Int_scalar (Types.SInt, Int64.of_int k)) :: env) loop.loop_body in
+                          let env = List.map (fun (name, value) -> (name, Option.value (List.assoc_opt name inner) ~default:value)) env in
+                          iterations env (k + 1)
+                      in
+                      let* env = iterations env first in
+                      eval_body env rest
+                  | _ -> error statement.loc (Unsupported_statement "repeat with non-literal bounds"))
               | SExpr expression ->
                   let* _ = eval_expr ~lanes env expression in
                   eval_body env rest
               | kind ->
                   error statement.loc
                     (Unsupported_statement (Ast.show_stmt_kind kind)))
+        and eval_body_statements env statements =
+          match statements with
+          | [] -> Ok env
+          | statement :: rest -> (
+              match statement.v with
+              | SLet { bind_name = name; bind_expr = e; _ } | SFused { fused_name = name; fused_expr = e; _ }
+              | SUniform { bind_name = name; bind_expr = e; _ } | SLocBind { loc_name = name; loc_expr = e; _ } | SAssign (name, e) ->
+                  let* value = eval_expr ~lanes env e in
+                  eval_body_statements ((name, value) :: env) rest
+              | SLoop ({ loop_repeat = true; _ } as loop) -> (
+                  match (integer_literal loop.loop_from, integer_literal loop.loop_to) with
+                  | Some first, Some stop ->
+                      let rec iterations env k =
+                        if k >= stop then Ok env
+                        else
+                          let* inner = eval_body_statements ((loop.loop_var, Int_scalar (Types.SInt, Int64.of_int k)) :: env) loop.loop_body in
+                          let env = List.map (fun (name, value) -> (name, Option.value (List.assoc_opt name inner) ~default:value)) env in
+                          iterations env (k + 1)
+                      in
+                      let* env = iterations env first in
+                      eval_body_statements env rest
+                  | _ -> error statement.loc (Unsupported_statement "repeat with non-literal bounds"))
+              | SExpr e -> let* _ = eval_expr ~lanes env e in eval_body_statements env rest
+              | kind -> error statement.loc (Unsupported_statement (Ast.show_stmt_kind kind)))
         in
         eval_body env body
   | kind -> error definition.loc (Unsupported_definition (Ast.show_def_kind kind))
@@ -752,6 +1108,7 @@ let eval_crunch ~lanes definition arguments =
 let project_value lane = function
   | F32_scalar _ as value -> value
   | U32_scalar _ as value -> value
+  | Int_scalar _ as value -> value
   | F32_rack values -> F32_rack [| values.(lane) |]
   | Mask values -> Mask [| values.(lane) |]
   | U8_rack values -> U8_rack [| values.(lane) |]
@@ -921,3 +1278,7 @@ let eval_rake ~lanes definition arguments =
         let env = (sweep.sweep_binding, rack output) :: env in
         lookup definition.loc lanes env result.result_name
   | kind -> error definition.loc (Unsupported_definition (Ast.show_def_kind kind))
+
+let () =
+  eval_crunch_ref := eval_crunch;
+  eval_rake_ref := eval_rake

@@ -1,0 +1,141 @@
+~~ The student network's integer kernels (quantised.nim's layouts), as Rake runs.
+
+~~ A float vector to 16 bits by its largest magnitude. Writes the bits and,
+~~ in every lane of scale_out, the scale that turns a sum back into the
+~~ input's units. width is a multiple of 8, padded with zeros.
+run quantise_input(x: []f32, bits: mut []i16, scale_out: mut []f32, <width: i32>, <ceiling: f32>):
+  most := <0.0>
+  for <i: i32> from <0> up to <width> by <4>:
+    most <- max(most, abs(x[<i>]))
+  let <top: f32> = maximum(most)
+  let <scale: f32> = if <top> > <0.0> then <top> / <ceiling> else <1.0>
+  let <inverse: f32> = <1.0> / <scale>
+  for <i: i32> from <0> up to <width> by <8>:
+    bits[<i>] <- narrow(to_i32(x[<i>] * <inverse>), to_i32(x[<i> + <4>] * <inverse>))
+  scale_out[<0>] <- <scale> + 0.0
+
+~~ A dense layer's sums from its 8-bit weights packed [input pair][group of
+~~ four outputs][output][input of the pair], eight groups at a time: each
+~~ input pair broadcast once against eight weight vectors at constant offsets.
+~~ sums[o] = sum * row scale * input scale + bias. groups is a multiple of 8.
+run dense(pairs_in: []i32, weights: []i16, rows: []f32, biases: []f32, sums: mut []f32, <pairs: i32>, <groups: i32>, <scale: f32>):
+  for <first: i32> from <0> up to <groups> by <8>:
+    acc: [8]i32s := <0>
+    for <p: i32> from <0> up to <pairs>:
+      let pair = bitcast(i16s, <pairs_in[<p>]>)
+      repeat <k: i32> from <0> up to <8>:
+        acc[<k>] <- acc[<k>] + dot(pair, weights[(<p> * <groups> + <first> + <k>) * <8>])
+    repeat <k: i32> from <0> up to <8>:
+      let <o: i32> = (<first> + <k>) * <4>
+      sums[<o>] <- to_f32(acc[<k>]) * (rows[<o>] * <scale>) + biases[<o>]
+
+~~ Eight outputs' sums requantised to 16 bits (neural_kernels.rk's requantise).
+crunch requantise(low: i32s, high: i32s, scale: f32s, low_offset: f32s, high_offset: f32s, ceiling: i16s) -> i16s:
+  | a <| to_i32(to_f32(low) * scale + low_offset)
+  | b <| to_i32(to_f32(high) * scale + high_offset)
+  return min(max(narrow(a, b), <0>), ceiling)
+
+~~ A 3x3 convolution of a bordered map of 32 channels into 32 outputs, four
+~~ pixels at a time with each weight vector loaded once for all four.
+~~ cells holds the map as pairs of 16-bit channels: (side + 2)^2 + 1 cells of
+~~ 16 pairs. Writes a bordered map. side is a multiple of 4 or ends in pixels
+~~ that are computed from the next row and discarded.
+run convolve(cells: []i32, weights: []i16, offsets: []f32, output: mut []i16, <side: i32>, <multiplier: f32>, <ceiling: i16>):
+  let <stride: i32> = <side> + <2>
+  for <y: i32> from <0> up to <side>:
+    for <x: i32> from <0> up to <side> by <4>:
+      a: [8]i32s := <0>
+      b: [8]i32s := <0>
+      c: [8]i32s := <0>
+      d: [8]i32s := <0>
+      for <t: i32> from <0> up to <9>:
+        let <base: i32> = ((<y> + <t> / <3>) * <stride> + <x> + <t> % <3>) * <16>
+        for <p: i32> from <0> up to <16>:
+          let p0 = bitcast(i16s, <cells[<base> + <p>]>)
+          let p1 = bitcast(i16s, <cells[<base> + <p> + <16>]>)
+          let p2 = bitcast(i16s, <cells[<base> + <p> + <32>]>)
+          let p3 = bitcast(i16s, <cells[<base> + <p> + <48>]>)
+          repeat <g: i32> from <0> up to <8>:
+            let v = weights[((<t> * <16> + <p>) * <8> + <g>) * <8>]
+            a[<g>] <- a[<g>] + dot(p0, v)
+            b[<g>] <- b[<g>] + dot(p1, v)
+            c[<g>] <- c[<g>] + dot(p2, v)
+            d[<g>] <- d[<g>] + dot(p3, v)
+      let <at: i32> = ((<y> + <1>) * <stride> + <x> + <1>) * <32>
+      repeat <g: i32> from <0> up to <4>:
+        let low = offsets[<g> * <8>]
+        let high = offsets[<g> * <8> + <4>]
+        output[<at> + <g> * <8>] <- requantise(a[<g> * <2>], a[<g> * <2> + <1>], <multiplier>, low, high, <ceiling>)
+        if <x> + <1> < <side>:
+          output[<at> + <32> + <g> * <8>] <- requantise(b[<g> * <2>], b[<g> * <2> + <1>], <multiplier>, low, high, <ceiling>)
+        if <x> + <2> < <side>:
+          output[<at> + <64> + <g> * <8>] <- requantise(c[<g> * <2>], c[<g> * <2> + <1>], <multiplier>, low, high, <ceiling>)
+        if <x> + <3> < <side>:
+          output[<at> + <96> + <g> * <8>] <- requantise(d[<g> * <2>], d[<g> * <2> + <1>], <multiplier>, low, high, <ceiling>)
+
+slow next(seed: u32) -> u32:
+  return wrap_add(wrap_mul(seed, 1664525), 1013904223)
+
+slow small(seed: u32, range: i32) -> i32:
+  return i32(shift_bits_right(seed, 16) % u32(range)) - range / 2
+
+slow pair_word(low: i16, high: i16) -> i32:
+  return bitcast(i32, bit_or(u32(wrap(u16, low)), shift_bits_left(u32(wrap(u16, high)), 16)))
+
+slow main() -> i32:
+  seed: u32 := 7
+  ~~ Dense: 32 inputs (16 pairs), 64 outputs (16 groups).
+  x: [32]f32 := [0.0; 32]
+  for i from 0 up to 32:
+    seed <- next(seed)
+    x[i] <- f32(small(seed, 2000)) / 100.0
+  bits: [32]i16 := [0; 32]
+  scale: [4]f32 := [0.0; 4]
+  quantise_input(x, bits, scale, <32>, <1000.0>)
+  words: [16]i32 := [0; 16]
+  for p from 0 up to 16:
+    words[p] <- pair_word(bits[2 * p], bits[2 * p + 1])
+  weights: [2048]i16 := [0; 2048]
+  for i from 0 up to 2048:
+    seed <- next(seed)
+    weights[i] <- i16(small(seed, 255))
+  rows: [64]f32 := [0.0; 64]
+  biases: [64]f32 := [0.0; 64]
+  for o from 0 up to 64:
+    seed <- next(seed)
+    rows[o] <- f32(small(seed, 100)) / 1000.0
+    biases[o] <- f32(small(seed, 50)) / 10.0
+  sums: [64]f32 := [0.0; 64]
+  dense(words, weights, rows, biases, sums, <16>, <16>, <scale[0]>)
+  ~~ The reference: each output's sum over pairs, as packed.
+  for o from 0 up to 64:
+    total: i32 := 0
+    for p from 0 up to 16:
+      let at = ((p * 16 + o / 4) * 4 + o % 4) * 2
+      total <- total + i32(bits[2 * p]) * i32(weights[at]) + i32(bits[2 * p + 1]) * i32(weights[at + 1])
+    let expected = f32(total) * (rows[o] * scale[0]) + biases[o]
+    if bitcast(u32, expected) != bitcast(u32, sums[o]):
+      return 1000 + o
+  ~~ Convolution: a 4x4 map, bordered to 6x6, 32 channels in and out.
+  cells: [592]i32 := [0; 592]
+  for y from 0 up to 4:
+    for x2 from 0 up to 4:
+      for p from 0 up to 16:
+        seed <- next(seed)
+        cells[((y + 1) * 6 + x2 + 1) * 16 + p] <- pair_word(i16(small(seed, 200)), i16(small(seed + 1, 200)))
+  taps: [9216]i16 := [0; 9216]
+  for i from 0 up to 9216:
+    seed <- next(seed)
+    taps[i] <- i16(small(seed, 255))
+  offsets: [32]f32 := [0.0; 32]
+  for o from 0 up to 32:
+    seed <- next(seed)
+    offsets[o] <- f32(small(seed, 100)) / 10.0
+  out: [1184]i16 := [0; 1184]
+  convolve(cells, taps, offsets, out, <4>, <0.01>, <500>)
+  h: u32 := 2166136261
+  for i from 0 up to 1184:
+    h <- wrap_mul(bit_xor(h, u32(wrap(u16, out[i]))), 16777619)
+  for i from 0 up to 64:
+    h <- wrap_mul(bit_xor(h, bitcast(u32, sums[i])), 16777619)
+  return bitcast(i32, bit_and(h, 2147483647))

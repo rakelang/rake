@@ -1,0 +1,7 @@
+state scale: f32 := 2.0
+
+run scale_all(x: []f32, out: mut []f32):
+  out[<0>] <- x[<0>] * <scale>
+
+slow main() -> i32:
+  return 0

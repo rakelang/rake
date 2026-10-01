@@ -7,13 +7,7 @@ let fail message =
   exit 1
 
 let parse_file filename =
-  let channel = open_in filename in
-  Fun.protect ~finally:(fun () -> close_in_noerr channel) (fun () ->
-      let lexbuf = Lexing.from_channel channel in
-      lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = filename };
-      try Parser.program Lexer.token lexbuf with
-      | Lexer.LexError (message, _) -> fail ("lexical error: " ^ message)
-      | Parser.Error -> fail ("syntax error in " ^ filename))
+  match Source.parse_file filename with Ok program -> program | Error message -> fail message
 
 let definitions = function
   | [ { mod_defs; _ } ] -> mod_defs

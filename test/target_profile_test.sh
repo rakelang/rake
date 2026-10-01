@@ -9,7 +9,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 "${rakec}" --print-targets > "${tmp}/targets"
-for profile in scalar x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
+for profile in scalar x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 wasm-simd128-relaxed; do
   grep -q "^${profile}[[:space:]]" "${tmp}/targets"
 done
 
@@ -68,5 +68,21 @@ for profile in scalar x86-sse2 x86-avx512; do
   grep -Eq 'no production backend|production backend.*unavailable' \
     "${tmp}/${profile}.out"
 done
+
+# Relaxed SIMD is opt-in: the default WebAssembly profile rejects it, and only
+# wasm-simd128-relaxed selects, emits and verifies it.
+cat > "${tmp}/relaxed.rk" <<'EOF'
+crunch muladd(a: f32s, b: f32s, c: f32s) -> f32s:
+  return relaxed_madd(a, b, c)
+EOF
+if "${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/relaxed.c" "${tmp}/relaxed.rk" > "${tmp}/relaxed.out" 2>&1; then
+  echo "wasm-simd128 accepted a relaxed-SIMD operation" >&2
+  exit 1
+fi
+grep -q "only --target wasm-simd128-relaxed selects" "${tmp}/relaxed.out"
+"${rakec}" --emit-asm --target wasm-simd128-relaxed -o "${tmp}/relaxed.c" "${tmp}/relaxed.rk"
+grep -q "wasm_f32x4_relaxed_madd" "${tmp}/relaxed.c"
+grep -q "target(\"relaxed-simd\")" "${tmp}/relaxed.c"
+"${rakec}" --verify-native --target wasm-simd128-relaxed -o "${tmp}/relaxed.o" "${tmp}/relaxed.rk"
 
 echo "target profile tests passed"

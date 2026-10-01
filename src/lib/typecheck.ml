@@ -92,6 +92,9 @@ let rec typ_to_t env (ty: typ) : t =
       Fun (List.map (typ_to_t env) args, typ_to_t env ret)
   | TTuple ts -> Tuple (List.map (typ_to_t env) ts)
   | TUnit -> Unit
+  | TArray _ | TView _ | TPtr _ | TMut _ | TNamed _ ->
+      type_errorf ty.loc "%s types belong to runs and slow definitions"
+        (Capabilities.id (Capabilities.feature_of_type ty.v))
 
 (** A run annotates its stored output element, while each traversal iteration
     produces one rack of those elements. *)
@@ -153,6 +156,22 @@ let param_types_of env p loc =
       let expanded = expand_spread env type_name names loc in
       List.map snd expanded
 
+(** Whether a run uses forms that only the tier checker ({!Tier_check}) knows:
+    a general body, view, mutable or rack parameters, or statements beyond the
+    first traversal contract. Such a run is checked and lowered there alone. *)
+let run_needs_tier params (result : result_spec) body =
+  let new_type (t : typ) = match t.v with TArray _ | TView _ | TPtr _ | TMut _ | TNamed _ | TRack _ -> true | _ -> false in
+  let rec new_stmt (s : stmt) =
+    match s.v with
+    | SLet _ | SFused _ | SExpr _ -> false
+    | SOver o -> List.exists new_stmt o.over_body
+    | _ -> true
+  in
+  result.result_type = None
+  || List.exists (function PRack (_, Some t) | PScalar (_, Some t) -> new_type t | _ -> false) params
+  || List.exists new_stmt body
+  || (match List.rev body with { v = SOver _; _ } :: before -> List.exists (fun (s : stmt) -> match s.v with SOver _ -> true | _ -> false) before | _ -> true)
+
 (** Register function signatures *)
 let register_func_def env (def: def) =
   match def.v with
@@ -192,6 +211,7 @@ let register_func_def env (def: def) =
              | None -> Rack SFloat)
       in
       Hashtbl.add env.funcs name (param_types, ret_type)
+  | DRun (_, params, result, body) when run_needs_tier params result body -> ()
   | DRun (name, params, result, _) ->
       let param_types = List.concat_map (fun p ->
         match p with
@@ -215,11 +235,17 @@ let add_builtins env =
   (* Math functions: rack -> rack *)
   List.iter (fun name ->
     Hashtbl.add env.funcs name ([Rack SFloat], Rack SFloat)
-  ) ["sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs"; "floor"; "ceil"];
+  ) ["sqrt"; "sin"; "cos"; "tan"; "tanh"; "exp"; "log"; "log2"; "abs"; "floor"; "ceil"; "trunc"; "nearest"];
   (* Math functions: rack, rack -> rack *)
   List.iter (fun name ->
     Hashtbl.add env.funcs name ([Rack SFloat; Rack SFloat], Rack SFloat)
   ) ["min"; "max"; "pow"; "atan2"];
+  List.iter (fun name ->
+    Hashtbl.add env.funcs name ([Rack SFloat; Rack SFloat; Rack SFloat], Rack SFloat)
+  ) ["relaxed_madd"; "relaxed_nmadd"];
+  List.iter (fun name ->
+    Hashtbl.add env.funcs name ([Rack SFloat; Rack SFloat], Rack SFloat)
+  ) ["relaxed_min"; "relaxed_max"];
   Hashtbl.add env.funcs "select"
     ([Mask; Rack SFloat; Rack SFloat], Rack SFloat)
 
@@ -399,11 +425,35 @@ let integer_literal_value (expr: Ast.expr) =
 let literal_fits rack value =
   match rack with
   | Rack SUint8 -> value >= 0L && value <= 255L
+  | Rack SInt64 -> true
   | Rack SInt16 -> value >= -32768L && value <= 32767L
   | Rack SInt -> value >= -2147483648L && value <= 2147483647L
   | _ -> false
 
 let is_integer_rack = function Rack (SInt16 | SInt) -> true | _ -> false
+
+let is_integer_scalar_type = function
+  | SInt8 | SInt16 | SInt | SInt64 | SUint8 | SUint16 | SUint | SUint64 -> true
+  | SFloat | SDouble | SBool -> false
+
+let literal_fits_scalar s value =
+  match s with
+  | SInt8 -> value >= -128L && value <= 127L
+  | SUint8 -> value >= 0L && value <= 255L
+  | SInt16 -> value >= -32768L && value <= 32767L
+  | SUint16 -> value >= 0L && value <= 65535L
+  | SInt -> value >= -2147483648L && value <= 2147483647L
+  | SUint -> value >= 0L && value <= 4294967295L
+  | _ -> true
+
+(** Integer rack arithmetic: + and - of any integer rack, * of 16-, 32- and
+    64-bit lanes; there is no lane division. *)
+let integer_arithmetic loc op t =
+  match (op, t) with
+  | (Add | Sub), _ -> t
+  | Mul, (Rack (SInt16 | SUint16 | SInt | SUint | SInt64 | SUint64) | Scalar _) -> t
+  | Mul, _ -> type_errorf loc "wasm-simd128 has no byte multiply; widen the bytes first"
+  | _ -> type_errorf loc "integer racks have no lane division"
 
 (** The lane bits of a rack that bitwise operations and shifts take. *)
 let lane_bits = function
@@ -412,6 +462,27 @@ let lane_bits = function
   | Rack (SUint | SInt) -> Some 32
   | Rack (SUint64 | SInt64) -> Some 64
   | _ -> None
+
+(** A scalar written where it meets a rack, marked as a uniform: <name>, a
+    literal, or arithmetic of those. *)
+let rec marked_uniform (e : Ast.expr) =
+  match e.v with
+  | EScalarVar _ | EBroadcast _ | EInt _ | EFloat _ -> true
+  | EBinop (a, _, b) -> marked_uniform a && marked_uniform b
+  | EUnop (_, a) -> marked_uniform a
+  | _ -> false
+
+(** A scalar becomes a rack only where the source marks it. *)
+let require_marked loc (l : Ast.expr) lt (r : Ast.expr) rt =
+  let unmarked (e : Ast.expr) =
+    match e.v with
+    | EVar name -> Printf.sprintf "'%s' is a uniform scalar: write <%s> where it meets a rack" name name
+    | _ -> "this scalar meets a rack unmarked: bind it with let, then write <name>"
+  in
+  match (lt, rt) with
+  | (Rack _ | Mask), Scalar _ when not (marked_uniform r) -> type_errorf r.loc "%s" (unmarked r)
+  | Scalar _, (Rack _ | Mask) when not (marked_uniform l) -> type_errorf l.loc "%s" (unmarked l)
+  | _ -> ignore loc
 
 (** Infer expression type *)
 let rec infer_expr env (expr: Ast.expr) : t =
@@ -444,14 +515,50 @@ let rec infer_expr env (expr: Ast.expr) : t =
              type_errorf literal.loc "integer literal %Ld does not fit a u8 lane" value;
            let _ = op in
            Mask
+       | Rack (SInt16 | SInt | SInt64) | Rack SFloat ->
+           let value = integer_literal_value literal in
+           if not (literal_fits rack_t value || rack_t = Rack SInt64 || rack_t = Rack SFloat) then
+             type_errorf literal.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type rack_t));
+           Mask
+       | Scalar s when s <> SBool -> Scalar SBool
        | actual ->
            type_errorf expr.loc "integer literal comparison requires a u8 rack, got %s"
              (show_concise actual))
 
+  | EBinop (l, ((Add | Sub | Mul | Div) as op), r)
+    when (is_integer_literal l || is_integer_literal r)
+         && not (is_integer_literal l && is_integer_literal r) ->
+      (* An integer literal takes the type of the rack or scalar beside it. *)
+      let other = if is_integer_literal l then r else l in
+      let literal = if is_integer_literal l then l else r in
+      let t = infer_expr env other in
+      (match t with
+       | Rack s | Scalar s when is_integer_scalar_type s ->
+           if not (literal_fits_scalar s (integer_literal_value literal)) then
+             type_errorf literal.loc "integer literal %Ld does not fit a %s lane" (integer_literal_value literal) (show_concise (Scalar s));
+           integer_arithmetic expr.loc op t
+       | Rack SFloat | Scalar SFloat -> t
+       | actual -> type_errorf expr.loc "Unsupported arithmetic operands: %s and an integer literal" (show_concise actual))
   | EBinop (l, op, r) ->
       let lt = infer_expr env l in
       let rt = infer_expr env r in
+      require_marked expr.loc l lt r rt;
       (match op with
+       | (Add | Sub | Mul | Div)
+         when (match (lt, rt) with
+               | (Rack s | Scalar s), (Rack s' | Scalar s') -> s = s' && is_integer_scalar_type s
+               | _ -> false) ->
+           require_feature env expr.loc Capabilities.Integer_rack_arithmetic;
+           integer_arithmetic expr.loc op (match lt with Rack _ -> lt | _ -> rt)
+       | (Lt | Le | Gt | Ge | Eq | Ne)
+         when (match (lt, rt) with
+               | (Rack s | Scalar s), (Rack s' | Scalar s') -> s = s' && is_integer_scalar_type s && s <> SUint8
+               | _ -> false) -> (
+           match (lt, rt) with
+           | Scalar _, Scalar _ -> Scalar SBool
+           | Rack (SUint | SUint16 | SInt8 | SUint64), _ | _, Rack (SUint | SUint16 | SInt8 | SUint64) ->
+               type_errorf expr.loc "wasm-simd128 compares u8 and signed i16, i32 and i64 lanes; this rack has unsigned or i8 lanes"
+           | _ -> Mask)
        | (Add | Sub) when lt = rt && is_integer_rack lt ->
            require_feature env expr.loc Capabilities.Integer_rack_arithmetic;
            lt
@@ -474,7 +581,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall (("min" | "max") as name, [a; b])
     when not (is_integer_literal a && is_integer_literal b)
-         && is_integer_rack (infer_expr env (if is_integer_literal a then b else a)) ->
+         && (let t = infer_expr env (if is_integer_literal a then b else a) in is_integer_rack t || t = Rack SUint8) ->
       (* An integer literal takes the element type of the integer rack beside it. *)
       require_feature env expr.loc Capabilities.Integer_rack_arithmetic;
       let rack, other = if is_integer_literal a then (b, a) else (a, b) in
@@ -484,7 +591,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
         if not (literal_fits t value) then
           type_errorf other.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type t))
       end
-      else if infer_expr env other <> t then
+      else if (match infer_expr env other with o -> o <> t && o <> element_type t) then
         type_errorf expr.loc "%s requires two equal integer racks" name;
       t
 
@@ -517,13 +624,22 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot") as name, [a; b]) ->
       require_feature env expr.loc Capabilities.Integer_rack_bits;
-      let t = infer_expr env a in
+      (* An integer literal takes the type of the integer rack beside it. *)
+      let rack, other = if is_integer_literal a && not (is_integer_literal b) then (b, a) else (a, b) in
+      let t = infer_expr env rack in
       if lane_bits t = None then
-        type_errorf a.loc "%s requires integer racks, got %s" name (show_concise t);
-      let other = infer_expr env b in
-      if other <> t then
-        type_errorf b.loc "%s requires two equal integer racks, got %s and %s" name
-          (show_concise t) (show_concise other);
+        type_errorf rack.loc "%s requires integer racks, got %s" name (show_concise t);
+      if is_integer_literal other then begin
+        let value = integer_literal_value other in
+        if not (literal_fits t value) then
+          type_errorf other.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type t))
+      end
+      else begin
+        let o = infer_expr env other in
+        if o <> t then
+          type_errorf other.loc "%s requires two equal integer racks, got %s and %s" name
+            (show_concise t) (show_concise o)
+      end;
       t
 
   | ECall (("shift_bits_left" | "shift_bits_right" | "shift_bits_right_signed") as name, [x; count]) ->
@@ -561,6 +677,16 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | ECall ("bitmask", args) ->
       type_errorf expr.loc "bitmask expects exactly one argument, got %d" (List.length args)
 
+  | ECall (("abs" | "floor" | "ceil" | "trunc" | "nearest") as name, [ x ]) -> (
+      match infer_expr env x with
+      | Rack SFloat -> Rack SFloat
+      | Rack (SInt8 | SInt16 | SInt | SInt64 | SUint8) as t when name = "abs" -> t
+      | t -> type_errorf expr.loc "%s of %s is not available" name (show_concise t))
+  | ECall ("select", [ c; a; b ]) when (match infer_expr env a with Rack SFloat -> false | Rack _ -> true | _ -> false) ->
+      let a_t = infer_expr env a and b_t = infer_expr env b in
+      if infer_expr env c <> Mask then type_errorf c.loc "select chooses lanes by a mask";
+      if a_t <> b_t then type_errorf expr.loc "select arms have types %s and %s" (show_concise a_t) (show_concise b_t);
+      a_t
   | ECall (name, args) -> (
       match Hashtbl.find_opt env.funcs name with
       | Some (param_types, ret) ->
@@ -585,24 +711,22 @@ let rec infer_expr env (expr: Ast.expr) : t =
       let t = infer_expr env e in
       get_field_type t field expr.loc
 
-  | ERecord _ -> unavailable_invariant Capabilities.Expr_record
+  | ERecord (name, _) ->
+      type_errorf expr.loc "a %s literal is a slow-tier value; crunches and rakes compute on racks" name
 
   | EWith _ -> unavailable_invariant Capabilities.Expr_record_update
 
   | ELaneIndex -> Rack SInt
   | ELanes -> Scalar SInt
 
-  | EExtract _ -> unavailable_invariant Capabilities.Expr_extract
-
-  | EInsert _ -> unavailable_invariant Capabilities.Expr_insert
 
   | EReduce (operation, operand) ->
       let operand_t = infer_expr env operand in
       (match operation, operand_t with
       | (RAdd | RMul | RMin | RMax), Rack SFloat -> Scalar SFloat
-      | (RAnd | ROr), _ ->
-          type_errorf expr.loc
-            "Logical mask reductions are specified but not implemented in this f32 compiler slice"
+      | (RAnd | ROr), Mask -> Scalar SBool
+      | (RAnd | ROr), actual ->
+          type_errorf expr.loc "all and any reduce a mask, got %s" (show_concise actual)
       | (RAdd | RMul | RMin | RMax), actual ->
           type_errorf expr.loc
             "Floating-point reduction requires float rack, got %s"
@@ -630,7 +754,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
              (String.concat " and " (List.map show_concise types)))
   | EShift _ | ERotate _ -> unavailable_invariant Capabilities.Expr_shift_rotate
 
-  | EGather _ -> unavailable_invariant Capabilities.Expr_gather
+  | EGather _ -> type_errorf expr.loc "a gather is written view[indices] in a run"
   | EScatter _ -> unavailable_invariant Capabilities.Expr_scatter
   | ECompress _ -> unavailable_invariant Capabilities.Expr_compress
   | EExpand _ -> unavailable_invariant Capabilities.Expr_expand
@@ -662,6 +786,51 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | ELambda _ -> unavailable_invariant Capabilities.Expr_lambda
   | EPipe _ -> unavailable_invariant Capabilities.Expr_pipeline
   | EFusedPipe _ -> unavailable_invariant Capabilities.Expr_fused_pipeline
+  | EIf (c, a, b) ->
+      let condition = infer_expr env c in
+      (match condition with
+       | Mask | Scalar SBool -> ()
+       | t -> type_errorf c.loc "an if condition is a mask or a uniform bool, got %s" (show_concise t));
+      let a_t, b_t =
+        if is_integer_literal a && not (is_integer_literal b) then let b_t = infer_expr env b in (b_t, b_t)
+        else if is_integer_literal b && not (is_integer_literal a) then let a_t = infer_expr env a in (a_t, a_t)
+        else (infer_expr env a, infer_expr env b)
+      in
+      if not (compatible a_t b_t) then
+        type_errorf expr.loc "if branches have types %s and %s" (show_concise a_t) (show_concise b_t);
+      (match a_t with
+       | Rack _ | Mask -> ()
+       | Scalar _ when condition = Scalar SBool -> ()
+       | t -> type_errorf expr.loc "a lane-wise if chooses racks, got %s" (show_concise t));
+      (match (a_t, b_t) with Rack _, _ -> a_t | _, Rack _ -> b_t | _ -> a_t)
+  | EExtract (rack, lane) -> (
+      match infer_expr env rack with
+      | Rack s ->
+          if not (is_integer_literal lane) then type_errorf lane.loc "a lane is chosen by an integer literal";
+          Scalar s
+      | t -> type_errorf rack.loc "extract takes a rack, got %s" (show_concise t))
+  | EInsert (rack, lane, value) -> (
+      match infer_expr env rack with
+      | Rack s as t ->
+          if not (is_integer_literal lane) then type_errorf lane.loc "a lane is chosen by an integer literal";
+          (match value.v with
+           | EInt _ | EFloat _ | EBroadcast { v = EInt _ | EFloat _; _ } -> ()
+           | _ -> (
+               match infer_expr env value with
+               | Scalar s' when s' = s -> ()
+               | v -> type_errorf value.loc "insert takes a uniform %s, got %s" (show_concise (Scalar s)) (show_concise v)));
+          t
+      | t -> type_errorf rack.loc "insert takes a rack, got %s" (show_concise t))
+  | EConvert (Convert_bitcast, target, operand) -> (
+      match typ_to_t env target with
+      | Rack _ as target_t -> (
+          match infer_expr env operand with
+          | Rack _ | Mask | Scalar _ -> target_t
+          | t -> type_errorf operand.loc "bitcast reinterprets a rack, got %s" (show_concise t))
+      | t -> type_errorf target.loc "in vector code bitcast targets a rack type, got %s" (show_concise t))
+  | EString _ | EIndex _ | EConvert _ | EArray _ ->
+      type_errorf expr.loc "%s belongs to runs and slow definitions"
+        (Capabilities.id (Capabilities.feature_of_expr expr.v))
 
 (** Infer binary operation result type *)
 and infer_binop t1 t2 op loc =
@@ -696,7 +865,9 @@ and infer_unop t op loc =
   match op with
   | Neg | FNeg ->
       if is_float_rack t || is_float_scalar t then t
-      else type_errorf loc "Unary minus requires float rack/scalar, got %s" (show_concise t)
+      else (match t with
+        | Rack (SInt8 | SInt16 | SInt | SInt64) | Scalar (SInt8 | SInt16 | SInt | SInt64) -> t
+        | _ -> type_errorf loc "Unary minus requires a float or signed integer rack/scalar, got %s" (show_concise t))
   | Not ->
       if t = Mask then Mask
       else type_errorf loc "Logical not requires mask operand, got %s" (show_concise t)
@@ -707,7 +878,7 @@ and infer_unop t op loc =
 let pure_builtin_functions =
   [ "sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs";
     "floor"; "ceil"; "min"; "max"; "pow"; "atan2"; "select";
-    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32";
+    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32"; "log2"; "trunc"; "nearest"; "tanh"; "relaxed_madd"; "relaxed_nmadd"; "relaxed_min"; "relaxed_max";
     "bit_and"; "bit_or"; "bit_xor"; "bit_andnot"; "shift_bits_left"; "shift_bits_right"; "shift_bits_right_signed" ]
 
 (** Validate the source-level fused-binding contract.
@@ -751,6 +922,11 @@ let rec fused_contract_rejection (expr: Ast.expr) : string option =
   | EFma (a, b, c) -> first_rejection [a; b; c]
   | EOuter _ -> Some "outer product is not an inlineable expression shape"
   | ETuple _ -> Some "tuple construction is not an inlineable expression shape"
+  | EString _ -> Some "a string is not a rack value"
+  | EIndex _ -> Some "indexing reads memory"
+  | EConvert _ -> Some "a scalar conversion is not a rack operation"
+  | EArray _ -> Some "array construction is not an inlineable expression shape"
+  | EIf (c, a, b) -> first_rejection [c; a; b]
 
 (** Check a statement, return updated env *)
 let rec check_stmt env (stmt: stmt) : env =
@@ -839,6 +1015,26 @@ let rec check_stmt env (stmt: stmt) : env =
   | SOver over ->
       let _ = check_over_result env stmt.loc over in
       env
+  | SLoop ({ loop_repeat = true; _ } as l) ->
+      if not (is_integer_literal l.loop_from && is_integer_literal l.loop_to) then
+        type_errorf stmt.loc "repeat's bounds are integer literals";
+      let body_env = { env with vars = Hashtbl.copy env.vars } in
+      Hashtbl.replace body_env.vars l.loop_var (Scalar SInt);
+      List.iter (fun s -> ignore (check_stmt body_env s)) l.loop_body;
+      env
+  | SUniform b ->
+      if Hashtbl.mem env.vars b.bind_name then
+        type_errorf stmt.loc "Cannot rebind '%s' (SSA violation, use := for mutable storage)" b.bind_name;
+      let t = infer_expr env b.bind_expr in
+      (match t with
+       | Scalar _ -> ()
+       | t -> type_errorf stmt.loc "<%s> is a uniform scalar, but its value is %s" b.bind_name (show_concise t));
+      Option.iter (fun ty -> let d = typ_to_t env ty in if d <> t then type_errorf stmt.loc "Type mismatch: expected %s, got %s" (show_concise d) (show_concise t)) b.bind_type;
+      Hashtbl.add env.vars b.bind_name t;
+      env
+  | SStore _ | SReturn _ | SYield _ | SBreak | SContinue | SIf _ | SWhile _ | SLoop _ ->
+      type_errorf stmt.loc "%s is not available here"
+        (Capabilities.id (Capabilities.feature_of_stmt stmt.v))
 
 and check_over_result env statement_loc over =
   let count_t = infer_expr env over.over_count in
@@ -883,6 +1079,7 @@ let rec check_predicate env (pred: predicate) : unit =
   | PCmp (l, cmp, r) ->
       let lt = infer_expr env l in
       let rt = infer_expr env r in
+      require_marked pred.loc l lt r rt;
       let op = match cmp with
         | CLt -> Lt | CLe -> Le | CGt -> Gt | CGe -> Ge | CEq -> Eq | CNe -> Ne
       in
@@ -960,6 +1157,10 @@ let rec check_masked_expr env (expr: expr) =
   | ELambda (_, body) -> check_masked_expr env body
   | EPipe (l, r) | EFusedPipe (l, r) ->
       check_masked_expr env l; check_masked_expr env r
+  | EString _ | EArray _ -> ()
+  | EIndex (b, i, _) -> check_masked_expr env b; check_masked_expr env i
+  | EConvert (_, _, e) -> check_masked_expr env e
+  | EIf (c, a, b) -> check_masked_expr env c; check_masked_expr env a; check_masked_expr env b
 
 and check_masked_stmt env (stmt: stmt) =
   match stmt.v with
@@ -969,6 +1170,9 @@ and check_masked_stmt env (stmt: stmt) =
   | SLocBind _ | SAssign _ ->
       require_feature env stmt.loc Capabilities.Masked_mutation
   | SOver _ -> require_feature env stmt.loc Capabilities.Masked_loop
+  | SLoop _ | SWhile _ -> require_feature env stmt.loc Capabilities.Masked_loop
+  | SUniform _ | SStore _ | SReturn _ | SYield _ | SBreak | SContinue | SIf _ ->
+      require_feature env stmt.loc Capabilities.Masked_mutation
 
 (** Check through block *)
 let check_through env (th: through) : t =
@@ -1218,8 +1422,21 @@ let check_run env _name params result body loc =
     type_errorf loc "Run result '%s' type mismatch: expected %s, got %s"
       result.result_name (show_concise expected_t) (show_concise actual_t)
 
+(** C's reserved words. A crunch, rake or run is a C function with its own
+    name, so its name can't be one of these. *)
+let c_reserved_words =
+  [ "auto"; "break"; "case"; "char"; "const"; "continue"; "default"; "do"; "double"; "else"; "enum";
+    "extern"; "float"; "for"; "goto"; "if"; "inline"; "int"; "long"; "register"; "restrict"; "return";
+    "short"; "signed"; "sizeof"; "static"; "struct"; "switch"; "typedef"; "union"; "unsigned"; "void";
+    "volatile"; "while"; "bool"; "true"; "false"; "main" ]
+
 (** Check a definition *)
 let check_def env (def: def) =
+  (match def.v with
+   | DCrunch (name, _, _, _) | DRake (name, _, _, _, _, _, _) | DRun (name, _, _, _)
+     when List.mem name c_reserved_words ->
+       type_errorf def.loc "'%s' is a C keyword, and vector code is a C function of its own name: choose another" name
+   | _ -> ());
   match def.v with
   | DStack _ | DSingle _ | DType _ ->
       ()  (* already registered *)
@@ -1228,7 +1445,9 @@ let check_def env (def: def) =
   | DRake (name, params, result, setup, tines, throughs, sweep) ->
       check_rake env name params result setup tines throughs sweep def.loc
   | DRun (name, params, result, body) ->
-      check_run env name params result body def.loc
+      if not (run_needs_tier params result body) then check_run env name params result body def.loc
+  | DRecord _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
+      ()  (* the slow tier checks these (Tier) *)
 
 (** Check a module *)
 let check_module env (m: module_) =

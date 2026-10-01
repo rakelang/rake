@@ -20,6 +20,8 @@ run "Dune unit tests" dune runtest --force
 run "target profiles" bash test/target_profile_test.sh
 run "native semantic differential runtime" bash test/native_backend_test.sh
 run "AArch64 NEON semantic differential runtime" bash test/neon_backend_test.sh
+run "whole-program differential under wasmtime" bash test/program_test.sh
+run "wasm32 run boundary and C interop" bash test/abi_test.sh
 run "compiler/Tree-sitter parser differential" bash test/parser_differential.sh
 run "website" bash tools/check_website.sh
 

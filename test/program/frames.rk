@@ -1,0 +1,23 @@
+~~ Large slow aggregates live in Rake's frame stack, not C's: two hundred
+~~ nested calls each holding a two-kilobyte array exceed a 64 KiB C stack,
+~~ and each frame keeps its own array.
+
+state depth_seen: i32 := 0
+
+slow fill(depth: i32) -> i32:
+  local: [512]i32 := [0; 512]
+  for i from 0 up to 512:
+    local[i] <- depth * 1000 + i
+  depth_seen <- max(depth_seen, depth)
+  inner: i32 := 0
+  if depth < 200:
+    inner <- fill(depth + 1)
+  ~~ The callee's frame must not have touched this one.
+  total: i32 := 0
+  for i from 0 up to 512 by 37:
+    total <- wrap_add(total, local[i])
+  return wrap_add(wrap_mul(inner, 31), total)
+
+slow main() -> i32:
+  let result = fill(0)
+  return bit_and(wrap_add(result, depth_seen), 2147483647)

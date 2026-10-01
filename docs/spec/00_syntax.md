@@ -1,45 +1,78 @@
-# Rake source syntax
+# Syntax
 
-This document defines Rake's canonical source syntax. The spelling is part of
-the language contract: diagnostics, examples, editor tooling, and compiler
-capability reports use the same forms.
+This page is the reference for Rake's source syntax: its layout, names,
+literals, definitions, types, statements and expressions. The other pages
+define what each form means. A form that parses can still be unavailable on a
+target, and the compiler reports that separately from a syntax error.
 
-Indentation is structural. A line ending in `:` introduces an indented body,
-and every statement in that body uses the same indentation depth. `~~` starts
-a line comment. Identifiers begin with an ASCII letter or underscore and
-continue with ASCII letters, digits, or underscores.
+## Layout
 
-## The notation carries machine meaning
+Indentation is part of the grammar. A line that ends in `:` opens a body, and
+the lines of that body are indented further than the line that opened it,
+all by the same amount. A body ends when a line returns to an outer
+indentation. Indentation uses spaces, and a tab in indentation is an error.
 
-Rake keeps three unusual marks because each makes a performance-relevant fact
-visible where code is read:
+Lines inside parentheses, brackets or braces continue the line they started
+on, so a long parameter list can be spread over several lines. A line that
+ends in `{` also needs a more deeply indented line after it, so a stack or
+record body spread over lines is indented.
+Blank lines and comment-only lines don't affect indentation.
 
-- `<value>` is uniform: one scalar value shared by every lane. The brackets
-  appear both in declarations, such as `<scale: f32>`, and uses, such as
-  `<scale>`. Seeing many scalar markers in a kernel should provoke the
-  question: could these values vary by lane, or be stored and processed more
-  efficiently?
-- `#active` is a tine: one Boolean hole-or-bar decision for every lane. The
-  hash resembles a perforated mask, so values pass through its open lanes.
-- `| result <| expression` binds one stage of verified vector flow. Read the
-  arrow from right to left: the expression flows into `result`. The leading
-  bar aligns consecutive stages and marks the region whose fusion contract the
-  compiler must prove.
+`~~` starts a comment that runs to the end of the line. `(*` and `*)` enclose
+a block comment, and block comments nest.
 
-These marks do not abbreviate arbitrary punctuation-heavy grammar. Each has
-one stable role. Words carry control structure; the glyphs expose the machine
-shape that ordinary scalar-looking syntax would hide.
+## Names
+
+An identifier starts with a lowercase letter or an underscore and continues
+with letters, digits and underscores. A name that starts with an uppercase
+letter is a type name, used for stacks and records, such as `Samples`. A lone
+`_` is the default arm of a sweep, not a name. These words are reserved and can't be used as names:
+
+```text
+and bool bools break by const continue crunch else embed extern f32 f32s f64
+f64s false fma for from i16 i16s i32 i32s i64 i64s i8 i8s if in into lanes
+let mask mut not or pack ptr rake record repeat return rotate_left
+rotate_right run shift_left shift_right shuffle slow stack state sweep then
+through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked up using
+when while yield
+```
+
+`wrap` and `bitcast` are conversions when a parenthesis follows them, as in
+`wrap(u8, x)`, and ordinary names otherwise.
+
+## Literals
+
+Integers are written in decimal or in hexadecimal with `0x`. A decimal
+literal up to 2^64 - 1 is accepted, and one above 2^63 - 1 is read as the bit
+pattern of a `u64`. Floats need a decimal point or an exponent: `1.0`, `2.`
+and `1e-3`. `true` and `false` are the Boolean literals. A string literal in
+double quotes names a file after `from`, or passes text to a C function. Its
+escapes are kept as written, for C to read.
+
+A minus sign before a literal makes it negative, and a minus sign between two
+operands subtracts, so `n-1` and `n - 1` mean the same. A literal's type comes
+from the value beside it or the type expected where it stands: in `x * 2`
+with `x` an `f32s`, the `2` is a float rack constant.
+
+Three marks carry machine meaning, and each has one role:
+
+- `<value>` is uniform, one scalar shared by every lane. The brackets appear
+  where a uniform is declared, as in `<scale: f32>`, and where it is used, as
+  in `<scale>`. They also mark literals and elements used as uniforms:
+  `<0.5>`, `<-1>`, `<config.limit>` and `<weights[i]>`. A broadcast from a
+  scalar into a rack is therefore always visible in the source.
+- `#active` is a tine, a named lane mask. The `#` sits directly against the
+  name.
+- `| result <| expression` binds one stage of a fused computation. Read it
+  from right to left: the expression flows into `result`. The leading bar
+  lines up consecutive stages.
 
 ## Definitions
 
-Every nonempty file contains one or more definitions:
+A file holds one or more definitions:
 
-```text
-stack Samples {
-  f32: value;
-  u8: quality;
-}
-
+<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+```rake
 crunch scale(values: f32s, <factor: f32>) -> f32s:
   return values * <factor>
 
@@ -52,184 +85,167 @@ rake safe_root(values: f32s) -> f32s:
   return sweep:
     | #valid => rooted
     | _      => <0.0>
-
-run scale_values(
-  input: pack Samples,
-  <count: i64>,
-  <factor: f32>
-) -> f32:
-  for chunk in input using f32s up to <count>:
-    yield chunk.value * <factor>
 ```
 
-`stack` declares structure-of-arrays storage. `crunch` describes straight-line
-rack computation. `rake` adds explicit lane predication. `run` traverses pack
-storage and yields output elements. `type` aliases and `single` schemas are
-reserved for later contracts and are not source forms.
+| Definition | Meaning | Defined in |
+| --- | --- | --- |
+| `crunch name(parameters) -> T:` | straight-line rack computation | [Fused bindings](04_fused_bindings.md) |
+| `rake name(parameters) -> T:` | rack computation with named lane masks | [Tines, through and sweeps](03_tines_and_through.md) |
+| `run name(parameters) -> T:` | vector code over memory | [Packs and runs](02_packs_and_run.md) |
+| `stack Name { T: field, field; }` | the columns of structure-of-arrays storage | [Packs and runs](02_packs_and_run.md) |
+| `slow name(parameters) -> T:` | scalar code | [The slow tier](09_slow_tier.md) |
+| `extern slow name(parameters) -> T from "file.h"` | a C function | [The slow tier](09_slow_tier.md) |
+| `record Name { T: field; }` | a record of fields | [The slow tier](09_slow_tier.md) |
+| `state name: T := value`, `state name: T` | module state | [The slow tier](09_slow_tier.md) |
+| `embed name from "file"` | a file's bytes | [The slow tier](09_slow_tier.md) |
+| `const name: T = value` | a compile-time constant | [The slow tier](09_slow_tier.md) |
 
-Stack declarations put each stored type before the columns that share it:
-`f32: position, velocity, depth;`. The grouping makes storage density scannable
-down the left edge and avoids repeating a type on every field. Plural rack
-types remain visually related—`f32` is one stored element and `f32s` is one
-target-native rack—without a verbose two-word type construction.
+A stack or record groups its fields by type, with the type first:
+`f32: position, velocity;` gives two `f32` columns. A stack column is a
+scalar type, and a record field can be any type. A C struct is declared as
+`record Name from "file.h" { ... }`.
 
 ## Parameters and results
 
-Parameters are comma-separated inside parentheses:
+Parameters are written `name: type` and separated by commas. A uniform scalar
+parameter is written `<name: type>`. A result type follows `->`. A crunch or
+rake returns the value of its `return` statement or sweep. A run declared
+`-> f32` yields racks from a traversal and writes their lanes to an `f32`
+output stream, and a run without a result type writes through its `mut`
+parameters instead. A slow function without a result type returns nothing.
+A crunch's body ends with its `return`.
 
-- `values: f32s` passes a rack;
-- `input: pack Samples` passes a pack descriptor; and
-- `<count: i64>` passes a uniform scalar.
-
-The type comes after a parameter name because the name remains the natural
-reading anchor. `pack Samples` is prefix construction: it reads as "a pack of
-Samples" and composes consistently with forms such as `mut pack Samples`.
-
-A `crunch` or `rake` result annotation names the returned scalar or rack type.
-A `run` result annotation names the stored output element type. Thus a run
-declared `-> f32` yields one `f32s` rack per full iteration and writes its
-active lanes to an `f32` output column.
-
-`return expression` completes a `crunch` or straight-line result. `return
-sweep:` completes a predicated `rake`. `yield expression` emits one rack from a
-pack traversal. Keeping `return` and `yield` distinct prevents a run's stream
-of output racks from looking like the last value of an ordinary function.
+A crunch, rake or run may call crunches and rakes. The call is inlined, so
+calls nest at most 32 deep and recursion is rejected.
 
 ## Types
 
-The singular primitive types are `f32`, `f64`, `i8`, `i16`, `i32`, `i64`,
-`u8`, `u16`, `u32`, `u64`, and `bool`. Appending `s` denotes one physical rack
-of that element type: `f32s`, `u8s`, `u32s`, and so on. Singular types in a
-stack declaration describe stored column elements; plural types in executable
-code describe target-native registers.
+| Type | Meaning |
+| --- | --- |
+| `f32` `f64` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `bool` | a scalar |
+| `f32s` `u8s` `i16s` `i32s` `u32s` `i64s` `u64s` | a rack: one register of lanes of that element |
+| `mask` | a lane mask |
+| `pack Name`, `mut pack Name` | the columns of a stack, read or written |
+| `[]T`, `mut []T` | a view: elements with a runtime count |
+| `[N]T` | an array of `N` elements, or of `N` racks when `T` is a rack |
+| `ptr T` | a C pointer |
+| `Name` | a record |
+| `mut T` | a parameter the callee writes |
 
-The remaining source types are `mask`, `pack Name`, and `stack Name`. Compound,
-tuple, function, and unit types require their own published contracts before
-they become source forms.
+`f32s` racks work on every production profile. The integer racks `u8s`,
+`i16s`, `i32s`, `u32s`, `i64s` and `u64s` are implemented for `wasm-simd128`
+only. The types `i8s`, `u16s`, `f64s` and `bools` parse but have no
+implementation yet, and neither does `stack Name` as a type: a stack is a
+column layout, used through `pack Name`.
 
-## Bindings and statements
-
-The statement forms are:
+## Statements
 
 | Form | Meaning |
 | --- | --- |
-| `let name = expression` | inferred immutable binding |
-| `let name: type = expression` | annotated immutable binding |
-| `name := expression` | inferred mutable location binding |
-| `name: type := expression` | annotated mutable location binding |
-| `name <- expression` | location assignment |
-| fused-flow binding | verified pure binding; form below |
-| annotated fused-flow binding | verified binding with an explicit result type |
-| `return expression` | ordinary function result |
-| `yield expression` | one output rack from a run traversal |
-| `expression` | expression statement |
+| `let name = e`, `let name: T = e` | an immutable binding |
+| `let <name: T> = e` | a uniform scalar in vector code |
+| `name := e`, `name: T := e`, `(name: T) := e` | a mutable location |
+| `place <- e` | assignment to a location, field, element or memory |
+| `\| name <\| e`, `\| name: T <\| e` | a fused binding |
+| `return e`, `return` | the result of a crunch, or leaving a slow function |
+| `yield e` | the rack a traversal produces for its chunk |
+| `if c:` … `else if c:` … `else:` | a conditional statement |
+| `while c:` | a loop in slow code |
+| `for i from a up to b:`, `for i from a up to b by s:` | a counted loop, written `for <i: T> from <a> up to <b>:` in vector code |
+| `repeat <i: T> from <0> up to <4>:` | a vector loop with constant bounds, unrolled when it is small |
+| `for chunk in p using f32s up to <n>:` | a traversal of a pack |
+| `break`, `continue` | inside a slow loop |
+| `e` | a call evaluated for its effect |
 
-A fused-flow binding is written as one of these forms:
+A name is bound once in its function and can't be rebound. A mutable location
+changes with `<-`. [Control flow](06_control_flow.md) defines the
+conditionals and loops, [Packs and runs](02_packs_and_run.md) the traversal,
+and [the slow tier](09_slow_tier.md) the scalar statements.
 
-```text
-| name <| expression
-| name: type <| expression
+## Tines, through and sweeps
+
+A rake names its lane masks with tines, computes values under them with
+`through`, and combines the results with a sweep. A rake's body is, in order,
+any `let` bindings, its tines, its through blocks and the sweep:
+
+```rake
+rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
+  tine #above when values > <low>
+  tine #over when values > <high>
+
+  through (#above and not #over) else <0.0> into shifted:
+    values - <low>
+
+  return sweep:
+    | #over => <high> - <low>
+    | _     => shifted
 ```
 
-It is pure and may neither call unknown code nor access
-memory. Every stage in one contiguous sequence of `| ... <| ...` bindings must
-remain inline, spill-free, and represented by native rack operations. The
-backend rejects the definition if it cannot preserve that contract. A fused
-name is a readable alias, not a storage, evaluation, instruction, or rounding
-boundary. Ordinary arithmetic lets the backend choose the fastest legal graph
-for the target; `fma(a, b, c)` is written only when correctness requires its
-one-rounding operation.
-
-## Pack traversal
-
-The canonical traversal header is:
-
-```text
-for chunk in input using f32s up to <count>:
-  yield chunk.value
-```
-
-`input` is a pack, `f32s` is the physical traversal domain, and `<count>` is a
-uniform logical-record bound. The rack type fixes how many records each full
-iteration processes on the selected target. A stack column with the same
-element width becomes a rack directly; a narrower column remains a storage
-slice until `widen(column)` converts it explicitly.
-
-The words make the iteration read in execution order: bind `chunk` from
-`input`, use `f32s` registers, stop at the scalar bound. No pipe operator is
-needed merely to introduce the loop binding.
-
-## Tines, through regions, and sweeps
-
-A tine declaration names a lane mask:
-
-```text
-tine #active when values >= <threshold>
-```
-
-Predicates use comparisons `< <= > >= = !=`, tine references, parentheses,
-and `not`, `and`, and `or`. Arithmetic inside comparisons uses the ordinary
-numeric operators.
-
-A through region computes a candidate only for lanes admitted by its tine:
-
-```text
-through #active else <0.0> into adjusted:
-  values - <threshold>
-```
-
-`else` supplies a safe operand or passthrough for inactive lanes; `into` names
-the resulting candidate. A through body may contain immutable or fused-flow
-bindings before its final expression.
-
-A sweep makes the result total:
-
-```text
-return sweep:
-  | #active => adjusted
-  | _       => values
-```
-
-Arms are considered from top to bottom. Every sweep ends with exactly one `_`
-arm, and no arm follows it. The `|` aligns alternatives visually; `=>` means
-that lanes selected on the left receive the value on the right.
+A tine's predicate uses comparisons, other tines, parentheses, `not`, `and`
+and `or`, and arithmetic and fields on its operands. It contains no calls.
+A through block names one tine, as in `through #active`, or a predicate in
+parentheses, as in `through (#active and not #edge)`. `else` gives the value
+of the lanes outside the tine, a uniform or a literal, and `into` names the
+result. A sweep
+takes the first arm whose tine holds for each lane and ends with one `_` arm
+for the remaining lanes. [Tines, through and sweeps](03_tines_and_through.md)
+defines them.
 
 ## Expressions
 
-Primary expressions are literals, identifiers, scalar markers, the lane index
-`@`, `lanes`, calls, field access, indexing, and parenthesized expressions.
-Arithmetic uses `+`, `-`, `*`, `/`, and `%`; comparisons use `<`, `<=`, `>`,
-`>=`, `=`, and `!=`; Boolean composition uses `not`, `and`, and `or`.
+From the lowest precedence to the highest:
 
-Explicit rack operations use names rather than cryptic operator ligatures:
+| Form | Notes |
+| --- | --- |
+| `if c then a else b` | a value chosen by a condition or by a mask |
+| `a or b` | Boolean or mask |
+| `a and b` | Boolean or mask |
+| `a = b`, `a != b`, `a < b`, `a <= b`, `a > b`, `a >= b` | comparisons |
+| `a + b`, `a - b` | |
+| `a * b`, `a / b`, `a % b` | `%` is integer remainder |
+| `-a`, `not a` | |
+| `a.field`, `a[i]`, `a[unchecked i]` | fields and indexing |
+| literals, names, marks, calls, `(e)` | |
 
-- reductions: `sum`, `product`, `minimum`, `maximum`, `all`, and `any`;
-- inclusive scans: `scan_sum`, `scan_product`, `scan_minimum`, and
-  `scan_maximum`;
-- rearrangements: `shuffle`, `zip_low`, `shift_left`, `shift_right`,
-  `rotate_left`, and `rotate_right`;
-- conversion: `widen`; and
-- fused arithmetic: `fma`.
+A comparison of floats is false when either operand is NaN, and that includes
+`!=`: Rake's `!=` means "ordered and different". Integer arithmetic in slow
+code traps on overflow, and the wrapping forms `wrap_add`, `wrap_sub` and
+`wrap_mul` are explicit. A rack's integer arithmetic wraps, as its hardware
+does.
 
-Named operations are searchable, pronounceable, and leave `<...>`, `#...`, and
-`<|` as the language's small, coherent visual vocabulary.
+Other primary forms are calls `f(a, b)`, conversions `i32(x)` (checked),
+`wrap(u8, x)` (the low bits) and `bitcast(u32, x)` (the same bits), record
+literals `Name { field: e }`, and array literals `[a, b, c]` and `[e; n]`.
 
-Binary precedence runs from lowest to highest: `or`; `and`; comparisons;
-addition and subtraction; multiplication, division, and modulo. Unary `-` and
-`not` bind above binary operators. Calls, fields, and indexing bind most
-tightly.
+Rack operations have names rather than operators:
 
-## Delimiters
+| Operations | Page |
+| --- | --- |
+| `sqrt` `abs` `floor` `ceil` `trunc` `nearest` `min` `max` `exp` `log` `log2` `tanh` `fma` `select` | [Racks and targets](01_racks_targets_and_abi.md) |
+| `relaxed_madd` `relaxed_nmadd` `relaxed_min` `relaxed_max` | [Racks and targets](01_racks_targets_and_abi.md) |
+| `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `bitmask` | [Racks and targets](01_racks_targets_and_abi.md) |
+| `bit_and` `bit_or` `bit_xor` `bit_andnot` `shift_bits_left` `shift_bits_right` `shift_bits_right_signed` | [Racks and targets](01_racks_targets_and_abi.md) |
+| `shuffle(a, [3, 2, 1, 0])`, `shuffle(a, b, [0, 4, 1, 5])` | [Racks and targets](01_racks_targets_and_abi.md) |
+| `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](07_reductions_and_scans.md) |
+| `sum` `product` `minimum` `maximum` `all` `any` | [Reductions and scans](07_reductions_and_scans.md) |
+| `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | [Reductions and scans](07_reductions_and_scans.md) |
+| `widen(chunk.column)` | [Packs and runs](02_packs_and_run.md) |
 
-The grammar uses `()` for parameter lists, calls, grouping, and tuples; `{}`
-for stack bodies and records; `[]` for indices and static shuffle lists; `,`
-for lists; `;` to terminate type-first stack groups; and `:` for annotations
-and indented bodies. `#` introduces tines, `< >` mark uniform scalars, `@`
-names lanes, `.` selects fields, and `<|`, `=>`, `<-`, and `:=` are indivisible
-tokens.
+A shuffle's lane indices and the lane of `extract` and `insert` are integer
+literals, because the instruction encodes them. Slow code has its own scalar
+functions, listed in [the slow tier](09_slow_tier.md).
 
-Parser acceptance is not native acceptance. After parsing and type checking,
-the selected target independently proves rack representation, safe masking,
-fusion, register allocation, ABI, and object-code restrictions. A capability
-report must distinguish an unavailable semantic or target contract from a
-syntax error.
+These forms parse but have no implementation on any profile: `@` (the lane
+index), `lanes` (the lane count), `zip_low`, `shift_left`, `shift_right`,
+`rotate_left` and `rotate_right` (lane moves), and the math functions `sin`,
+`cos`, `tan`, `pow` and `atan2`. The compiler rejects a program that uses
+them and says which feature is missing.
+
+## Tokens
+
+`<|`, `=>`, `->`, `<-`, `:=`, `<=`, `>=` and `!=` are single tokens. `<-1.0>`
+is a uniform literal, not `<-` followed by `1.0>`, because a mark around a
+literal is read as one token. Parentheses group and hold parameter lists and
+arguments, braces hold stack and record bodies and record literals, and
+brackets hold indices, array types and literals, and shuffle lane lists.
+`;` ends a field group, and `:` introduces a type or a body.

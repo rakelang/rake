@@ -2,5 +2,6 @@
 ~~ but no current native profile owns a compliant inline vector-sine sequence.
 ~~ Rake must reject this kernel before assembly rather than call a helper or
 ~~ scalarize the rack lane by lane.
-crunch reject_sin values -> result:
+crunch reject_sin(values: f32s) -> f32s:
   | result <| sin(values)
+  return result

@@ -2,171 +2,23 @@
   <img src="docs/wallpaper.png" alt="Rake" width="400">
 </p>
 
-<p align="center">
-  <strong>A vector-first language for CPU SIMD</strong>
-</p>
+# Rake
 
-<p align="center">
-  <a href="https://rake-lang.org">rake-lang.org</a>
-</p>
+Rake is a programming language for SIMD kernels. Its values are racks, one
+vector register each, and the compiler refuses a program it can't compile to
+the registers and instructions the source describes: no split vectors, no
+hidden scalar loops, no helper calls and no spills. The language and its
+documentation are at [rake-lang.org](https://rake-lang.org).
 
-<p align="center">
-  <strong>Release: 0.3.0-alpha.1</strong>
-</p>
+Release: 0.4.0-beta.
 
-## What Rake guarantees
-
-Rake lets a programmer describe the native vector structure of a CPU kernel
-without writing intrinsics or assembly. One live rack occupies one physical
-register of the target profile's vector class. Compilation fails when an
-operation would require split vectors, scalar lanes, hidden helper calls, or
-spills.
-
-The language contract defines which evaluation graphs an ordinary expression
-permits. Rake's typed intermediate representation records the graph selected
-for a target, and the scalar interpreter supplies independent executable
-semantics for explicit operations and graph-stable fixtures. Optimized native
-SSA is the bit-exact reference for a fused expression whose permitted rewrites
-change intermediate rounding. Native machine IR, physical allocation, textual
-assembly, and disassembly establish how that graph executes on the selected
-machine profile.
-
-The production compiler owns source-to-assembly decisions. The system assembler
-encodes Rake's textual assembly into an object file and applies relocations. It
-doesn't select instructions or allocate registers.
-
-## Current status
-
-Rake is an alpha compiler. The parser recognizes a broad language while the
-type checker publishes the source constructs whose semantics it can validate.
-Run `rakec --print-capabilities` for that machine-readable frontend contract
-and `rakec --print-targets` for native profile shapes and implementation status.
-
-The production `x86-avx2` and `aarch64-neon` slices accept `f32s` crunches
-and predicated
-`rake` functions with `f32` scalar parameters. Angle brackets mark a uniform
-scalar at declaration and use, and therefore expose every broadcast boundary.
-Seeing many scalar markers in a kernel should provoke the question: could
-these values vary by lane, or be stored and processed more efficiently? Both
-slices support arithmetic, fused-graph FMA contraction, square root,
-comparisons, mask logic, selection, broadcasts, and source-required FMA.
-The AVX2 slice additionally supports strict f32 reductions and inclusive prefix
-scans, with exact ascending-lane semantics.
-Rake lowers these programs through typed native SSA, target-specific
-instruction selection, no-spill register allocation, and GNU assembly syntax:
-
-```sh
-nix develop --command dune build
-nix develop --command dune exec rakec -- \
-  --emit-native-ir --target x86-avx2 program.rk
-nix develop --command dune exec rakec -- \
-  --emit-asm --target x86-avx2 program.rk
-nix develop --command dune exec rakec -- \
-  --verify-native --target x86-avx2 -o output.o program.rk
-```
-
-`--verify-native` assembles and disassembles the result. Verification rejects
-calls, stack use, rack memory, scalarized rack arithmetic, instructions outside
-the selected profile's allow-list, and an incorrect selected-FMA count. The
-scalar broadcast boundary permits only `vbroadcastss` from an XMM source on
-AVX2 or `dup` from lane zero of an AAPCS64 scalar argument on NEON.
-
-The executable AVX2 and NEON rake slices lower tines to mask SSA, sanitize inactive
-operands before exception-capable instructions, and implement total
-source-priority sweeps with vector blends. The independent interpreter skips
-inactive lanes, and runtime tests compare exact binary32 results while checking
-that inactive invalid operands don't set floating-point exception flags. `run`
-and pack traversal remain frontend-only. The compiler reports that boundary
-directly.
-
-The `wasm-simd128` slice accepts `f32s`, `u8s`, `i16s`, `i32s`, `u32s`, `u64s`
-and `i64s` crunches, including two-rack byte shuffles, `bitmask`, integer
-arithmetic, `dot`, `narrow`, `widen_low`, `widen_high`, `to_f32`, `to_i32`,
-float `min` and `max`,
-bitwise operations and bit shifts, and emits C that spells out its selected
-WebAssembly SIMD instructions as intrinsics. Its byte and integer racks,
-shuffles, bitmasks, conversions, bitwise operations and bit shifts are a
-proposal and aren't available on the other profiles.
-
-Records, tuples, logical mask reductions, reductions and scans outside AVX2,
-rearrangement operations, gather/scatter, compression/expansion, lane
-insertion/extraction, lambdas, expression pipelines, native non-f32 numeric paths,
-and other parsed forms remain unavailable where their contracts or native
-lowerings are incomplete.
-
-## Target profiles
-
-A CPU rack is one fixed-width SIMD register. `x86-sse2` and `aarch64-neon`
-have four f32 lanes in 128 bits, `x86-avx2` has eight in 256 bits, and
-`x86-avx512` has sixteen in 512 bits. The `native` selection resolves the
-strongest production profile implemented for the host. An explicit profile
-produces reproducible cross-target behavior.
-
-The profile catalog describes intended rack shapes independently of production
-backend coverage. At present, `x86-avx2` and `aarch64-neon` have production
-native lowerings, and `wasm-simd128` has a C-emitting lowering for WebAssembly. The compiler rejects other profiles at the native-backend
-boundary. The explicit planned `scalar` profile doesn't claim native SIMD
-registers.
-
-`--width` is a compatibility assertion. It must equal the selected profile's
-f32 lane count and cannot request a split or scalarized rack. The reserved
-`lanes` and `@` expressions mean the profile-derived lane count and zero-based
-lane index; they remain unavailable until their type rules, interpreter
-semantics, native lowering, and verification are complete.
-
-## Why the notation looks this way
-
-Rake uses a small visual vocabulary for facts that ordinary scalar-looking
-syntax tends to hide. `<value>` is uniform across lanes. `#active` is a tine,
-drawn like a perforated mask whose open lanes admit values. `| result <|
-expression` shows verified vector data flowing from the expression into its
-name, while consecutive leading bars align a fused path. Each mark has one
-stable role; words carry the surrounding control structure.
-
-## Fused regions
-
-`| name <| expression` creates an immutable fused binding. A supported fused
-region is a contiguous pure data-flow graph. It contains no calls, spills,
-reloads, hidden scalar lane work, or unsupported instructions. Its live values
-must fit the target's physical register budget.
-
-Names inside that graph are readable aliases rather than evaluation or rounding
-boundaries. The two `advance` bindings below are optimized as
-`positions + velocities * <0.5>`. The AVX2 and NEON backends contract that graph
-to one native FMA and remove the dead multiply. The language permits broader
-cost-directed rewrites such as reassociation, factoring, distribution, and
-common-expression elimination. The current alpha implements transparent alias
-substitution, dead-intermediate removal, and multiply-add contraction; the
-broader optimizer remains roadmap work.
-
-`fma(a, b, c)` is reserved for code whose correctness specifically depends on
-one-rounding fused multiply-add semantics. It records that requirement; it is
-not needed to make the optimizer choose a fast FMA. Rake has no slower
-user-selectable arithmetic mode.
-
-## Language tour
-
-### Uniform rack arithmetic
-
-A `crunch` applies the same computation to every lane. Angle brackets mark a
-scalar literal that is explicitly broadcast into a rack.
-
-<!-- rake-example:crunch:start -->
+<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
 crunch advance(positions: f32s, velocities: f32s) -> f32s:
-  | scaled: f32s <| velocities * <0.5>
-  | result: f32s <| positions + scaled
-  return result
-```
-<!-- rake-example:crunch:end -->
+  | scaled <| velocities * <0.5>
+  | moved  <| positions + scaled
+  return moved
 
-### Safe lane-dependent work
-
-A `rake` names lane masks as tines. The `through` body supplies a candidate for
-active lanes. The final `_` sweep arm defines every remaining lane.
-
-<!-- rake-example:safe-through:start -->
-```rake
 rake safe_root(values: f32s) -> f32s:
   tine #valid when values >= <0.0>
 
@@ -177,53 +29,98 @@ rake safe_root(values: f32s) -> f32s:
     | #valid => rooted
     | _      => <0.0>
 ```
-<!-- rake-example:safe-through:end -->
 
-The corresponding masked operation set is interpreter-executable and
-production-executable on AVX2. Its native SSA contains explicit operand
-sanitizers, and emitted functions use YMM mask operations and blends without
-scalar lane branches.
+`<0.5>` is a uniform, one scalar shared by every lane. `#valid` is a tine, a
+named lane mask, and `through` computes the square root only in its lanes.
+The sweep picks each lane's result. `| name <| expression` binds a stage of a
+fused computation: on AVX2 and NEON, `advance` compiles to one fused
+multiply-add.
 
-### Columnar traversal
+## Targets
 
-A `stack` describes structure-of-arrays fields, a `pack` describes traversed
-storage, and `for ... using ... up to ...` processes it in native-rack chunks.
+| Profile | Rack | What compiles |
+| --- | --- | --- |
+| `x86-avx2` | one 256-bit YMM register, 8 `f32` lanes | `f32s` crunches and rakes, as assembly |
+| `aarch64-neon` | one 128-bit vector register, 4 `f32` lanes | `f32s` crunches and rakes, as assembly |
+| `wasm-simd128` | one `v128`, 4 `f32` lanes | crunches and rakes over float and integer racks, runs over memory, and whole programs with scalar `slow` code, as C |
+| `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
-<!-- rake-example:pack-over:start -->
+`x86-sse2`, `x86-avx512` and `scalar` are planned profiles, and the compiler
+rejects code for them. On `wasm-simd128`, a whole program becomes one C file
+with `int main(void)`, and every selected instruction is written as one
+`wasm_simd128.h` intrinsic.
+
+A whole program has vector runs and scalar slow code. Slow code never holds a
+rack, and a scalar becomes a rack only where it is marked:
+
+<!-- rake-check: run 33 -->
 ```rake
 stack Samples {
   f32: value;
   u8: quality;
 }
 
-run scale_values(
-  input: pack Samples,
-  <count: i64>,
-  <scale: f32>
-) -> f32:
+run weigh(input: pack Samples, <count: i64>, <scale: f32>) -> f32:
   for chunk in input using f32s up to <count>:
-    let quality: u32s = widen(chunk.quality)
-    yield chunk.value * <scale>
+    let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
+    yield chunk.value * <scale> + quality
+
+run running_sum(x: []f32, out: mut []f32, <n: i32>):
+  total := <0.0>
+  for <i: i32> from <0> up to <n> by <4>:
+    total <- total + x[<i>]
+    out[<i>] <- total
+
+state calls: i32 := 0
+
+slow main() -> i32:
+  values: [8]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+  qualities: [8]u8 := [0, 1, 0, 1, 0, 1, 0, 1]
+  weighed: [8]f32 := [0.0; 8]
+  weigh(Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
+  sums: [8]f32 := [0.0; 8]
+  running_sum(weighed, sums, <8>)
+  calls <- calls + 1
+  return i32(sums[7] * 4.0) + calls
 ```
-<!-- rake-example:pack-over:end -->
 
-This example is the canonical source contract. Rake has published the first
-pack/`run` semantics and Linux x86-64 System V boundary in
-[`docs/spec/02_packs_and_run.md`](docs/spec/02_packs_and_run.md). The native
-backend does not implement that boundary yet, so `run` remains
-production-unavailable. The retired memref wrapper is not part of the Rake ABI.
+## Using the compiler
 
-## Development checks
-
-Run the focused suite in the pinned Nix environment:
+The compiler is `rakec`, written in OCaml. The Nix development shell has
+everything it needs:
 
 ```sh
 nix develop --command dune build
-nix develop --command bash test/run_tests.sh
-nix develop --command bash test/full_tests.sh
-nix develop --command dune runtest --force
+nix develop --command dune exec rakec -- --interpret program.rk
+nix develop --command dune exec rakec -- --emit-asm --target x86-avx2 -o program.s program.rk
+nix develop --command dune exec rakec -- --verify-native --target wasm-simd128 -o program.o program.rk
 ```
 
-The test corpus separates frontend acceptance, semantic interpretation, native
-lowering, runtime behavior, and machine-code verification. A green frontend
-test doesn't claim that the same construct is production-executable.
+`--interpret` runs `main` in Rake's executable semantics. `--emit-asm` writes
+assembly, or C on the wasm profiles. `--verify-native` builds an object,
+disassembles it and checks every function against the profile's rules. A
+crunch or rake contains only register work from the profile's instruction
+list, with no calls and no stack. On x86 and AArch64 each rack is one whole
+register, and the object has exactly the fused multiply-adds the compiler
+selected. A run on wasm loads, stores and loops, but calls nothing, keeps no C
+stack and contains only the vector instructions its source selected.
+`rakec --help` lists every mode, `--print-targets` the profiles and
+`--print-capabilities` each language feature's status.
+
+## Documentation
+
+The [syntax reference](docs/spec/00_syntax.md) lists every form, and the
+pages it links define what each means. [Goals](docs/GOALS.md) states the
+language's promises, [the backend](docs/BACKEND.md) how the compiler keeps
+them, and [the roadmap](docs/ROADMAP.md) what comes next. [The
+playground](docs/PLAYGROUND.md) designs a tutorial in twelve lessons,
+[the glossary](docs/GLOSSARY.md) defines the terms, and [Rake and other
+languages](docs/COMPARISONS.md) and [GPU profiles](docs/GPU.md) set Rake
+beside ISPC and GPU programming.
+[The rakec command](docs/RAKEC.md) lists its modes and options,
+[`test/README.md`](test/README.md) describes the tests, and
+[`CHANGELOG.md`](CHANGELOG.md) the releases.
+
+## Licence
+
+MIT, in [`LICENSE`](LICENSE).

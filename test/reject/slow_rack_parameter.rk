@@ -1,0 +1,5 @@
+slow total(values: f32s) -> f32:
+  return 0.0
+
+slow main() -> i32:
+  return 0

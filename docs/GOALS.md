@@ -1,141 +1,117 @@
-# Rake goal contract
+# Goals
 
-Rake is a vector-first systems language for writing explicit single-instruction,
-multiple-data (SIMD) programs. Its purpose is to let a programmer state the
-machine-level vector structure of an algorithm without dropping into intrinsics
-or assembly.
+Rake is a language for SIMD programs. It lets a programmer state the vector
+structure of an algorithm, its registers, masks and data layout, without
+writing intrinsics or assembly. This page sets out the promises the language
+makes. A compiler may reject a program or a profile it can't compile under
+them, and it never keeps a program by weakening a rack, a fused region or a
+rake into scalar code. Each section ends with what the compiler does today.
 
-This document defines the language goals. A release capability report says
-which goals a compiler build implements. An implementation may reject a program
-or target profile that it cannot compile according to this contract. It must
-not silently weaken a rack, fused region, or rake into scalar code.
+## Racks are registers
 
-## Native racks
+A rack is one vector register of the target profile. The profile fixes the
+register's width, and the element type gives the lane count: on a 256-bit
+profile an `f32s` rack has eight lanes. A rack is never split across
+registers, narrowed, held in memory or computed lane by lane, so a program
+that would need any of these is rejected. A scalar target is a separate,
+explicit profile, never described as SIMD, and a build for another machine
+chooses its profile instead of taking the features of the machine it runs on.
 
-A rack is one native vector register in the selected target profile. The
-profile fixes the register width and derives the lane count from the element
-type. For example, a 256-bit profile gives an `f32s` rack eight lanes and an
-`f64s` rack four lanes.
+Today: every production profile keeps each rack in one register, and the
+verifier checks the object for it on x86 and AArch64. On `wasm-simd128` a
+rack is one `v128` value.
 
-The compiler must reject a rack type or operation when the target would split,
-narrow, or scalarize it. A scalar target is a separate, explicit profile and is
-never described as SIMD. Cross-target compilation uses a named reproducible
-profile rather than the feature set of whichever machine happens to run the
-compiler.
+## Scalars are marked
 
-Every live rack occupies one physical register of the selected profile's native
-vector register class. Register allocation must not represent one rack with
-multiple registers or memory. Post-allocation machine IR and disassembly are
-the acceptance evidence for the register class, instruction family, absence of
-splitting, and absence of scalarization.
+Plural types, such as `f32s`, are racks. Angle brackets mark a uniform scalar
+where it is declared and where it is used, so every broadcast from a scalar
+into a rack is visible. Seeing many brackets in a kernel invites the
+question of whether those values could vary by lane, or be stored and
+processed better. The type checker rejects an implicit conversion between a
+scalar and a rack.
 
-## Explicit scalars
+`lanes`, the lane count, and `@`, the lane index, are planned. Both are
+reserved and unavailable.
 
-Plural primitive types identify racks. Angle brackets identify uniform scalar
-declarations, uses, and broadcasts. Seeing many scalar markers in a kernel
-should provoke the question: could these values vary by lane, or be stored and
-processed more efficiently? The type checker must reject an implicit rack-to-scalar
-or scalar-to-rack conversion that would hide data movement, lane selection, or
-broadcasting.
+## Lane choices are masks
 
-`lanes` reports the lane count derived from the target profile and element
-type. `@` produces the zero-based lane indices for the surrounding rack type.
+Tines are named masks. A through block computes under one, and a sweep picks
+a value for every lane, by the arms' order and a final `_`, so the result is
+always defined. A vector backend keeps these choices as vector predication,
+with masked instructions or benign operands, and never turns them into
+branches for each lane. An inactive lane raises no floating-point exception,
+touches no memory and has no other effect. A masked operation that a profile
+can't compile under both this rule and the one-register rule is rejected.
 
-## Predicated rake control flow
+Today: rakes compile on `x86-avx2`, `aarch64-neon` and `wasm-simd128`.
 
-Tines are named masks. The `#` resembles a perforated mask: values pass through
-the lanes whose holes are open. A `through` region computes a candidate under
-a tine, and `return sweep:` selects one candidate for every lane. Source-order
-priority and the final catch-all arm make the result deterministic.
+## Fused regions are pure data flow
 
-On native vector profiles, rake control flow must remain vector predication. A
-backend may use target masked instructions or benign-operand substitution, but
-it must not turn lane choices into per-lane scalar branches. Inactive lanes
-must not cause floating-point exceptions, invalid memory access, or observable
-side effects.
+Consecutive `| name <| expression` bindings describe one pure graph of vector
+operations, with no calls, spills or reloads. Its names are aliases. They
+impose no evaluation order, storage, instruction or rounding boundary, so the
+backend may rewrite the whole region to the cheapest graph for the profile,
+and different profiles may round its intermediates differently. `fma(a, b, c)`
+means one rounding, and is for programs whose correctness needs it. Rake has
+no mode that keeps a slower sequence of ordinary operations.
 
-The compiler must reject a masked operation when the selected profile cannot
-preserve both the semantic rule and the native-rack rule.
+Today: the compiler substitutes names and forms fused multiply-adds on
+`x86-avx2` and `aarch64-neon`. Other rewrites are planned, as [fused
+bindings](spec/04_fused_bindings.md) describe.
 
-## Fused regions
+## A complete vector vocabulary
 
-Contiguous `| name <| expression` bindings describe one pure vector data-flow
-graph. The right-hand expression visibly flows into the name on its left, and
-the leading bars align consecutive stages. A supported
-fused region has no machine calls and no spill or reload of its intermediate
-values. Its result remains in the target rack register class. The compiler must
-reject a region that exceeds the target's supported operation set or register
-budget.
+Rake's vector operations are to cover:
 
-Fused names are transparent data-flow aliases. They do not impose evaluation,
-storage, instruction, or rounding boundaries. The backend substitutes those
-names and applies target-costed algebraic rewrites, including FMA formation,
-across the complete region. Ordinary floating-point operators permit the
-backend to choose the lowest-cost legal evaluation graph, so different targets
-may round intermediate results at different points.
+- arithmetic, comparisons, masks and mathematical functions,
+- the lane count and lane indices, and extracting and inserting lanes,
+- reductions and scans,
+- shuffles, interleaving, and shifts and rotations of lanes,
+- fused multiply-add, chosen by the compiler or required by the source,
+- gather, scatter, compression and expansion, and
+- layouts of columns and of single records.
+ Each operation has a type rule, a rule for inactive lanes,
+a set of profiles that support it and a verified lowering. A profile without
+a native form of an operation rejects it before generating code.
 
-Explicit `fma(a, b, c)` has required one-rounding semantics. It is necessary
-when correctness depends on that operation, while an ordinary multiply-add
-graph may become FMA automatically. Rake does not offer a mode that asks the
-backend to preserve a slower sequence of ordinary arithmetic operations.
+Today: [racks and targets](spec/01_racks_targets_and_abi.md) lists what each
+profile compiles. Lane indices, interleaving, lane shifts and rotations,
+scatter, compression, expansion and single-record layouts are planned.
 
-Compiler reports and post-register-allocation machine-code checks provide the
-acceptance evidence for these guarantees.
+## Data layout is explicit
 
-## Vector operations
+A `stack` declares columns of structure-of-arrays data, and a traversal visits
+a `pack` of them a rack at a time. Conversions between layouts and memory
+operations are written in the source or set by a documented calling
+convention. A traversal's tail never reads or writes past the count, and its
+inactive lanes raise no exception and have no effect.
 
-Rake's core vector vocabulary includes:
+Today: runs, packs and traversals compile on `wasm-simd128`, with the
+boundary in [packs and runs](spec/02_packs_and_run.md).
 
-- arithmetic, comparisons, masks, and mathematical primitives;
-- lane count, lane indices, extraction, and insertion;
-- named reductions and prefix scans such as `sum` and `scan_sum`;
-- named shuffles, zips, shifts, and rotates;
-- automatically selected and source-required fused multiply-add;
-- gather, scatter, compression, and expansion; and
-- stack, pack, and single data layouts.
+## Scalar code stays scalar
 
-Each operation has a type rule, inactive-lane rule, target support matrix, and
-verified lowering. An operation may be unavailable on a profile that lacks a
-native implementation. The compiler reports that restriction before emitting
-backend IR.
+A program's scalar work, its records, state, control flow and calls to C, is
+slow code, marked `slow`. Slow code can't hold a rack, and reaches vector work
+only through calls whose uniform arguments are marked, so the promises above
+hold unchanged around it.
 
-## Explicit data layout
+Today: whole programs compile on `wasm-simd128`, as [the slow
+tier](spec/09_slow_tier.md) describes.
 
-`stack` represents columnar structure-of-arrays data and `pack Stack`
-represents storage traversed with `for chunk in pack using racks up to
-<count>:`. Layout conversions and memory operations must be explicit
-in source or in a documented calling convention.
+## Compilation is predictable
 
-Tail handling may use masked memory operations. It must not read or write past
-the logical element count, raise floating-point exceptions from inactive lanes,
-or create another observable inactive-lane effect. The normative pack and
-`run` design, including its ownership and ABI rules, is specified in
-[`spec/02_packs_and_run.md`](spec/02_packs_and_run.md). That published design
-does not claim production support before its executable and machine-code gates
-pass.
+The compiler owns every lowering decision from typed source to machine code:
+instruction selection, register allocation, scheduling and assembly. The
+assembler only encodes what it is given. Every stage can be inspected, the
+compiler proves the properties it claims for an accepted program, and when it
+can't prove one it fails with the source construct, the profile and the
+obligation that failed. A benchmark result is reported with its source,
+profile, compiler version, command, input size and baseline.
 
-## Predictable compilation
-
-The production Rake compiler owns every lowering decision from typed source
-through Rake SSA, target machine IR, register allocation, scheduling, and
-textual assembly. The system assembler encodes the selected instructions and
-constructs the object file. It must not select instructions, allocate
-registers, introduce spills, or scalarize racks.
-
-Rake compilation is inspectable from source through typed Rake SSA, target
-machine IR before and after register allocation, textual assembly, and object
-code disassembly. The language contract is the source-semantic authority. The
-verified optimized graph fixes target-dependent evaluation choices, while the
-scalar interpreter independently executes explicit operations and graphs whose
-rounding order is fixed. Post-allocation machine IR, assembly, and object-code
-disassembly are the machine authority. Named target profiles, declared
-arithmetic semantics, compiler reports, and conformance tests make performance
-properties reproducible.
-
-The compiler proves the properties it claims for an accepted program. When it
-cannot prove a required property, compilation fails with the source construct,
-target profile, failed obligation, and available alternatives.
-
-Representative benchmarks may describe measured performance only when their
-source, target profile, compiler version, command, input size, and comparison
-baseline are recorded together.
+Today: on `x86-avx2` and `aarch64-neon` the compiler selects instructions,
+allocates registers without spills and writes the assembly, and
+`--emit-native-ir` and `--emit-asm` show its work. On `wasm-simd128` it
+selects the instructions and writes each as one intrinsic in C, and clang
+encodes them, choosing locals and occasionally an equivalent instruction,
+which `--verify-native` checks.

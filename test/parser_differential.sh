@@ -66,14 +66,14 @@ check_source() {
   fi
 }
 
-# The WP-07 manifest remains the one copy of every executable and proposed
+# The manifest remains the one copy of every executable and proposed
 # example. Design-only future examples are deliberately outside the canonical
 # source grammar until their contracts are promoted.
 while IFS=$'\t' read -r path category _; do
   test "${path}" != path || continue
   case "${category}" in
     future) continue ;;
-    frontend|native|reject) expected=accept; class=supported ;;
+    frontend|native|reject|program|trap|abi) expected=accept; class=supported ;;
     *) fail "unknown conformance category ${category} for ${path}" ;;
   esac
   check_source "${project_root}/${path}" "${expected}" "${class}: ${path}"

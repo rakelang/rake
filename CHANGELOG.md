@@ -1,74 +1,98 @@
-# Rake changelog
+# Changelog
 
-Rake uses alpha releases while its executable language and binary interfaces
-are still changing. An alpha version names a testable compiler,
-Tree-sitter grammar, documentation set, and website snapshot. It does not
-promise source, ABI, or syntax compatibility with another alpha.
+A Rake version names one compiler, Tree-sitter grammar, documentation set and
+website. Beta releases may still change the source language and the binary
+boundaries between versions. A design in the documentation gets a version
+only when the compiler implements it and the tests cover it.
 
-Design documents describe possible later language behavior. A proposal does
-not acquire a release version until the compiler implements it and the
-conformance suite covers it.
+## 0.4.0-beta
 
-## 0.3.0-alpha.1 — in development
+Changes since 0.3.0.
 
-### Implemented and checked
+### Language and compiler
 
-- The checker publishes a frontend semantic-capability report. Native profiles
-  apply a separate lowering and machine-contract gate.
-- Named CPU profiles derive 128-, 256-, and 512-bit f32 rack widths. Production
-  backends target eight-lane AVX2 and four-lane AArch64 NEON racks.
-- The language contract defines permitted evaluation graphs, optimized native
-  IR records target-dependent choices, and the scalar interpreter independently
-  executes explicit operations and graph-stable fixtures.
-- Frontend-supported `through` expressions have defined inactive-lane behavior.
-- Sweeps require one final catch-all arm and preserve source-order priority.
-- Fused bindings enforce a pure contiguous SSA expression contract. Transparent
-  fused names are substituted before target-costed FMA contraction, while
-  explicit `fma` retains required one-rounding semantics.
-- The AVX2 backend owns typed SSA, instruction selection, no-spill YMM
-  allocation, textual assembly, object assembly, and disassembly verification.
-- The AArch64 NEON backend owns AAPCS64 selection, a 24-register no-spill
-  allocation domain, GNU assembly, cross-object verification, and a static
-  semantic differential under QEMU.
-- Machine verification rejects calls, stack use, rack spills, scalarization,
-  wrong register classes, instructions outside the profile allow-list, and an
-  incorrect selected-FMA count.
-- Native runtime tests compare bit-exact results from parsed Rake `crunch`
-  definitions against Rake's independent executable semantics.
-- Compiler and Tree-sitter parsing are compared over the shared syntax corpus.
+- Named target profiles fix rack widths. `x86-avx2` and `aarch64-neon`
+  compile `f32s` crunches and rakes to assembly, and `wasm-simd128` compiles
+  crunches, rakes, runs and whole programs to C with one `wasm_simd128.h`
+  intrinsic for each selected instruction.
+- `rakec --print-capabilities` reports each language feature's status, and
+  each profile rejects what it can't compile with the source location and the
+  missing operation.
+- Rakes have defined inactive lanes on every profile: benign operands on x86
+  and AArch64, and none needed on WebAssembly, which has no floating-point
+  exception state. A sweep needs one final `_` arm, and its arms' order is
+  its priority.
+- Fused bindings are pure contiguous data flow. Their names are substituted
+  before fused multiply-adds are formed on AVX2 and NEON, and `fma` keeps its
+  single rounding. A fused stage may now introduce a constant or choose by a
+  mask, and fused bindings inside a through block form regions of their own.
+- Pure instructions that nothing uses are removed before instruction
+  selection, so a crunch's `repeat` compiles on AVX2 and NEON.
+- `wasm-simd128` adds:
+  - integer racks, `u8s`, `i16s`, `i32s`, `u32s`, `i64s` and `u64s`, with
+    wrapping arithmetic, comparisons, `min` and `max`, bitwise operations and
+    bit shifts,
+  - `dot`, `narrow`, `widen_low`, `widen_high`, `to_f32` and `to_i32`,
+  - float `min`, `max`, `abs` and rounding,
+  - one- and two-rack shuffles, `bitmask`, `extract`, `insert`, `all` and
+    `any`, and
+  - strict reductions and scans, which AVX2 also compiles.
+- `exp`, `log`, `log2` and `tanh` are fixed sequences of binary32 operations,
+  shared by the interpreter, slow code and racks.
+- Conditional expressions choose by a mask on every profile, and by a
+  uniform on `wasm-simd128`.
+- A uniform must be marked where it meets a rack: `values * <factor>`, not
+  `values * factor`. The type checker reports the unmarked name.
+- `wrap` and `bitcast` are conversions only before a parenthesis, so they
+  remain usable as names. A crunch, rake or run can't be named after a C
+  keyword, since each becomes a C function of its own name.
+- A rake's through block and its sweep compile to one select, since a select
+  whose arm selects on the same mask takes that arm directly.
+- `rakec --print-capabilities` marks `let` expressions, `is` comparisons and
+  expression predicates unavailable, since no source syntax reaches them.
+- `!=` on floats is ordered everywhere: it is false when either operand is
+  NaN, for scalars as for racks.
+- Number literals are unsigned, and a minus before one makes it negative, so
+  `n-1` subtracts.
+- Runs on `wasm-simd128` traverse packs, with tails that load and store lane
+  by lane and never touch an element past the count. They have nested
+  traversals, counted loops, `repeat` and uniform `if`, rack locations and
+  arrays of them, checked and unchecked loads, stores and gathers, and
+  crunches and rakes inlined with their masks. Rake forms each loop's
+  addresses and checks bounds once before the loop. Runs have a published
+  wasm32 C boundary.
+- A run's uniform arithmetic may use reductions, extractions, bitmasks and
+  crunch calls, each computed as a uniform of its own.
+- Slow code on `wasm-simd128`: records, arrays, views, pointers, module
+  state, embedded files, constants, control flow and calls to C, compiled
+  with the runs into one C file with `int main(void)`. Aggregates over 256
+  bytes live in a frame stack in linear memory instead of the 64 KiB C stack,
+  which they overflowed without a trap.
+- `rakec --interpret` runs a program's `main` in Rake's executable
+  semantics. It reports a program without `main` instead of failing, and
+  broadcasts a uniform stored where a rack goes, as the compiled code does.
+- `wasm-simd128-relaxed` is an opt-in profile with `relaxed_madd`,
+  `relaxed_nmadd`, `relaxed_min` and `relaxed_max`.
+
+### Verification
+
+- `--verify-native` disassembles every object. On x86 and AArch64 it rejects
+  calls, stack use, split or scalarised racks, instructions outside the
+  profile's list and a wrong count of fused multiply-adds, and it accepts the
+  two-byte nop that pads an AVX2 function. On `wasm-simd128` a crunch may hold
+  only register instructions, including the scalar arithmetic clang makes of
+  splat arithmetic, and a run only the vector instructions its source selects
+  or their documented equivalents.
+- `test/program_test.sh` compares every program fixture in the interpreter
+  and as WebAssembly under wasmtime, and `test/abi_test.sh` calls runs from C.
+  `test/neon_backend_test.sh` compares NEON results under QEMU.
+- The compiler's parser and the Tree-sitter grammar are compared over the
+  test corpus. The grammar parses indentation with an external scanner, as
+  the compiler does.
+- Every Rake example in the README, the documentation and the website is
+  compiled by `tools/check_documentation_examples.sh`, and most are run.
 
 ### Removed
 
-- The experimental MLIR/LLVM lowering and its command-line modes no longer act
-  as a supported backend or correctness oracle.
-- The toolchain-generated memref C wrapper is retired. `run` has no production
-  binary interface until Rake's native traversal and ABI contract are complete.
-
-### Parsed or proposed
-
-- Records, tuples, logical mask reductions, reductions and scans outside AVX2,
-  data rearrangement operations,
-  lambdas, expression pipelines, and non-f32 numeric paths remain unavailable
-  to executable programs even where the parser recognizes their syntax.
-- AVX-512 and SSE2 production object output remain proposed.
-- The `wasm-simd128` profile, on the `wasm-simd128` branch, proposes `u8s`
-  racks, integer rack comparisons, static one- and two-rack shuffles and
-  `bitmask`. It emits C with one SIMD intrinsic per selected instruction and
-  verifies the Clang-compiled object against a locals, constants and SIMD
-  allow-list.
-- The `wasm-simd128` profile also proposes `i16s` and `i32s` racks: wrapping
-  `+` and `-`, signed `min` and `max`, `dot` of 16-bit pairs into 32-bit
-  lanes, saturating `narrow`, `widen_low` and `widen_high` of bytes, and
-  `to_f32` and `to_i32`, the last rounding to nearest with ties to even. The
-  executable semantics define each, and the documentation example compiles to
-  verified SIMD-only C.
-- The `wasm-simd128` profile also proposes `min` and `max` of `f32s` racks,
-  the IEEE 754 minimum and maximum (`f32x4.min` and `f32x4.max`), with NaN and
-  signed-zero cases in the executable semantics.
-- The `wasm-simd128` profile also proposes `u32s`, `u64s` and `i64s` racks,
-  `bit_and`, `bit_or`, `bit_xor` and `bit_andnot` of integer racks,
-  `shift_bits_left`, `shift_bits_right` and `shift_bits_right_signed` by an
-  integer literal or a uniform `u32`, and uniform `u32` crunch parameters, for
-  kernels such as a bitboard flood fill, one board row to a 64-bit lane.
-- The broader control-flow design remains a proposal rather than part of this
-  alpha's executable language.
+- The experimental MLIR and LLVM lowering and its command-line modes.
+- The toolchain-generated memref C wrapper for runs.

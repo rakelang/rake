@@ -30,7 +30,7 @@ expect_absent_maintained() {
   local matches
   matches="$(
     find "${repo}" \
-      \( -path '*/.git' -o -path '*/_build' -o -path '*/node_modules' \
+      \( -path '*/.git' -o -path '*/_build' -o -path '*/node_modules' -o -path '*/target' \
          -o -path "${tree_sitter_root}/tree-sitter-rake" \) -prune -o \
       -type f \
       \( -name '*.md' -o -name '*.ml' -o -name '*.mli' -o -name '*.mll' \
@@ -48,6 +48,7 @@ expect_absent_maintained() {
 expect_literal "${project_root}/dune-project" "(version ${version})"
 expect_literal "${project_root}/rake.opam" "version: \"${version}\""
 expect_literal "${project_root}/README.md" "Release: ${version}"
+expect_literal "${project_root}/CHANGELOG.md" "## ${version}"
 expect_literal "${project_root}/src/bin/main.ml" "Rake.Version.display"
 
 expect_literal "${tree_sitter_root}/package.json" "\"version\": \"${version}\""
@@ -57,9 +58,8 @@ expect_literal "${tree_sitter_root}/package.json" \
 expect_literal "${tree_sitter_root}/tree-sitter.json" \
   "https://github.com/rakelang/tree-sitter-rake"
 
-expect_literal "${website_root}/index.html" "data-release-version=\"${version}\""
-expect_literal "${website_root}/index.html" ">${version} ALPHA</span>"
-expect_literal "${website_root}/index.html" "https://github.com/rakelang/rake"
+expect_literal "${website_root}/public/index.html" "Rake ${version}."
+expect_literal "${website_root}/public/index.html" "https://github.com/rakelang/rake"
 
 for repo in "${project_root}" "${tree_sitter_root}" "${website_root}"; do
   git -C "${repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \

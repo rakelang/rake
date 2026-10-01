@@ -12,6 +12,7 @@ Usage:
   rakec --emit-asm <file.rk>          Emit Rake-owned textual assembly
   rakec --emit-obj <file.rk>          Assemble Rake-owned code to an object
   rakec --verify-native <file.rk>     Verify and emit a Rake-owned object
+  rakec --interpret <file.rk>         Run main in Rake's executable semantics
   rakec --print-capabilities          Print the frontend semantic contract
   rakec --print-targets               Print available native profiles
   rakec --version                     Show version
@@ -19,14 +20,22 @@ Usage:
 
 Options:
   --target <p>   Select native, scalar, x86-sse2, x86-avx2, x86-avx512,
-                 aarch64-neon, or wasm-simd128 (default: native).
+                 aarch64-neon, wasm-simd128 or wasm-simd128-relaxed
+                 (default: native).
   --width <n>    Compatibility assertion. It must equal the selected profile's
                  f32 lane count; it never changes or splits a native rack.
+  --wasm-addressing <a>  barrier (default) keeps run addresses opaque to
+                 loop strength reduction with an empty i32 asm, so constant
+                 offsets fold into load and store immediates; plain emits
+                 wasm_simd128.h intrinsics alone.
   -o <file>      Write the selected emission product to <file>.
 
-The production backends currently accept x86-avx2 and aarch64-neon. Rake owns
-native SSA, instruction selection, no-spill allocation, and textual assembly emission.
-An external tool is invoked only to assemble Rake's text into an object file.
+The production backends are x86-avx2, aarch64-neon and wasm-simd128. Rake owns
+native SSA, instruction selection, no-spill allocation and assembly emission.
+On wasm-simd128 the emitted text is C with one wasm_simd128.h intrinsic per
+selected instruction, and a program with slow code or runs compiles to one C
+file with int main(void). External tools only assemble or compile Rake's text
+into an object file, which --verify-native then disassembles and checks.
 
 |}
 
@@ -48,27 +57,7 @@ let read_source filename =
       in
       read ())
 
-let parse_file filename =
-  let source = read_source filename in
-  let lexbuf = Lexing.from_string source in
-  lexbuf.Lexing.lex_curr_p <-
-    { lexbuf.Lexing.lex_curr_p with Lexing.pos_fname = filename };
-  match Rake.Layout.validate ~filename source with
-  | Error _ as failure -> failure
-  | Ok () -> (
-      try Ok (Rake.Parser.program Rake.Lexer.token lexbuf) with
-      | Rake.Lexer.LexError (message, position) ->
-          Error
-            (Printf.sprintf "%s:%d:%d: Lexical error: %s"
-               position.Lexing.pos_fname position.Lexing.pos_lnum
-               (position.Lexing.pos_cnum - position.Lexing.pos_bol)
-               message)
-      | Rake.Parser.Error ->
-          let position = lexbuf.Lexing.lex_curr_p in
-          Error
-            (Printf.sprintf "%s:%d:%d: Syntax error" position.Lexing.pos_fname
-               position.Lexing.pos_lnum
-               (position.Lexing.pos_cnum - position.Lexing.pos_bol)))
+let parse_file filename = Rake.Source.parse_file filename
 
 let emit_tokens filename =
   let source = read_source filename in
@@ -88,6 +77,7 @@ type emit_mode =
   | Assembly
   | Object
   | Verify_native
+  | Interpret
 
 type opts = {
   mutable emit_mode : emit_mode;
@@ -95,6 +85,7 @@ type opts = {
   mutable width : int option;
   mutable output : string option;
   mutable filename : string option;
+  mutable addressing : Rake.Tier_c.addressing;
 }
 
 let source_stem filename =
@@ -129,6 +120,53 @@ let typecheck program =
   | Ok environment -> environment
   | Error message -> fail message
 
+(** A program with slow code, runs or module definitions is one whole
+    program: checked by the tier checker, and on wasm-simd128 emitted,
+    assembled and verified as one C translation unit. *)
+let is_whole_program (program : Rake.Ast.program) =
+  List.exists
+    (fun (m : Rake.Ast.module_) ->
+      List.exists
+        (fun (d : Rake.Ast.def) ->
+          match d.v with
+          | DSlow _ | DRun _ | DRecord _ | DState _ | DEmbed _ | DConst _ | DExtern _ -> true
+          | _ -> false)
+        m.mod_defs)
+    program
+
+let tier_check filename program =
+  match Rake.Tier_check.check ~base_dir:(Filename.dirname filename) program with
+  | Ok checked -> checked
+  | Error message -> fail message
+
+let whole_program_c ~addressing filename program =
+  let checked = tier_check filename program in
+  match Rake.Tier_c.emit ~addressing ~source:filename checked with
+  | text, facts -> (checked, text, facts)
+  | exception Rake.Tier_c.Emission_error (loc, message) ->
+      fail (Printf.sprintf "%s:%d:%d: wasm-simd128 emission: %s" loc.file loc.line loc.col message)
+
+let whole_program_object filename c_source =
+  match Rake.Wasm_simd128_toolchain.assemble_program ~include_dir:(Filename.dirname filename) c_source with
+  | Ok bytes -> bytes
+  | Error error -> fail ("native object assembly failed: " ^ Rake.Wasm_simd128_toolchain.format_error error)
+
+let verify_whole_program (checked : Rake.Tier_ir.program) facts object_bytes =
+  let crunches =
+    List.filter_map
+      (fun (d : Rake.Ast.def) -> match d.v with DCrunch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> Some name | _ -> None)
+      checked.vector_defs
+  in
+  let runs =
+    Hashtbl.fold
+      (fun name (loops, lane_operations, selected) acc ->
+        (name, { Rake.Wasm_simd128_toolchain.loops; lane_operations; selected }) :: acc)
+      facts []
+  in
+  match Rake.Wasm_simd128_toolchain.verify_program ~crunches ~runs object_bytes with
+  | Ok () -> ()
+  | Error error -> fail ("native object verification failed: " ^ Rake.Wasm_simd128_toolchain.format_error error)
+
 let report_backend = function
   | Ok product -> product
   | Error error -> fail (Rake.Native_backend.format_error error)
@@ -148,6 +186,7 @@ let () =
           width = None;
           output = None;
           filename = None;
+          addressing = Rake.Tier_c.Barrier;
         }
       in
       let select_mode mode option =
@@ -175,6 +214,9 @@ let () =
         | "--verify-native" :: rest ->
             select_mode Verify_native "--verify-native";
             parse rest
+        | "--interpret" :: rest ->
+            select_mode Interpret "--interpret";
+            parse rest
         | "--target" :: value :: rest ->
             (match opts.target_selection with
             | Some _ -> fail "Error: --target may be specified only once"
@@ -184,6 +226,12 @@ let () =
                 | Error message -> fail ("Error: " ^ message)));
             parse rest
         | [ "--target" ] -> fail "Error: --target requires a profile"
+        | "--wasm-addressing" :: value :: rest ->
+            (match value with
+            | "barrier" -> opts.addressing <- Rake.Tier_c.Barrier
+            | "plain" -> opts.addressing <- Rake.Tier_c.Plain
+            | _ -> fail "Error: --wasm-addressing is barrier or plain");
+            parse rest
         | "--width" :: value :: rest ->
             (match int_of_string_opt value with
             | Some width when width > 0 -> opts.width <- Some width
@@ -222,6 +270,13 @@ let () =
       | Ast ->
           let program = parse_program filename in
           print_endline (Rake.Ast.show_program program)
+      | Interpret -> (
+          let program = parse_program filename in
+          let _ = typecheck program in
+          let checked = tier_check filename program in
+          match Rake.Tier_interp.run_main checked with
+          | Ok value -> Printf.printf "%Ld\n" value
+          | Error message -> fail message)
       | Check ->
           if not (Filename.check_suffix filename ".rk") then
             fail (Printf.sprintf "Unknown file type: %s (expected .rk)" filename);
@@ -232,11 +287,32 @@ let () =
             | _ -> Some (resolve_target_config opts)
           in
           let _ = typecheck program in
+          if is_whole_program program then ignore (tier_check filename program);
           Printf.printf "Parsed and type-checked %s successfully.\n" filename
       | (Native_ir | Assembly | Object | Verify_native) as mode ->
           let program = parse_program filename in
           let _ = typecheck program in
           let config = resolve_target_config opts in
+          if is_whole_program program then (
+            if not (Rake.Target.is_wasm config.profile) then
+              fail "Error: slow code, runs and module definitions compile for --target wasm-simd128";
+            Rake.Native_lower.relaxed := config.profile = Rake.Target.Wasm_simd128_relaxed;
+            Rake.Native_ir.floating_point_exceptions := false;
+            Rake.Wasm_simd128_c.relaxed := !Rake.Native_lower.relaxed;
+            Rake.Wasm_simd128_toolchain.relaxed := !Rake.Native_lower.relaxed;
+            let checked, c_source, facts = whole_program_c ~addressing:opts.addressing filename program in
+            let default extension = Some (match opts.output with Some path -> path | None -> source_stem filename ^ extension) in
+            match mode with
+            | Native_ir ->
+                let native = report_backend (Rake.Native_backend.lower ~config [ { Rake.Ast.mod_name = "main"; mod_defs = checked.vector_defs } ]) in
+                write_output (Rake.Native_ir.dump native ^ Rake.Tier_ir.dump checked) opts.output
+            | Assembly -> write_output c_source (default ".c")
+            | Object -> write_output (whole_program_object filename c_source) (default ".o")
+            | _ ->
+                let object_bytes = whole_program_object filename c_source in
+                verify_whole_program checked facts object_bytes;
+                write_output object_bytes (default ".o"))
+          else
           (match mode with
           | Native_ir ->
               let native_ir = report_backend (Rake.Native_backend.lower ~config program) in
@@ -245,8 +321,8 @@ let () =
               let assembly =
                 report_backend (Rake.Native_backend.emit_assembly ~source:filename ~config program)
               in
-              (* The wasm-simd128 profile's textual assembly is C carrying inline WebAssembly. *)
-              let extension = if config.profile = Rake.Target.Wasm_simd128 then ".c" else ".s" in
+              (* The wasm-simd128 profile's textual assembly is C of SIMD intrinsics. *)
+              let extension = if Rake.Target.is_wasm config.profile then ".c" else ".s" in
               let output =
                 Some
                   (match opts.output with

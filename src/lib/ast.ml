@@ -15,6 +15,11 @@ type loc = {
 
 let dummy_loc = { file = "<none>"; line = 0; col = 0; offset = 0 }
 
+(** A construct whose grammar requires static syntax that an ordinary
+    expression position cannot express, such as a shuffle's literal lane
+    list. The driver reports it as a syntax error. *)
+exception Static_syntax of loc * string
+
 (** AST node with location *)
 type 'a node = { v: 'a; loc: loc }
 [@@deriving show]
@@ -55,6 +60,11 @@ and typ_kind =
   | TFun of typ list * typ             (** function type *)
   | TTuple of typ list                 (** (a, b, c) *)
   | TUnit                              (** () *)
+  | TArray of int * typ                (** [N]T: N elements in memory, or N racks in registers *)
+  | TView of typ                       (** []T: a borrowed run of elements with a runtime count *)
+  | TPtr of typ                        (** ptr T: a C pointer, for extern interoperation *)
+  | TMut of typ                        (** mut T: a parameter the callee may write *)
+  | TNamed of ident                    (** a record *)
 [@@deriving show]
 
 (** Binary operators *)
@@ -161,7 +171,20 @@ and expr_kind =
   (* Unit *)
   | EUnit                              (** () *)
 
+  (* The slow tier and general control flow *)
+  | EString of string                  (** "text": a C string or a file name *)
+  | EIndex of expr * expr * bool       (** base[index], base[unchecked index] *)
+  | EConvert of convert * typ * expr   (** i32(x), wrap(u8, x), bitcast(u32, x) *)
+  | EIf of expr * expr * expr          (** if condition then value else value *)
+  | EArray of expr list                (** [a, b, c] *)
+
 (** Parameter: either rack (default), scalar (angle brackets), or spread type *)
+(** How a scalar conversion treats a value its target cannot hold. *)
+and convert =
+  | Convert_checked                    (** traps unless the value is representable *)
+  | Convert_wrap                       (** keeps the low bits, two's complement *)
+  | Convert_bitcast                    (** reinterprets the bits of an equal-width value *)
+
 and param =
   | PRack of ident * typ option        (** x or (x : float rack) *)
   | PScalar of ident * typ option      (** <x> or (<x> : float) *)
@@ -256,6 +279,15 @@ and stmt_kind =
   | SFused of fused_binding            (** | x <| e (verified inlineable SSA) *)
   | SExpr of expr                      (** expression statement *)
   | SOver of over_loop                 (** for chunk in pack using f32s up to <count> *)
+  | SUniform of binding                (** let <name: T> = e: a uniform scalar in vector code *)
+  | SStore of expr * expr              (** place <- e, for a field, element or rack location *)
+  | SReturn of expr option             (** return, return e *)
+  | SYield of expr                     (** yield e, the last statement of a traversal *)
+  | SBreak
+  | SContinue
+  | SIf of expr * stmt list * stmt list  (** if c: ... else: ... *)
+  | SWhile of expr * stmt list
+  | SLoop of counted_loop              (** for i from a up to b, repeat <i: i32> from <a> up to <b> *)
 
 (** Pack traversal: iterate over storage in target-native rack chunks.
     for chunk in pack using f32s up to <count>:
@@ -272,6 +304,19 @@ and over_loop = {
   over_count: expr;                    (** element count expression *)
   over_chunk: ident;                   (** binding for each stack chunk *)
   over_body: stmt list;                (** body executed per chunk *)
+}
+
+(** A counted loop. [loop_repeat] marks the fixed-count vector form, whose
+    bounds are constants and which the compiler unrolls. *)
+and counted_loop = {
+  loop_var: ident;
+  loop_uniform: bool;                  (** declared as <i: T> *)
+  loop_type: typ option;
+  loop_from: expr;
+  loop_to: expr;
+  loop_by: expr option;
+  loop_body: stmt list;
+  loop_repeat: bool;
 }
 
 [@@deriving show]
@@ -298,6 +343,16 @@ and def_kind =
       (** rake name params -> result: setup tines through* sweep *)
   | DRun of ident * param list * result_spec * stmt list
       (** run name params -> result: body *)
+
+  (* The slow tier *)
+  | DRecord of ident * string option * field list
+      (** record Name { ... }, or record Name from "header.h" { ... } naming a C struct *)
+  | DSlow of ident * param list * typ option * stmt list
+  | DExtern of ident * param list * typ option * string
+      (** extern slow name(params) -> T from "header.h" *)
+  | DState of ident * typ * expr option
+  | DEmbed of ident * string
+  | DConst of ident * typ * expr
 
 and result_spec = {
   result_name: ident;

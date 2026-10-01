@@ -294,6 +294,7 @@ let select_function (func : N.func) =
       | N.Shuffle _ | N.Reduce _ | N.Scan _ | N.Extract _ | N.Insert _ ->
           fail func.name ~instruction:index
             "cross-lane operation is unavailable in the initial NEON selection contract"
+      | N.Unary ((N.Abs | N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
             "integer rack operations are part of the wasm-simd128 slice only"

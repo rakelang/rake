@@ -8,5 +8,7 @@ bash "${test_dir}/../tools/check_release_identity.sh"
 bash "${test_dir}/conformance_test.sh"
 bash "${test_dir}/target_profile_test.sh"
 bash "${test_dir}/native_backend_test.sh"
+bash "${test_dir}/program_test.sh"
+bash "${test_dir}/abi_test.sh"
 
 echo "full conformance suite passed"

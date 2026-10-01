@@ -1,0 +1,6 @@
+run spin(x: []f32, out: mut []f32, <n: i32>):
+  while <n> > <0>:
+    out[<0>] <- x[<0>]
+
+slow main() -> i32:
+  return 0

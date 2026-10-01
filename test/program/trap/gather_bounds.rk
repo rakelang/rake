@@ -1,0 +1,9 @@
+run pick(table: []i32, indices: []i32, out: mut []i32):
+  out[<0>] <- table[indices[<0>]]
+
+slow main() -> i32:
+  table: [4]i32 := [10, 20, 30, 40]
+  indices: [4]i32 := [0, 1, 4, 2]
+  out: [4]i32 := [0; 4]
+  pick(table, indices, out)
+  return out[0]

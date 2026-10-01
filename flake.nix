@@ -46,6 +46,9 @@
             # Unwrapped, so gcc stays the C compiler for native harnesses.
             llvmPackages.clang-unwrapped
             llvmPackages.llvm
+            # Runtime tests link freestanding wasm32 modules and run them.
+            llvmPackages.lld
+            wasmtime
 
             # Differential parser workflow
             tree-sitter
