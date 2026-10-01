@@ -35,10 +35,18 @@ and pointer = { store : value array; index : int }
 
 type externs = (string, value list -> value) Hashtbl.t
 
+type trace = {
+  trace_name : string;
+  trace_loc : Ast.loc;
+  trace_value : R.value;
+  trace_active : int option;
+}
+
 type machine = {
   program : program;
   globals : (string, value ref) Hashtbl.t;
   externs : externs;
+  trace : trace -> unit;
 }
 
 let rec copy = function
@@ -536,7 +544,14 @@ and exec_run renv loc stmts ~tail = List.iter (exec_rstmt renv ~tail) stmts |> f
 
 and exec_rstmt renv ~tail (s : rstmt) =
   let loc = s.rloc in
-  let set name v = Hashtbl.replace renv.vars name (ref v) in
+  let set name v =
+    Hashtbl.replace renv.vars name (ref v);
+    match v with
+    | VRack trace_value ->
+        renv.machine.trace
+          { trace_name = name; trace_loc = loc; trace_value; trace_active = tail }
+    | _ -> ()
+  in
   let view_of e = match eval renv e with VView v -> v | _ -> trap loc "a view" in
   match s.r with
   | R_uniform (name, e) -> set name (eval renv e)
@@ -583,8 +598,17 @@ and exec_rstmt renv ~tail (s : rstmt) =
                 | Some (e, os), Some (_, fs) -> R.int_rack e (Array.mapi (fun i x -> if i < active then fs.(i) else x) os)
                 | _ -> f)
           in
-          (lookup renv loc name) := VRack (blend old fresh)
-      | _ -> (lookup renv loc name) := next)
+          let trace_value = blend old fresh in
+          (lookup renv loc name) := VRack trace_value;
+          renv.machine.trace
+            { trace_name = name; trace_loc = loc; trace_value; trace_active = tail }
+      | _ ->
+          (lookup renv loc name) := next;
+          (match next with
+          | VRack trace_value ->
+              renv.machine.trace
+                { trace_name = name; trace_loc = loc; trace_value; trace_active = tail }
+          | _ -> ()))
   | R_store (view, index, value, checked) ->
       let v = view_of view and i = Int64.to_int (as_int loc (eval renv index)) in
       let element = match view.ty with View (Sc e, _) -> e | _ -> SInt in
@@ -660,8 +684,9 @@ and exec_rstmt renv ~tail (s : rstmt) =
 
 (* ─── Programs ──────────────────────────────────────────────────────── *)
 
-let machine ?(externs = Hashtbl.create 1) (program : program) =
-  let m = { program; globals = Hashtbl.create 16; externs } in
+let machine ?(externs = Hashtbl.create 1) ?(trace = fun _ -> ())
+    (program : program) =
+  let m = { program; globals = Hashtbl.create 16; externs; trace } in
   let env = { machine = m; vars = Hashtbl.create 1 } in
   List.iter (fun (name, _, value) -> Hashtbl.replace m.globals name (ref (eval env value))) program.consts;
   List.iter
@@ -686,8 +711,8 @@ let call_function m name (args : value list) =
     VUnit
   with Return_value v -> v
 
-let run_main ?externs program =
-  let m = machine ?externs program in
+let run_main ?externs ?trace program =
+  let m = machine ?externs ?trace program in
   if not (List.exists (fun f -> f.fname = "main") program.slows) then
     Error "the program has no slow main() -> i32 to run"
   else

@@ -1,13 +1,13 @@
 # The Rake playground
 
-This page designs a playground: a page in the browser where someone who has
-never written SIMD code learns Rake by editing and running small programs.
-Nothing here is built yet. The page sets out what the playground shows, the
-lessons it teaches in order, the moment in each lesson where the new idea
-lands, and how it explains the syntax that looks strange to a programmer
-who comes from C, Java, JavaScript or Python. Every program on this page is
-compiled by the documentation checker, and its result is the one the lesson
-promises.
+This page includes the playground: someone who has never written SIMD code
+can learn Rake by editing and running small programs in the browser. The
+tutorial introduces one idea at a time and makes each idea visible in the
+result, lane trace, generated code or compiler message. The reference after
+the editor records the lesson design and explains syntax that may look strange
+to a programmer coming from C, Java, JavaScript or Python. Every program is
+also compiled by the documentation checker, and its result is the one the
+lesson promises.
 
 ## The screen
 
@@ -47,11 +47,13 @@ two and says why.
 
 ## How it works
 
-The compiler runs in the page. `rakec` is OCaml, and `wasm_of_ocaml` can
-compile its front end, its interpreter and its emitters to WebAssembly, so the
-playground calls the same code behind `rakec --interpret` and `rakec
---emit-asm` that runs on a workstation. The parts that start clang and the
-assembler stay out of the browser build. The Lanes tab reads the
+The compiler runs in the page. `rakec` is OCaml, and `js_of_ocaml` compiles
+its front end, interpreter and emitters for the browser, so the playground
+calls the same code behind `rakec --interpret` and `rakec --emit-asm` that
+runs on a workstation. The parts that start clang and the assembler stay out
+of the browser build. Compilation and execution happen in a worker; a program
+that runs for more than three seconds is stopped without freezing the editor.
+The Lanes tab reads the
 interpreter's values, which it already computes lane by lane. Object
 verification needs clang and a disassembler, so the playground leaves it to
 the command line, and the Code tab says so.

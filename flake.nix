@@ -28,6 +28,11 @@
             menhir
             ppx_deriving
 
+            # Browser build of the compiler used by rake-lang.org/playground.
+            js_of_ocaml
+            js_of_ocaml-compiler
+            js_of_ocaml-ppx
+
             # Eval arena deps
             yojson
             cmdliner
