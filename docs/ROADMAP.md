@@ -4,7 +4,7 @@ Rake's vector contract now has SSE2, AVX2, AVX-512F, NEON and WebAssembly
 implementations. Native runs and packs, a scalar fallback and operation parity
 remain work in progress. This roadmap states what we intend to build next.
 [The changelog](../CHANGELOG.md) records work once it has landed, while
-[the goals](GOALS.md) describe the principles that each change must preserve.
+[the goals](GOALS.md) define the requirements for every change.
 
 ## Capabilities and coverage
 
