@@ -12,10 +12,12 @@ the lines of that body are indented further than the line that opened it,
 all by the same amount. A body ends when a line returns to an outer
 indentation. Indentation uses spaces, and a tab in indentation is an error.
 
-Lines inside parentheses, brackets or braces continue the line they started
-on, so a long parameter list can be spread over several lines. A line that
-ends in `{` also needs a more deeply indented line after it, so a stack or
-record body spread over lines is indented.
+Lines inside parentheses, brackets or data braces continue the line they
+started on, so a long parameter list can be spread over several lines. A
+multiline stack or record body is indented. A `slow { ... }` body restores
+statement layout, even inside a call: its statements are indented, and its
+closing brace returns to the opening line's indentation. Empty braces need
+no body. On one line, a slow block separates statements with semicolons.
 Blank lines and comment-only lines don't affect indentation.
 
 `~~` starts a comment that runs to the end of the line. `(*` and `*)` enclose
@@ -155,9 +157,10 @@ column layout, used through `pack Name`.
 | `repeat <i: T> from <0> up to <4>:` | a vector loop with constant bounds, unrolled when it is small |
 | `for chunk in p using f32s up to <n>:` | a traversal of a pack |
 | `break`, `continue` | inside a slow loop |
+| `slow { statements; value }` | a scoped scalar escape in a run or slow function, optionally producing a scalar |
 | `e` | a call evaluated for its effect |
 
-A name is bound once in its function and can't be rebound. A mutable location
+A name is bound once in its scope and can't shadow an enclosing name. A mutable location
 changes with `<-`. [Control flow](05_control_flow.md) defines the
 conditionals and loops, [Packs and runs](02_packs_and_run.md) the traversal,
 and [the slow tier](08_slow_tier.md) the scalar statements.

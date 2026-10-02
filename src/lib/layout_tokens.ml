@@ -4,9 +4,9 @@
     This filter sits between the lexer and the parser and turns the source's
     line structure into three tokens, as Python's tokenizer does: [NEWLINE]
     ends a logical line, [INDENT] opens a deeper body and [DEDENT] closes one.
-    Lines inside parentheses, brackets or braces continue the logical line and
-    produce no layout tokens, so parameter lists and stack bodies may span
-    lines freely. {!Layout.validate} has already rejected tabs and
+    Lines inside parentheses, brackets and data braces continue the logical
+    line. A [slow { }] body restores statement layout until its closing brace,
+    even inside a call's parentheses. {!Layout.validate} has rejected tabs and
     indentation that matches no enclosing body. *)
 
 type state = {
@@ -15,10 +15,13 @@ type state = {
   mutable depth : int;
   mutable last_line : int;
   mutable started : bool;
+  mutable after_slow : bool;
+  mutable braces : int option list;
 }
 
 let filter (lexer : Lexing.lexbuf -> Parser.token) : Lexing.lexbuf -> Parser.token =
-  let state = { pending = []; indents = [ 0 ]; depth = 0; last_line = 0; started = false } in
+  let state = { pending = []; indents = [ 0 ]; depth = 0; last_line = 0;
+                started = false; after_slow = false; braces = [] } in
   let emit (lexbuf : Lexing.lexbuf) (token, start, finish) =
     lexbuf.lex_start_p <- start;
     lexbuf.lex_curr_p <- finish;
@@ -59,9 +62,21 @@ let filter (lexer : Lexing.lexbuf -> Parser.token) : Lexing.lexbuf -> Parser.tok
             state.started <- true;
             state.last_line <- start.pos_lnum;
             (match token with
-            | Parser.LPAREN | Parser.LBRACKET | Parser.LBRACE -> state.depth <- state.depth + 1
-            | Parser.RPAREN | Parser.RBRACKET | Parser.RBRACE -> state.depth <- max 0 (state.depth - 1)
-            | _ -> ()));
+            | Parser.LBRACE when state.after_slow ->
+                state.braces <- Some state.depth :: state.braces;
+                state.depth <- 0
+            | Parser.LBRACE ->
+                state.braces <- None :: state.braces;
+                state.depth <- state.depth + 1
+            | Parser.RBRACE ->
+                (match state.braces with
+                 | Some depth :: rest -> state.depth <- depth; state.braces <- rest
+                 | None :: rest -> state.depth <- max 0 (state.depth - 1); state.braces <- rest
+                 | [] -> ())
+            | Parser.LPAREN | Parser.LBRACKET -> state.depth <- state.depth + 1
+            | Parser.RPAREN | Parser.RBRACKET -> state.depth <- max 0 (state.depth - 1)
+            | _ -> ());
+            state.after_slow <- token = Parser.SLOW);
         queue := (token, start, finish) :: !queue;
         (match List.rev !queue with
         | first :: rest ->

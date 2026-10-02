@@ -1,9 +1,9 @@
 (** The checker for the slow tier and general runs.
 
     Slow code is scalar orchestration: records, arrays, views, module state,
-    embedded data, control flow and calls. It can't name or hold a rack type,
-    so no rack is ever alive across one of its branches, loops or calls. It
-    reaches vector work only by calling a run, or a crunch whose parameters
+    embedded data, control flow and calls. It can't name or hold a rack type.
+    A run's lexical slow blocks capture scalars and views, never live racks.
+    Slow code reaches vector work only by calling a run, or a crunch whose parameters
     are all uniform, and marks every scalar argument that becomes a rack at
     that boundary with angle brackets.
 
@@ -38,6 +38,7 @@ type ctx = {
   consts : (string, expr) Hashtbl.t;
   tc : Typecheck.env;
   base_dir : string;
+  block_functions : slow_func list ref;
 }
 
 type binding = {
@@ -56,6 +57,7 @@ type env = {
   loops : int;
   result : ty;
   fresh : int ref;
+  return_allowed : bool;
 }
 
 let lookup env loc name =
@@ -146,6 +148,21 @@ let fits s value =
   | SFloat | SDouble -> true
   | SBool -> false
 
+let bind env loc name binding =
+  if SM.mem name env.vars then fail loc "'%s' is already bound; names are not reused" name;
+  if Hashtbl.mem env.ctx.consts name || Hashtbl.mem env.ctx.globals name then
+    fail loc "'%s' names a module definition" name;
+  { env with vars = SM.add name binding env.vars }
+
+let rec definitely_returns = function
+  | [] -> false
+  | stmts -> (
+      match (List.rev stmts |> List.hd).s with
+      | Return _ -> true
+      | If (_, a, b) -> definitely_returns a && definitely_returns b
+      | Eval { k = Block (body, _); _ } -> definitely_returns body
+      | _ -> false)
+
 (* ─── Uniform scalar expressions ────────────────────────────────────── *)
 
 let math_unary = [ "sqrt"; "exp"; "log"; "log2"; "tanh"; "floor"; "ceil" ]
@@ -171,6 +188,7 @@ let rec mentions_racks env (e : Ast.expr) =
       | Some { bty = View _; _ } -> true
       | _ -> false)
   | EScalarVar _ | EInt _ | EFloat _ | EBool _ | EString _ | ELanes -> false
+  | ESlow _ -> false
   | EBroadcast _ -> false
   | ELaneIndex -> true
   | EBinop (a, _, b) -> any [ a; b ]
@@ -212,6 +230,12 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
         match SM.find_opt name env.vars with
         | Some { bconst = Some value; bty; _ } -> mk (Int value) bty loc
         | Some { bty; buniform; _ } ->
+            (match bty with
+             | Rack _ | Mask _ | Rack_array _ when env.mode = Slow_mode ->
+                 fail loc "slow code can't hold rack or mask '%s'; reduce or extract it before the slow block" name
+             | Pack _ when env.mode = Slow_mode ->
+                 fail loc "slow code can't use traversal chunk or pack '%s'; pass its memory to a run" name
+             | _ -> ());
             if env.mode = Vector_mode && not buniform then
               fail loc "'%s' is not a uniform scalar" name;
             mk (Var name) bty loc
@@ -336,6 +360,7 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
           let items = first :: List.map (fun item -> let v = check_uniform env ~expected:first.ty item in require item.loc first.ty v.ty "an array element"; v) (List.tl items) in
           mk (Array_lit items) (Array (List.length items, first.ty)) loc)
   | ECall (name, args) -> call env ?expected loc name args
+  | ESlow (body, tail) -> slow_expression env ?expected loc body tail
   | _ ->
       if env.mode = Vector_mode then fail loc "this expression is a rack computation, not a uniform scalar"
       else fail loc "this expression is vector code; slow code reaches it by calling a run"
@@ -620,31 +645,46 @@ and vector_call env loc name signature args =
       in
       mk (Vector_call (name, args)) result loc
 
-(* ─── Slow statements ───────────────────────────────────────────────── *)
+(* Blocks in a run become a non-inlined scalar helper. Its captures are scalar
+   values and memory views only, so a vector value never crosses the boundary.
+   Blocks already in scalar code remain lexical scopes, sharing outer locations. *)
+and slow_expression env ?expected loc body tail =
+  let inner = { env with mode = Slow_mode; loops = (if env.mode = Vector_mode then 0 else env.loops) } in
+  let checked_env, body = check_slow_statements inner body in
+  let tail = Option.map (check_uniform checked_env ?expected) tail in
+  let ty = match tail with None -> Void | Some value -> value.ty in
+  (match ty with Sc _ | Void -> () | _ -> fail loc "a slow block produces a scalar value or nothing");
+  if env.mode = Slow_mode then mk (Block (body, tail)) ty loc
+  else (
+    let captures =
+      SM.bindings env.vars
+      |> List.filter_map (fun (name, b) ->
+             match b.bty with
+             | Sc _ | View (Sc _, _) ->
+                 Some ({ pname = name; pty = b.bty; pass = By_value },
+                       (match b.bconst with Some value -> mk (Int value) b.bty loc | None -> mk (Var name) b.bty loc))
+             | _ -> None)
+    in
+    let name = fresh env "slow_block" in
+    let body = body @ (match tail with
+      | Some value when value.ty = Void -> [ { s = Eval value; sloc = loc }; { s = Return None; sloc = loc } ]
+      | _ -> [ { s = Return tail; sloc = loc } ]) in
+    env.ctx.block_functions :=
+      { fname = name; fparams = List.map fst captures; fresult = ty; fbody = body; floc = loc; fblock = true }
+      :: !(env.ctx.block_functions);
+    mk (Call (name, List.map snd captures)) ty loc)
 
-let bind env loc name binding =
-  if SM.mem name env.vars then fail loc "'%s' is already bound; names are not reused" name;
-  if Hashtbl.mem env.ctx.consts name || Hashtbl.mem env.ctx.globals name then
-    fail loc "'%s' names a module definition" name;
-  { env with vars = SM.add name binding env.vars }
-
-let rec definitely_returns = function
-  | [] -> false
-  | stmts -> (
-      match (List.rev stmts |> List.hd).s with
-      | Return _ -> true
-      | If (_, a, b) -> definitely_returns a && definitely_returns b
-      | _ -> false)
-
-let rec check_slow_block env (stmts : Ast.stmt list) =
-  let _, out =
+and check_slow_statements env (stmts : Ast.stmt list) =
+  let env, out =
     List.fold_left
       (fun (env, acc) stmt ->
         let env, s = check_slow_stmt env stmt in
         (env, s :: acc))
       (env, []) stmts
   in
-  List.rev out
+  (env, List.rev out)
+
+and check_slow_block env stmts = snd (check_slow_statements env stmts)
 
 and check_slow_stmt env (stmt : Ast.stmt) =
   let loc = stmt.loc in
@@ -691,9 +731,11 @@ and check_slow_stmt env (stmt : Ast.stmt) =
   | SBreak -> if env.loops = 0 then fail loc "break outside a loop"; (env, st Break)
   | SContinue -> if env.loops = 0 then fail loc "continue outside a loop"; (env, st Continue)
   | SReturn None ->
+      if not env.return_allowed then fail loc "a run has no return; a slow block produces its value with its final expression";
       if env.result <> Void then fail loc "this function returns %s" (string_of_ty env.result);
       (env, st (Return None))
   | SReturn (Some e) ->
+      if not env.return_allowed then fail loc "a run has no return; a slow block produces its value with its final expression";
       if env.result = Void then fail loc "this function returns nothing";
       let v = check_uniform env ~expected:env.result e in
       require e.loc env.result v.ty "the returned value";
@@ -1164,6 +1206,9 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
           | Pack (_, false), _ -> fail loc "pack %s is read-only: declare it mut pack" output
           | _ -> fail loc "%s.%s is stored only inside a traversal over the same records" output field)
       | _ -> fail loc "vector code stores to view[<index>], rack array elements and output columns")
+  | SExpr ({ v = ESlow _; _ } as value) ->
+      emit renv loc (R_slow (check_uniform renv.env value));
+      renv
   | SExpr value when last -> (
       match renv.scope with
       | Some _ ->
@@ -1251,6 +1296,8 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
   | SReturn _ -> fail loc "a run ends after its last statement"
 
 and assign_rack renv loc name value =
+  if Hashtbl.mem renv.env.ctx.globals name && not (SM.mem name renv.env.vars) then
+    fail loc "vector code can't write module state '%s'; use a slow block" name;
   let binding = lookup renv.env loc name in
   if not binding.bmut then fail loc "'%s' is not a mutable location" name;
   let renv, pure, ty = rack_value renv value in
@@ -1296,7 +1343,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     {
       records = Hashtbl.create 16; stacks = Hashtbl.create 16; slows = Hashtbl.create 32;
       externs = Hashtbl.create 32; vectors = Hashtbl.create 32; globals = Hashtbl.create 16;
-      consts = Hashtbl.create 16; tc; base_dir;
+      consts = Hashtbl.create 16; tc; base_dir; block_functions = ref [];
     }
   in
   let defs = List.concat_map (fun (m : Ast.module_) -> m.mod_defs) program in
@@ -1357,7 +1404,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     List.rev (List.fold_left (place []) [] records)
   in
   let fresh = ref 0 in
-  let top_env = { ctx; vars = SM.empty; mode = Slow_mode; loops = 0; result = Void; fresh } in
+  let top_env = { ctx; vars = SM.empty; mode = Slow_mode; loops = 0; result = Void; fresh; return_allowed = true } in
   let consts = ref [] and states = ref [] and embeds = ref [] and externs = ref [] in
   List.iter
     (fun (d : Ast.def) ->
@@ -1450,7 +1497,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
             let body = check_slow_block env body in
             if result <> Void && not (definitely_returns body) then
               fail d.loc "slow function %s may end without returning %s" name (string_of_ty result);
-            Some { fname = name; fparams = params; fresult = result; fbody = body; floc = d.loc }
+            Some { fname = name; fparams = params; fresult = result; fbody = body; floc = d.loc; fblock = false }
         | _ -> None)
       defs
   in
@@ -1461,7 +1508,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
         | DRun (name, _, _, body) -> (
             match Hashtbl.find ctx.vectors name with
             | Sig_run (params, stream) ->
-                let env = { top_env with mode = Vector_mode } in
+                let env = { top_env with mode = Vector_mode; return_allowed = false } in
                 let body = check_run_body env params stream body d.loc in
                 Some { run_name = name; run_params = params; run_stream = stream; run_body = body; run_loc = d.loc }
             | Sig_crunch _ -> None)
@@ -1476,7 +1523,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     states = List.rev !states;
     embeds = List.rev !embeds;
     consts = List.rev !consts;
-    slows;
+    slows = slows @ List.rev !(ctx.block_functions);
     runs;
     vector_defs = List.filter (fun (d : Ast.def) -> match d.v with DCrunch _ | DRake _ -> true | _ -> false) defs;
   }

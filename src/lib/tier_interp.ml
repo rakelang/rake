@@ -314,6 +314,10 @@ let rec eval env (e : expr) : value =
       | VPtr { store; index } -> VView { store; start = index; count = Int64.to_int (as_int loc (ev count)) }
       | _ -> trap loc "unchecked_view of a null pointer")
   | Is_null p -> VBool (ev p = VNull)
+  | Block (body, value) ->
+      let inner = { env with vars = Hashtbl.copy env.vars } in
+      exec_block inner body;
+      (match value with None -> VUnit | Some value -> eval inner value)
 
 and place env (e : expr) : (unit -> value) * (value -> unit) =
   let loc = e.loc in
@@ -630,6 +634,7 @@ and exec_rstmt renv ~tail (s : rstmt) =
       done
   | R_if (c, a, b) -> List.iter (exec_rstmt renv ~tail) (if as_bool loc (eval renv c) then a else b)
   | R_block body -> List.iter (exec_rstmt renv ~tail) body
+  | R_slow e -> ignore (eval renv e)
   | R_traverse t ->
       let count = as_int loc (eval renv t.t_count) in
       (* A wasm32 traversal counts its records in 32 bits. *)

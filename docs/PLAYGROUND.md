@@ -78,7 +78,7 @@ updated.
 | 7 | [Choosing by lane](#7-choosing-by-lane) | masks, `if ... then ... else` on racks | both branches run and a select joins them |
 | 8 | [Tines and sweeps](#8-tines-and-sweeps) | `#tine`, `through`, `sweep`, `_` | a NaN in one lane disappears once the root is guarded |
 | 9 | [Columns](#9-columns) | `stack`, `pack`, traversals, `widen`, tails | a count of 6 leaves a tail with two live lanes |
-| 10 | [A whole program](#10-a-whole-program) | records, `state`, `mut`, slow functions | slow code is refused a rack |
+| 10 | [A whole program](#10-a-whole-program) | `slow {}`, records, `state`, `mut` | scalar state updates require a block, and vector work resumes at `}` |
 | 11 | [Proved or refused](#11-proved-or-refused) | profiles and their rules | `sin` is refused instead of slowed down |
 | 12 | [Bits](#12-bits) | integer racks, bit operations, `repeat` | a flood fill spreads along a row of a bitboard |
 
@@ -379,6 +379,10 @@ the record that exists.
 Slow code holds a program's records, state and control flow. A `record` groups
 fields, `state games: i32 := 0` keeps a value for the life of the program,
 and a `mut` parameter is one the function writes.
+Inside a run, `slow { ... }` explicitly enters scalar mode. This is the
+performance boundary corresponding to Rust's `unsafe { ... }` safety boundary.
+At `}` the run resumes vector mode. This syntax is available in the current
+source and playground, ahead of the next tagged release.
 
 <!-- rake-check: run 922 -->
 <!-- playground-starter -->
@@ -392,6 +396,7 @@ state games: i32 := 0
 
 run highest(x: []f32, out: mut []f32):
   let <top: f32> = maximum(x[<0>])
+  slow { games <- games + 1; }
   out[<0>] <- <top>
 
 slow play(score: mut Score, values: []f32):
@@ -400,7 +405,6 @@ slow play(score: mut Score, values: []f32):
   if top[0] > score.best:
     score.best <- top[0]
   score.rounds <- score.rounds + 1
-  games <- games + 1
 
 slow main() -> i32:
   score: Score := Score { best: 0.0, rounds: 0 }
@@ -415,6 +419,18 @@ Result: `main returned 922`: the best score 9, two rounds and two games. Add
 `play(score, first)` after the two existing calls and run. Result becomes
 `main returned 933`, showing that the record and module state survive each
 call.
+
+Now remove `slow {` and its closing brace, leaving `games <- games + 1` in
+the run. Run it and read the error: vector code can't access module state.
+Restore the block and run again. The reduction before it and the broadcast
+store after it remain vector work. In Code, find the scalar helper call
+between them.
+
+A block's last expression can return a scalar to a marked uniform binding.
+Its local names end at the brace. A block can't capture a rack: move the
+`maximum` into it as `let top = maximum(x[<0>])`, run, and read the error.
+Restore the reduction outside the block. A reduction or extraction is the
+explicit boundary from a rack to a scalar.
 
 Slow code can't hold a rack. This separate rejected example shows the rule:
 
@@ -499,11 +515,11 @@ editor.
 
 ### Layout
 
-There are no braces around bodies and no semicolons between statements. A
-line that ends in `:` opens a body, and the body is the lines indented below
-it, as in Python. Tabs aren't allowed in indentation, so the code looks the
-same in every editor. Braces appear only around the fields of a `stack` or
-`record`.
+Function and control-flow bodies use indentation: a line ending in `:` opens
+the lines indented below it, as in Python. Tabs aren't allowed. Braces enclose
+stack and record fields, record literals and `slow { ... }` blocks. In a slow
+block, multiline statements are indented, while inline statements use
+semicolons. Its last expression is its value unless a semicolon discards it.
 
 ### Types after names
 

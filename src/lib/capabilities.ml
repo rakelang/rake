@@ -43,7 +43,7 @@ type feature =
   (* The slow tier, general runs and control flow *)
   | Type_array | Type_view | Type_pointer | Type_mutable | Type_record
   | Def_record | Def_slow | Def_extern | Def_state | Def_embed | Def_const
-  | Expr_string | Expr_index | Expr_conversion | Expr_if | Expr_array
+  | Expr_string | Expr_index | Expr_conversion | Expr_if | Expr_array | Expr_slow
   | Stmt_store | Stmt_return | Stmt_yield | Stmt_break | Stmt_continue
   | Stmt_if | Stmt_while | Stmt_loop | Stmt_repeat | Stmt_uniform
 
@@ -196,6 +196,7 @@ let all = [
   supported Expr_index "expression.index" "expression" "element, rack and gather indexing, checked or unchecked";
   supported Expr_conversion "expression.conversion" "expression" "checked, wrapping and bit-cast scalar conversions";
   supported Expr_if "expression.if" "expression" "value-producing if, by scalar condition or rack mask";
+  supported Expr_slow "expression.slow-block" "expression" "lexically scoped scalar escape in runs and slow functions";
   supported Expr_array "expression.array" "expression" "array literals";
   supported Stmt_store "statement.store" "statement" "stores to fields, elements and memory";
   supported Stmt_return "statement.return" "statement" "return";
@@ -260,6 +261,7 @@ let feature_of_binop = function
 let feature_of_unop = function Neg | FNeg -> Expr_negate | Not -> Expr_not
 
 let feature_of_expr = function
+  | ESlow _ -> Expr_slow
   | EInt _ -> Expr_int | EFloat _ -> Expr_float | EBool _ -> Expr_bool
   | EVar _ -> Expr_var | EScalarVar _ -> Expr_scalar_var
   | EBinop (_, op, _) -> feature_of_binop op

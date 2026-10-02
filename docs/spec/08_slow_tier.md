@@ -3,10 +3,13 @@
 A Rake program can hold its scalar orchestration as well as its vector
 kernels. Slow code is that orchestration: records, arrays, module state,
 embedded data, control flow, and calls to C. It is ordinary scalar code and is
-marked `slow` so that nobody mistakes it for vector code. Vector code
-(`crunch`, `rake`, `run`) keeps every promise it had: slow code can't hold a
-rack, and it reaches vector work only through a run or crunch call whose
-uniform arguments are marked `<...>`.
+marked `slow` so that nobody mistakes it for vector code. A `slow { ... }`
+block is a lexical escape inside a run, like Rust's explicit `unsafe { ... }`
+boundary. The surrounding rack work retains its vector contract. A whole
+scalar function can instead be declared `slow name(...)`.
+
+Slow blocks are available in the current compiler source and playground. They
+were added after the 0.4.0-beta tag and will be included in the next release.
 
 A program with any slow, run, record, state, embed, const or extern
 definition is a whole program. On `wasm-simd128` it compiles to one C
@@ -51,6 +54,55 @@ slow main() -> i32:
 prints its result. `rakec --emit-asm --target wasm-simd128 -o program.c
 program.rk` writes the C unit, and `--verify-native` compiles it and checks
 every crunch, rake and run in the object (see [Verification](#verification)).
+
+## Slow blocks
+
+Enter scalar code at `slow {`, and return to the enclosing mode at `}`. A
+block can contain scalar loops, calls, records, arrays and access to module
+state. Its last expression produces a scalar value. A final semicolon
+discards that value, and a block without a final expression produces nothing.
+
+<!-- rake-check: run 22 -->
+```rake
+run shift(values: []i32, out: mut []i32, <steps: i32>):
+  let rack = values[<0>]
+  let <offset: i32> = slow {
+    total: i32 := 0
+    for index from 0 up to steps:
+      total <- total + index
+    total
+  }
+  out[<0>] <- rack + <offset>
+
+slow main() -> i32:
+  values: [4]i32 := [1, 2, 3, 4]
+  shifted: [4]i32 := [0; 4]
+  shift(values, shifted, <3>)
+  return shifted[0] + shifted[1] + shifted[2] + shifted[3]
+```
+
+The scalar loop produces 0 + 1 + 2 = 3. One vector add then shifts the four
+lanes to 4, 5, 6 and 7, whose sum is 22. Inside the block, `steps` is a bare
+scalar name. Outside it, `<offset>` explicitly broadcasts the result.
+
+Blocks have lexical scope and may nest. Their locals end at `}` and can't
+shadow an enclosing binding, though sibling blocks may reuse a name. A block
+inside a slow function shares that function's mutable locations. A block in a
+run can read its uniforms and scalar-element views, and write a mutable view.
+It can't name a rack, mask, rack array or traversal chunk. Reduce or extract a
+rack to a uniform before entering the block. Block results are scalar or
+void, so a local array, record or borrowed view can't escape through the result.
+
+On one line, separate statements with semicolons: `slow { let x = 2; x + 1 }`
+produces 3. Multiline bodies use the same indentation as other Rake bodies.
+`slow {}` is empty. A `return` inside a slow function's block returns from
+that function, as in Rust. Runs have no early `return`: use the block's final
+expression to produce its result. In a run, `break` and `continue` inside a
+block refer only to scalar loops inside that block.
+
+Crunches, rakes and fused regions remain pure vector kernels and reject slow
+blocks. Put scalar orchestration in the run that calls them. Blocks and whole
+programs currently compile for WebAssembly only.
 
 ## Definitions
 
@@ -117,7 +169,7 @@ views: `Samples { value: values, quality: qualities }`.
 | `return`, `return e` | leave the function |
 | `e` | a call evaluated for its effect |
 
-A name is bound once in a function. It can't shadow another binding or a
+A name is bound once in its scope. It can't shadow an enclosing binding or a
 module definition. A counted loop's index is `i32` unless declared, its step
 must be positive, and it stops at the bound rather than stepping past it, so
 the index never overflows.
@@ -208,24 +260,24 @@ traps before the run starts.
 - Slow code reaches vector work only by calling a run, or a crunch or rake
   with uniform parameters, and every scalar that becomes a rack is marked
   `<...>` at the call. A `<...>` mark anywhere else in slow code is an error.
-- Vector code can't call slow code or an extern, and can't read module state:
-  a value it needs is passed as a parameter.
+- Outside a slow block, vector code can't call slow code or an extern, and
+  can't read module state. Enter `slow { ... }` explicitly to do that work.
 - Inside vector code the existing rules are unchanged: uniform scalars are
   marked at their declaration and use, broadcasts are explicit, and a
   computation the target can't keep in racks is rejected.
 
 ## How the tier keeps vector code's promises
 
-- One rack is one `v128`. Slow code holds no racks, so no rack is alive
-  across a slow branch, loop or call, and nothing slow code does can split or
-  spill one.
+- One rack is one `v128`. A run may keep that virtual value alive across a
+  slow block, but the block can't capture it or turn it into scalar lanes.
+  The WebAssembly runtime owns physical register allocation across the call.
 - Fused regions stay pure. A fused binding is vector code. Slow code can't
   appear in it, and the tier adds no operation to the fused contract.
 - Rakes stay predicated. Slow code's `if` is scalar control flow around
   vector calls. It never selects lanes. Lane selection remains a tine, a
   `through`, a sweep or a mask `if`.
-- Scalars and broadcasts stay explicit. A scalar crosses into vector code only
-  at a marked argument, and vector code reads only its parameters.
+- Scalars and broadcasts stay explicit. A scalar returned by a slow block
+  meets a rack only at an explicit `<...>` broadcast.
 - Properties are proved or rejected. Every crunch, rake and run in a whole
   program goes through the same checks and object verification as before, and
   slow code has its own checked semantics.
@@ -261,6 +313,12 @@ Checked arithmetic, conversions, indexing and slices are small inline helpers
 that call `__builtin_trap`. Each run is an external, never-inlined `void`
 function.
 
+A slow block in scalar code becomes a GNU C statement expression, preserving
+its lexical scope and enclosing function's `return`. A block in a run becomes
+a never-inlined scalar helper. Its captured uniforms are scalar parameters,
+and its captured views are passed as pointer/count pairs, so the run needs no
+C stack frame. Rack values never cross that helper boundary.
+
 Slow functions keep aggregates larger than 256 bytes in Rake's frame stack: a
 static region of `RAKE_FRAME_BYTES` bytes (4 MiB unless defined otherwise when
 compiling the C) from which each call takes a frame and releases it on
@@ -272,8 +330,10 @@ that data and overwrite it without a trap.
 ## Verification
 
 `rakec --verify-native` compiles the unit and disassembles it. Every crunch
-and rake must be locals, constants and register SIMD only. Every run must
-contain no `call`, `call_indirect` or `global.get` or `global.set` (so no C
+and rake must be locals, constants and register SIMD only. A run may call only
+the scalar helpers emitted for its explicit slow blocks. The verifier checks
+each direct call's relocation against those helper symbols. It rejects every
+other call, indirect or tail calls, and `global.get` or `global.set` (so no C
 stack frame, and no rack passing through memory Rake didn't name). Each SIMD
 instruction in it must be one its source operations select, or one of the
 documented equivalents Clang substitutes: constants folded into `v128.const`,

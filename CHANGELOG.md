@@ -5,6 +5,15 @@ website. Beta releases may still change the source language and the binary
 boundaries between versions. A design in the documentation gets a version
 only when the compiler implements it and the tests cover it.
 
+## Unreleased
+
+- `slow { ... }` is a scoped scalar escape in runs and slow functions. It
+  supports scalar loops, calls, state and memory views, nesting and a scalar
+  tail result. Rack values can't cross the boundary. WebAssembly object
+  verification permits only the helper calls selected by these explicit
+  blocks, and keeps the surrounding vector checks.
+- Tree-sitter and the browser tutorial recognise and teach slow blocks.
+
 ## 0.4.0-beta
 
 Changes since 0.3.0.

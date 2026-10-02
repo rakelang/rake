@@ -17,6 +17,7 @@ documentation uses them.
 | rake | a function of racks with tines, through blocks and a sweep |
 | run | vector code over memory: views, packs and traversals |
 | slow code | scalar code, marked `slow`, that holds no racks |
+| slow block | `slow { ... }`, a lexical scalar escape inside a run or slow function, optionally producing a scalar value |
 | fused binding | `\| name <\| e`, one stage of a pure fused computation |
 | stack | the declared columns of structure-of-arrays storage |
 | pack | the columns of a stack, supplied by the caller |

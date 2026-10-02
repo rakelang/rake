@@ -44,6 +44,7 @@ expression.fused-pipeline	unavailable	unavailable	capability:expression.fused-pi
 expression.let	unavailable	unavailable	capability:expression.let	-	-	-	-	-	-
 expression.field	checked	frontend-only	capability:expression.field	-	-	-	-	-	-
 expression.record	checked	verified-slice	fixture:test/program/slow_tier.rk	program:test/program/slow_tier.rk	fixture:test/program/slow_tier.rk	dune:wasm_simd128_test	wasm-verify:test/program/slow_tier.rk	wasm-verify:test/program/slow_tier.rk	program:test/program/slow_tier.rk
+expression.slow-block	checked	verified-slice	fixture:test/program/slow_blocks.rk	program:test/program/slow_blocks.rk	fixture:test/program/slow_blocks.rk	dune:wasm_simd128_test	wasm-verify:test/program/slow_blocks.rk	wasm-verify:test/program/slow_blocks.rk	program:test/program/slow_blocks.rk
 expression.record-update	unavailable	unavailable	capability:expression.record-update	-	-	-	-	-	-
 expression.lane-index	unavailable	unavailable	capability:expression.lane-index	-	-	-	-	-	-
 expression.lane-count	unavailable	unavailable	capability:expression.lane-count	-	-	-	-	-	-

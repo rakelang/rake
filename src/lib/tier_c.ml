@@ -76,7 +76,8 @@ type unit_ = {
   mutable selected : string list;  (** wasm instructions selected for the current run *)
   mutable lane_operations : int;  (** lane extractions and replacements Rake emitted in the current run *)
   mutable loops : int;  (** loops Rake emitted in the current run *)
-  run_facts : (string, int * int * string list) Hashtbl.t;
+  mutable slow_calls : string list;
+  run_facts : (string, int * int * string list * string list) Hashtbl.t;
       (** per run: loops, lane operations and selected instructions, for verification *)
 }
 
@@ -207,11 +208,11 @@ type scope = {
   accesses : string Node_table.t;  (** a run's planned accesses: index or element node to address *)
   dropped : unit Node_table.t;  (** uniform definitions whose every use is a planned, checked access *)
   mutable framed : bool;  (** this slow function keeps large aggregates in Rake's frame stack *)
-  frame_locals : (string, unit) Hashtbl.t;
+  frame_slots : string Node_table.t;  (** declaration identity -> field in this function's frame *)
 }
 
 let new_scope () =
-  { places = Hashtbl.create 16; accesses = Node_table.create 8; dropped = Node_table.create 8; framed = false; frame_locals = Hashtbl.create 4 }
+  { places = Hashtbl.create 16; accesses = Node_table.create 8; dropped = Node_table.create 8; framed = false; frame_slots = Node_table.create 4 }
 
 let int_literal s value =
   match s with
@@ -228,7 +229,19 @@ let rec is_zero (e : expr) =
   | Array_lit items -> List.for_all is_zero items
   | _ -> false
 
-and expr u scope (e : expr) : string =
+let condition text =
+  let n = String.length text in
+  let rec closes_at depth i =
+    if i >= n then -1
+    else
+      match text.[i] with
+      | '(' -> closes_at (depth + 1) (i + 1)
+      | ')' -> if depth = 1 then i else closes_at (depth - 1) (i + 1)
+      | _ -> closes_at depth (i + 1)
+  in
+  if n >= 2 && text.[0] = '(' && closes_at 0 0 = n - 1 then text else "(" ^ text ^ ")"
+
+let rec expr u scope (e : expr) : string =
   let go = expr u scope in
   match e.k with
   | Int value -> (
@@ -293,14 +306,18 @@ and expr u scope (e : expr) : string =
       in
       Printf.sprintf "((%s)%s)" (scalar_c s) r
   | Call (name, args) ->
-      let params = match List.find_opt (fun f -> f.fname = name) u.program.slows with Some f -> f.fparams | None -> [] in
+      let f = List.find (fun f -> f.fname = name) u.program.slows in
+      if f.fblock then u.slow_calls <- function_name name :: u.slow_calls;
+      let params = f.fparams in
       let args =
-        List.mapi
+        List.concat (List.mapi
           (fun i a ->
             match (List.nth_opt params i) with
-            | Some { pass = Borrow | Borrow_mut; _ } -> "&" ^ addressable u scope a
-            | _ -> go a)
-          args
+            | Some { pty = View _; _ } when f.fblock ->
+                [ Printf.sprintf "(%s).data" (go a); Printf.sprintf "(%s).count" (go a) ]
+            | Some { pass = Borrow | Borrow_mut; _ } -> [ "&" ^ addressable u scope a ]
+            | _ -> [ go a ])
+          args)
       in
       Printf.sprintf "%s(%s)" (function_name name) (String.concat ", " args)
   | Extern_call (name, args) ->
@@ -355,6 +372,11 @@ and expr u scope (e : expr) : string =
       Printf.sprintf "%s((%s *)%s, %s, %s, %s)" name (ctype u element) data n (go start) (go count)
   | Ptr_view (p, count) -> Printf.sprintf "((%s){ %s, %s })" (ctype u e.ty) (go p) (go count)
   | Is_null p -> Printf.sprintf "(%s == 0)" (go p)
+  | Block (body, value) ->
+      let inner = { scope with places = Hashtbl.copy scope.places } in
+      let body = block u inner 4 body in
+      let tail = match value with Some value -> expr u inner value ^ ";\n" | None -> "(void)0;\n" in
+      Printf.sprintf "({\n%s%s})" body tail
 
 (** Whether an array place is a C array inside a C struct (an extern record's field). *)
 and raw_array u (e : expr) =
@@ -491,41 +513,23 @@ and convert u scope (e : expr) kind target value =
            t name (scalar_c source) check t);
       Printf.sprintf "%s(%s)" name v
 
-(** A constant value as a C static initializer. *)
-let rec initializer_ u (e : expr) =
-  match e.k with
-  | Record_lit (_, fields) ->
-      "{ " ^ String.concat ", " (List.map (fun (f, v) -> Printf.sprintf ".%s = %s" f (initializer_ u v)) fields) ^ " }"
-  | Array_lit items when List.for_all is_zero items -> "{0}"
-  | Array_lit items -> "{ { " ^ String.concat ", " (List.map (initializer_ u) items) ^ " } }"
-  | _ -> expr u (new_scope ()) e
-
 (* ─── Slow statements ───────────────────────────────────────────────── *)
-
-(** A C condition in its statement's own parentheses: an expression that is
-    already one parenthesised group is used as it is. *)
-let condition text =
-  let n = String.length text in
-  let rec closes_at depth i =
-    if i >= n then -1
-    else
-      match text.[i] with
-      | '(' -> closes_at (depth + 1) (i + 1)
-      | ')' -> if depth = 1 then i else closes_at (depth - 1) (i + 1)
-      | _ -> closes_at depth (i + 1)
-  in
-  if n >= 2 && text.[0] = '(' && closes_at 0 0 = n - 1 then text else "(" ^ text ^ ")"
-
-let rec stmt u scope indent (s : stmt) =
+and stmt u scope indent (s : stmt) =
   let pad = String.make indent ' ' in
   let go = expr u scope in
   match s.s with
-  | Decl (name, _, Some v, _) when Hashtbl.mem scope.frame_locals name ->
-      (* A frame local: its storage is the frame's; the declaration sets it. *)
-      if is_zero v then Printf.sprintf "%s__builtin_memset(%s, 0, sizeof *%s);\n" pad (local name) (local name)
-      else Printf.sprintf "%s*%s = %s;\n" pad (local name) (go v)
-  | Decl (name, _, None, _) when Hashtbl.mem scope.frame_locals name ->
-      Printf.sprintf "%s__builtin_memset(%s, 0, sizeof *%s);\n" pad (local name) (local name)
+  | Decl (name, ty, value, _) when Node_table.mem scope.frame_slots (Obj.repr s) ->
+      (* Declare the pointer in its lexical scope. Sibling blocks may reuse a
+         source name, but their declarations have distinct frame slots. *)
+      let field = Node_table.find scope.frame_slots (Obj.repr s) in
+      let initial = Option.map go value in
+      Hashtbl.replace scope.places name Borrowed;
+      let setup = Printf.sprintf "%s%s *const %s = &rake_locals->%s;\n" pad (ctype u ty) (local name) field in
+      let initialise = match value, initial with
+        | Some v, Some text when not (is_zero v) -> Printf.sprintf "%s*%s = %s;\n" pad (local name) text
+        | _ -> Printf.sprintf "%s__builtin_memset(%s, 0, sizeof *%s);\n" pad (local name) (local name)
+      in
+      setup ^ initialise
   | Decl (name, (Ptr _ as ty), Some v, mutable_) ->
       (* An immutable pointer binding is a const pointer, not a pointer to const. *)
       Printf.sprintf "%s%s%s %s = %s;\n" pad (ctype u ty) (if mutable_ then "" else "const") (local name) (go v)
@@ -651,6 +655,14 @@ and run_call u scope pad loc name args =
     (String.concat ", " (List.rev !passed)) pad
 
 (* ─── Runs ──────────────────────────────────────────────────────────── *)
+
+let rec initializer_ u (e : expr) =
+  match e.k with
+  | Record_lit (_, fields) ->
+      "{ " ^ String.concat ", " (List.map (fun (f, v) -> Printf.sprintf ".%s = %s" f (initializer_ u v)) fields) ^ " }"
+  | Array_lit items when List.for_all is_zero items -> "{0}"
+  | Array_lit items -> "{ { " ^ String.concat ", " (List.map (initializer_ u) items) ^ " } }"
+  | _ -> expr u (new_scope ()) e
 
 let ir_element = function
   | Types.SFloat -> Native_ir.F32
@@ -872,6 +884,7 @@ and run_stmt u rs scope indent (s : rstmt) =
       record_type rs name e.ty;
       if Node_table.mem scope.dropped (Obj.repr s) then ""
       else Printf.sprintf "%sconst %s %s = %s;\n" pad (ctype u e.ty) (local name) (uniform e)
+  | R_slow e -> Printf.sprintf "%s(void)%s;\n" pad (uniform e)
   | R_pure (name, ty, pure, fused) ->
       record_type rs name ty;
       let c = match ty with Sc st -> scalar_c st | _ -> "v128_t" in
@@ -1126,6 +1139,7 @@ and loop u rs scope indent var from upto by body =
       (fun st ->
         match st.r with
         | R_uniform (_, e) -> (not (Node_table.mem scope.dropped (Obj.repr st))) && expr_uses name e
+        | R_slow e -> expr_uses name e
         | R_pure (_, _, pure, _) -> List.mem name (free_names pure)
         | R_load (_, _, view, index, _) | R_store (view, index, _, _) -> expr_uses name view || index_uses name index
         | R_gather (_, _, view, _, _) -> expr_uses name view
@@ -1370,6 +1384,7 @@ let run_function u (run : run) =
   u.selected <- [];
   u.lane_operations <- 0;
   u.loops <- 0;
+  u.slow_calls <- [];
   let rs = { run; types = Hashtbl.create 32; counter = ref 0; tail = false; assigned_in_traversal = Hashtbl.create 4 } in
   let scope = new_scope () in
   let params = ref [] and entry = Buffer.create 128 in
@@ -1394,7 +1409,8 @@ let run_function u (run : run) =
    | Some s -> params := Printf.sprintf "%s *p_result" (scalar_c s) :: !params
    | None -> ());
   let body = run_stmts u rs scope 4 run.run_body in
-  Hashtbl.replace u.run_facts run.run_name (u.loops, u.lane_operations, List.sort_uniq compare u.selected);
+  Hashtbl.replace u.run_facts run.run_name
+    (u.loops, u.lane_operations, List.sort_uniq compare u.selected, List.sort_uniq compare u.slow_calls);
   Printf.sprintf "__attribute__((noinline)) void %s(%s)\n{\n%s%s}\n" run.run_name
     (if !params = [] then "void" else String.concat ", " (List.rev !params)) (Buffer.contents entry) body
 
@@ -1427,63 +1443,80 @@ let frame_helpers u =
 
 let slow_function u (f : slow_func) =
   let scope = new_scope () in
+  let entry = Buffer.create 128 in
   let params =
-    List.map
+    List.concat_map
       (fun p ->
-        match p.pass with
-        | By_value -> Printf.sprintf "%s %s" (ctype u p.pty) (local p.pname)
-        | Borrow ->
+        match (p.pty, p.pass) with
+        | View (Sc s, w), By_value when f.fblock ->
+            Buffer.add_string entry
+              (Printf.sprintf "    const %s %s = { (%s *)p_%s, p_%s_count };\n"
+                 (ctype u p.pty) (local p.pname) (scalar_c s) p.pname p.pname);
+            [ Printf.sprintf "%s%s *p_%s" (if w then "" else "const ") (scalar_c s) p.pname;
+              Printf.sprintf "int32_t p_%s_count" p.pname ]
+        | _, By_value -> [ Printf.sprintf "%s %s" (ctype u p.pty) (local p.pname) ]
+        | _, Borrow ->
             Hashtbl.replace scope.places p.pname Borrowed;
             complete u p.pty;
-            Printf.sprintf "const %s *%s" (ctype u p.pty) (local p.pname)
-        | Borrow_mut ->
+            [ Printf.sprintf "const %s *%s" (ctype u p.pty) (local p.pname) ]
+        | _, Borrow_mut ->
             Hashtbl.replace scope.places p.pname Borrowed;
             complete u p.pty;
-            Printf.sprintf "%s *%s" (ctype u p.pty) (local p.pname))
+            [ Printf.sprintf "%s *%s" (ctype u p.pty) (local p.pname) ])
       f.fparams
   in
   let signature =
     if f.fname = "main" then "int main(void)"
     else
-      Printf.sprintf "static %s %s(%s)" (ctype u f.fresult) (function_name f.fname)
+      Printf.sprintf "static %s%s %s(%s)" (if f.fblock then "__attribute__((noinline)) " else "")
+        (ctype u f.fresult) (function_name f.fname)
         (if params = [] then "void" else String.concat ", " params)
   in
   (* Aggregates larger than this live in Rake's frame stack rather than C's:
      the judge links with wasm-ld's 64 KiB stack after static data, which a
      few kilobyte-sized arrays overflow into, silently. *)
-  let rec framed_decls stmts =
-    List.concat_map
-      (fun s ->
-        match s.s with
-        | Decl (name, ty, _, _) when is_aggregate ty && approximate_size u ty > frame_threshold -> [ (name, ty) ]
-        | If (_, a, b) -> framed_decls a @ framed_decls b
-        | While (_, b) | For (_, _, _, _, _, b) -> framed_decls b
-        | _ -> [])
-      stmts
+  let rec framed_expr (e : expr) =
+    match e.k with
+    | Block (body, value) -> framed_decls body @ Option.fold ~none:[] ~some:framed_expr value
+    | Unary (_, a) | Convert (_, _, a) | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> framed_expr a
+    | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> framed_expr a @ framed_expr b
+    | Cond (a, b, c) | Slice (a, b, c) -> framed_expr a @ framed_expr b @ framed_expr c
+    | Call (_, args) | Extern_call (_, args) | Math (_, args) | Array_lit args -> List.concat_map framed_expr args
+    | Vector_call (_, args) -> List.concat_map (function Arg_uniform e | Arg_memory e -> framed_expr e) args
+    | Record_lit (_, fields) | Pack_lit (_, fields) -> List.concat_map (fun (_, e) -> framed_expr e) fields
+    | _ -> []
+  and framed_decls stmts =
+    List.concat_map (fun s ->
+      match s.s with
+      | Decl (_, ty, value, _) ->
+          (if is_aggregate ty && approximate_size u ty > frame_threshold then [ (s, ty) ] else [])
+          @ Option.fold ~none:[] ~some:framed_expr value
+      | Eval e | Return (Some e) -> framed_expr e
+      | Assign (a, b) -> framed_expr a @ framed_expr b
+      | If (c, a, b) -> framed_expr c @ framed_decls a @ framed_decls b
+      | While (c, b) -> framed_expr c @ framed_decls b
+      | For (_, _, a, b, c, body) -> framed_expr a @ framed_expr b @ Option.fold ~none:[] ~some:framed_expr c @ framed_decls body
+      | _ -> []) stmts
   in
   match framed_decls f.fbody with
-  | [] -> (signature, Printf.sprintf "%s\n{\n%s}\n" signature (block u scope 4 f.fbody))
+  | [] -> (signature, Printf.sprintf "%s\n{\n%s%s}\n" signature (Buffer.contents entry) (block u scope 4 f.fbody))
   | locals ->
       scope.framed <- true;
       frame_helpers u;
-      let frame_type = Printf.sprintf "struct rake_frame_%s" f.fname in
+      let frame_type = Printf.sprintf "struct rake_frame_%s" (local f.fname) in
       List.iter (fun (_, ty) -> complete u ty) locals;
+      let fields = List.mapi (fun index (declaration, ty) ->
+        let field = Printf.sprintf "slot_%d" index in
+        Node_table.replace scope.frame_slots (Obj.repr declaration) field;
+        Printf.sprintf "    %s %s;\n" (ctype u ty) field) locals in
       Buffer.add_string u.types
         (Printf.sprintf "%s {\n%s};\n" frame_type
-           (String.concat "" (List.map (fun (name, ty) -> Printf.sprintf "    %s %s;\n" (ctype u ty) (local name)) locals)));
-      let pointers =
-        List.map
-          (fun (name, ty) ->
-            Hashtbl.replace scope.frame_locals name ();
-            Hashtbl.replace scope.places name Borrowed;
-            Printf.sprintf "    %s *const %s = &rake_locals->%s;\n" (ctype u ty) (local name) (local name))
-          locals
-      in
+           (String.concat "" fields));
       let body = block u scope 4 f.fbody in
       let ends_in_return = match List.rev f.fbody with { s = Return _; _ } :: _ -> true | _ -> false in
       ( signature,
         Printf.sprintf "%s\n{\n    %s *const rake_locals = rake_frame_enter(sizeof(%s));\n%s%s%s}\n" signature frame_type frame_type
-          (String.concat "" pointers) body
+          (Buffer.contents entry) body
           (if ends_in_return then "" else "    rake_frame_leave(rake_locals);\n") )
 
 let escape_bytes contents =
@@ -1530,9 +1563,9 @@ let boundaries u =
     | Cond (a, b, c) | Slice (a, b, c) -> walk_expr a; walk_expr b; walk_expr c
     | Call (_, args) | Extern_call (_, args) | Math (_, args) | Array_lit args -> List.iter walk_expr args
     | Record_lit (_, fields) | Pack_lit (_, fields) -> List.iter (fun (_, v) -> walk_expr v) fields
+    | Block (body, value) -> List.iter walk body; Option.iter walk_expr value
     | _ -> ()
-  in
-  let rec walk (s : stmt) =
+  and walk (s : stmt) =
     match s.s with
     | Decl (_, _, Some e, _) | Eval e | Return (Some e) -> walk_expr e
     | Assign (a, b) -> walk_expr a; walk_expr b
@@ -1567,7 +1600,7 @@ let emit ?(addressing = Barrier) ~source (program : program) =
   let u =
     {
       program; addressing; types = Buffer.create 1024; defined = Hashtbl.create 32; helpers = Buffer.create 1024;
-      helper_names = Hashtbl.create 32; expressions = Buffer.create 4096; selected = []; lane_operations = 0; loops = 0;
+      helper_names = Hashtbl.create 32; expressions = Buffer.create 4096; selected = []; lane_operations = 0; loops = 0; slow_calls = [];
       run_facts = Hashtbl.create 8;
     }
   in
@@ -1635,6 +1668,6 @@ let emit ?(addressing = Barrier) ~source (program : program) =
       @ forward @ [ Buffer.contents u.types ] @ layout_checks
       @ [ "\n"; Buffer.contents u.helpers; "\n"; Buffer.contents globals; "\n"; vectors; "\n"; boundaries u; "\n";
           Buffer.contents u.expressions ]
-      @ runs @ [ "\n" ] @ prototypes @ [ "\n" ] @ List.map snd slows @ [ Wasm_simd128_c.relaxed_epilogue () ])
+      @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ Wasm_simd128_c.relaxed_epilogue () ])
   in
   (unit_text, u.run_facts)

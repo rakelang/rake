@@ -66,7 +66,9 @@ source
 
 The tier checker enforces the rules of [the slow tier](spec/08_slow_tier.md):
 slow code holds no racks, a scalar becomes a rack only at a marked argument,
-and vector code calls nothing and reads no module state. The C emitter forms a
+and only an explicit slow block in a run can call scalar code or read module
+state. The C emitter lifts each such block to a never-inlined scalar helper,
+capturing scalar values and pointer/count pairs, never racks. It forms a
 run's addresses, writes its loops, tails and checks, and inlines its rack
 expressions, which native lowering and wasm selection compile as they compile
 a crunch. `rakec --interpret` runs `main` in Rake's executable semantics,
@@ -111,7 +113,8 @@ its profile's list of instructions:
   compiler selected.
 - For a `wasm-simd128` crunch or rake: only locals, constants and register
   instructions, with no calls, memory or branches.
-- For a `wasm-simd128` run: no calls and no C stack, only the vector
+- For a `wasm-simd128` run: direct calls only to the helpers for its explicit
+  slow blocks, verified by their object relocations, no C stack, only the vector
   instructions its source selected or their documented equivalents, and no
   more lane operations or loops than its source states.
 

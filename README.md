@@ -12,6 +12,11 @@ it refuses the program. It never replaces rack work with hidden scalar loops
 or helper calls. The language and its documentation are at
 [rake-lang.org](https://rake-lang.org).
 
+What Rust does for safety with `unsafe {}`, Rake does for speed with
+`slow {}`. A run explicitly enters scalar code at `slow {` and resumes vector
+work at `}`. [Slow blocks](docs/spec/08_slow_tier.md#slow-blocks) are available
+on main and in the playground, ahead of the next tagged release.
+
 Release: 0.4.0-beta.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->

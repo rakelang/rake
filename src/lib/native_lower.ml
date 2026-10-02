@@ -656,7 +656,7 @@ let rec lower_expr state provenance (expr : expr) =
       error expr.loc
         "native crunch lowering currently supports broadcasts of literal f32 values"
   | EUnit -> error expr.loc "unit expressions are not supported by native crunch lowering"
-  | EString _ | EIndex _ | EConvert _ | EArray _ ->
+  | EString _ | EIndex _ | EConvert _ | EArray _ | ESlow _ ->
       errorf expr.loc "%s is not supported by native crunch lowering"
         (Capabilities.id (Capabilities.feature_of_expr expr.v))
 

@@ -1,0 +1,70 @@
+~~ The independent result is 100: 10 from the lanes plus four copies of
+~~ prefix 7, 3 state updates, a nested-block result 15 and early return 44.
+state visits: i32 := 0
+
+slow increment(value: i32) -> i32:
+  return value + 1
+
+run mix(values: []i32, output: mut []i32, <limit: i32>):
+  let lane_values = values[<0>]
+  let <prefix: i32> = slow {
+    ~~ Scalars are bare within the lexical escape.
+    total: i32 := 0
+    for index from 0 up to limit:
+      if index = 2:
+        continue
+      total <- total + increment(index)
+    total
+  }
+  slow { visits <- visits + 1; }
+  slow {
+    output[0] <- values[0]
+    visits <- visits + output[0]
+  }
+  output[<0>] <- lane_values + <prefix>
+  ~~ The same local name is scoped to a different block.
+  slow {
+    total: i32 := 0
+    while total < 10:
+      total <- total + 1
+      if total = 2:
+        break
+    visits <- visits + total - 1
+  }
+
+slow early() -> i32:
+  slow { return 44; }
+
+slow frames() -> i32:
+  let first = slow {
+    values: [20000]i32 := [0; 20000]
+    values[19999] <- 5
+    values[19999]
+  }
+  let second = slow {
+    values: [20000]i32 := [0; 20000]
+    values[19999] <- 6
+    values[19999]
+  }
+  return first + second
+
+slow main() -> i32:
+  slow {
+  }
+  if frames() != 11:
+    return 0
+  if increment(slow {
+    6
+  }) != 7:
+    return 0
+  input: [4]i32 := [1, 2, 3, 4]
+  output: [4]i32 := [0; 4]
+  mix(input, output, <4>)
+  changed: i32 := 3
+  let nested = slow {
+    local_value: i32 := 7
+    changed <- changed + 1
+    let inside = slow { local_value + changed }
+    inside + changed
+  }
+  return output[0] + output[1] + output[2] + output[3] + visits + nested + early()

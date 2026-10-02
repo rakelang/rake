@@ -117,7 +117,8 @@ let disassembled_functions listing =
                in
                let mnemonic = if String.trim mnemonic = "<unknown>" then decode_unknown raw else mnemonic in
                let mnemonic = String.trim mnemonic in
-               if mnemonic <> "" then Hashtbl.replace functions name (Hashtbl.find functions name @ [ mnemonic ])
+               if mnemonic <> "" && not (String.starts_with ~prefix:"R_WASM_" mnemonic) then
+                 Hashtbl.replace functions name (Hashtbl.find functions name @ [ mnemonic ])
            | _ -> ());
   functions
 
@@ -173,7 +174,30 @@ let assemble_program ~include_dir c_source =
       Ok bytes)
 
 (** Facts Rake recorded while emitting one run. *)
-type run_facts = { loops : int; lane_operations : int; selected : string list }
+type run_facts = { loops : int; lane_operations : int; selected : string list; slow_calls : string list }
+
+(** Direct calls are authorized by their relocation symbol, never merely by
+    the presence of a slow block somewhere in the function. Unresolved and
+    indirect calls therefore remain forbidden in vector code. *)
+let relocated_calls listing =
+  let calls = Hashtbl.create 8 and current = ref None in
+  String.split_on_char '\n' listing
+  |> List.iter (fun line ->
+         let line = String.trim line in
+         if String.ends_with ~suffix:">:" line then (
+           match String.index_opt line '<' with
+           | Some start -> current := Some (String.sub line (start + 1) (String.length line - start - 3))
+           | None -> ())
+         else if contains line "R_WASM_FUNCTION_INDEX_LEB" then
+           match (!current, Str.split (Str.regexp "[ \t]+") line |> List.rev) with
+           | Some name, target :: _ ->
+               let target =
+                 if String.ends_with ~suffix:"+0" target then String.sub target 0 (String.length target - 2)
+                 else target
+               in
+               Hashtbl.replace calls name (target :: Option.value (Hashtbl.find_opt calls name) ~default:[])
+           | _ -> ());
+  calls
 
 let is_simd name =
   List.exists (fun prefix -> String.starts_with ~prefix name) [ "v128."; "i8x16."; "i16x8."; "i32x4."; "i64x2."; "f32x4."; "f64x2." ]
@@ -243,8 +267,9 @@ let verify_program ~crunches ~runs object_bytes =
   Fun.protect
     ~finally:(fun () -> Sys.remove object_path)
     (fun () ->
-      let* listing = run (Printf.sprintf "%s -d%s %s" (disassembler ()) (if !relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path)) in
+      let* listing = run (Printf.sprintf "%s -dr%s %s" (disassembler ()) (if !relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path)) in
       let disassembled = disassembled_functions listing in
+      let calls = relocated_calls listing in
       let find name =
         match Hashtbl.find_opt disassembled name with
         | Some mnemonics -> Ok mnemonics
@@ -266,10 +291,17 @@ let verify_program ~crunches ~runs object_bytes =
           let* () = result in
           let* mnemonics = find name in
           let fail what = Error { message = Printf.sprintf "run %s %s" name what } in
+          let targets = Option.value (Hashtbl.find_opt calls name) ~default:[] in
+          let* () =
+            if List.length targets <> List.length (List.filter (( = ) "call") mnemonics)
+               || List.exists (fun target -> not (List.mem target facts.slow_calls)) targets then
+              fail "calls a function outside an explicit slow block"
+            else Ok ()
+          in
           match
             List.find_opt
               (fun m ->
-                List.mem m [ "call"; "call_indirect"; "return_call"; "return_call_indirect"; "global.get"; "global.set" ]
+                List.mem m [ "call_indirect"; "return_call"; "return_call_indirect"; "global.get"; "global.set" ]
                 || (contains m "relaxed" && not !relaxed))
               mnemonics
           with
@@ -278,7 +310,7 @@ let verify_program ~crunches ~runs object_bytes =
               fail (Printf.sprintf "contains %s: a run keeps no C stack frame, so no rack passes through memory Rake didn't name" m)
           | Some m -> fail (Printf.sprintf "contains %s: vector code calls nothing" m)
           | None -> (
-              match List.find_opt (fun m -> not (run_scalar m || (is_simd m && equivalent facts.selected m))) mnemonics with
+              match List.find_opt (fun m -> not (m = "call" || run_scalar m || (is_simd m && equivalent facts.selected m))) mnemonics with
               | Some m -> fail (Printf.sprintf "contains %s, which none of its source operations selects" m)
               | None ->
                   let lane_operations = List.length (List.filter is_lane_operation mnemonics) in

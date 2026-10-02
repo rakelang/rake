@@ -68,6 +68,13 @@ let named_call name arguments =
   | "insert", [rack; lane; value] -> EInsert (rack, lane, value)
   | _ -> ECall (name, arguments)
 
+(* A trailing expression is a block's value. A semicolon discards it. *)
+let slow_body statements =
+  match List.rev statements with
+  | ({ v = SExpr value; _ }, false) :: preceding ->
+      (List.rev_map fst preceding, Some value)
+  | _ -> (List.map fst statements, None)
+
 %}
 
 (* Tokens: Types *)
@@ -563,6 +570,15 @@ expr_postfix:
   | e = expr_primary { e }
 
 expr_primary:
+  | SLOW LBRACE NEWLINE RBRACE { mk_node (ESlow ([], None)) $startpos $endpos }
+  | SLOW LBRACE body = slow_contents RBRACE {
+      let statements, value = slow_body body in
+      mk_node (ESlow (statements, value)) $startpos $endpos
+    }
+  | SLOW LBRACE NEWLINE INDENT body = slow_contents DEDENT RBRACE {
+      let statements, value = slow_body body in
+      mk_node (ESlow (statements, value)) $startpos $endpos
+    }
   | n = INT_LIT { mk_node (EInt n) $startpos $endpos }
   | f = FLOAT_LIT { mk_node (EFloat f) $startpos $endpos }
   | TRUE { mk_node (EBool true) $startpos $endpos }
@@ -642,6 +658,19 @@ expr_primary:
 
 field_init:
   | name = IDENT COLON e = expr { { init_field = name; init_value = e } }
+
+slow_contents:
+  | { [] }
+  | statement = simple_stmt rest = slow_after_simple {
+      let terminated, following = rest in
+      (statement, terminated) :: following
+    }
+  | statement = compound_stmt rest = slow_contents { (statement, false) :: rest }
+
+slow_after_simple:
+  | { (false, []) }
+  | NEWLINE rest = slow_contents { (false, rest) }
+  | SEMICOLON list(NEWLINE) rest = slow_contents { (true, rest) }
 
 int_lit:
   | n = INT_LIT { Int64.to_int n }

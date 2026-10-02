@@ -163,6 +163,7 @@ let run_needs_tier params (result : result_spec) body =
   let new_type (t : typ) = match t.v with TArray _ | TView _ | TPtr _ | TMut _ | TNamed _ | TRack _ -> true | _ -> false in
   let rec new_stmt (s : stmt) =
     match s.v with
+    | SExpr { v = ESlow _; _ } -> true
     | SLet _ | SFused _ | SExpr _ -> false
     | SOver o -> List.exists new_stmt o.over_body
     | _ -> true
@@ -828,7 +829,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
           | Rack _ | Mask | Scalar _ -> target_t
           | t -> type_errorf operand.loc "bitcast reinterprets a rack, got %s" (show_concise t))
       | t -> type_errorf target.loc "in vector code bitcast targets a rack type, got %s" (show_concise t))
-  | EString _ | EIndex _ | EConvert _ | EArray _ ->
+  | EString _ | EIndex _ | EConvert _ | EArray _ | ESlow _ ->
       type_errorf expr.loc "%s belongs to runs and slow definitions"
         (Capabilities.id (Capabilities.feature_of_expr expr.v))
 
@@ -926,6 +927,7 @@ let rec fused_contract_rejection (expr: Ast.expr) : string option =
   | EIndex _ -> Some "indexing reads memory"
   | EConvert _ -> Some "a scalar conversion is not a rack operation"
   | EArray _ -> Some "array construction is not an inlineable expression shape"
+  | ESlow _ -> Some "a slow block is a scalar escape, not fused vector work"
   | EIf (c, a, b) -> first_rejection [c; a; b]
 
 (** Check a statement, return updated env *)
@@ -1158,6 +1160,7 @@ let rec check_masked_expr env (expr: expr) =
   | EPipe (l, r) | EFusedPipe (l, r) ->
       check_masked_expr env l; check_masked_expr env r
   | EString _ | EArray _ -> ()
+  | ESlow _ -> type_errorf expr.loc "slow blocks belong to runs and slow functions, not a masked kernel"
   | EIndex (b, i, _) -> check_masked_expr env b; check_masked_expr env i
   | EConvert (_, _, e) -> check_masked_expr env e
   | EIf (c, a, b) -> check_masked_expr env c; check_masked_expr env a; check_masked_expr env b

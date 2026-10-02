@@ -95,9 +95,11 @@ boundary in [packs and runs](spec/02_packs_and_run.md).
 ## Scalar code stays scalar
 
 A program's scalar work, its records, state, control flow and calls to C, is
-slow code, marked `slow`. Slow code can't hold a rack, and reaches vector work
-only through calls whose uniform arguments are marked, so the promises above
-hold unchanged around it.
+slow code, marked `slow`. A run enters it explicitly with `slow { ... }` and
+resumes vector mode at `}`. Slow code can't hold a rack, and reaches vector
+work only through calls whose uniform arguments are marked, so the promises
+above hold unchanged around it. The compiler guarantees vector lowering,
+not a particular elapsed time or the fastest possible algorithm.
 
 Today: whole programs compile on `wasm-simd128`, as [the slow
 tier](spec/08_slow_tier.md) describes.

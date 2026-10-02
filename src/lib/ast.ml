@@ -177,6 +177,7 @@ and expr_kind =
   | EConvert of convert * typ * expr   (** i32(x), wrap(u8, x), bitcast(u32, x) *)
   | EIf of expr * expr * expr          (** if condition then value else value *)
   | EArray of expr list                (** [a, b, c] *)
+  | ESlow of stmt list * expr option   (** slow { statements; optional tail value } *)
 
 (** Parameter: either rack (default), scalar (angle brackets), or spread type *)
 (** How a scalar conversion treats a value its target cannot hold. *)

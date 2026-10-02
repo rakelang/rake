@@ -6,6 +6,10 @@ implemented for `wasm-simd128`. The x86 and AArch64 backends reject them, and
 the [x86-64 boundary](#planned-x86-64-boundary) at the end of this page is a
 design.
 
+A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks).
+It returns to vector mode at the closing brace. The block can't capture racks
+or a traversal chunk, and it never scalarises the surrounding rack work.
+
 ## Stacks and packs
 
 A `stack` declares the columns of structure-of-arrays storage, grouped by

@@ -106,10 +106,11 @@ and kind =
   | Slice of expr * expr * expr  (** view of [count] elements from [start]; checked *)
   | Ptr_view of expr * expr  (** unchecked view of [count] elements at a pointer *)
   | Is_null of expr
+  | Block of stmt list * expr option  (** lexical scalar scope; tail expression is its value *)
 
 and vector_arg = Arg_memory of expr | Arg_uniform of expr
 
-type stmt = { s : skind; sloc : Ast.loc }
+and stmt = { s : skind; sloc : Ast.loc }
 
 and skind =
   | Decl of string * ty * expr option * bool  (** name, type, initial value, mutable *)
@@ -126,7 +127,11 @@ type pass = By_value | Borrow | Borrow_mut
 
 type param = { pname : string; pty : ty; pass : pass }
 
-type slow_func = { fname : string; fparams : param list; fresult : ty; fbody : stmt list; floc : Ast.loc }
+type slow_func = {
+  fname : string; fparams : param list; fresult : ty; fbody : stmt list;
+  floc : Ast.loc;
+  fblock : bool;  (** extracted run block: never inline; view captures use pointer/count ABI *)
+}
 
 type record = { rname : string; rheader : string option; rfields : (string * ty) list; rloc : Ast.loc }
 
@@ -145,6 +150,7 @@ type rstmt = { r : rkind; rloc : Ast.loc }
 
 and rkind =
   | R_uniform of string * expr  (** let <x: T> = e, a uniform scalar *)
+  | R_slow of expr  (** a discarded slow block result *)
   | R_pure of string * ty * Ast.expr * bool
       (** a pure rack, mask or uniform-scalar result of rack operations; its
           free names are racks, masks and uniform scalars bound earlier *)
@@ -250,6 +256,7 @@ let rec string_of_expr (e : expr) =
   | Slice (a, b, c) -> Printf.sprintf "slice(%s, %s, %s)" (s a) (s b) (s c)
   | Ptr_view (a, b) -> Printf.sprintf "unchecked_view(%s, %s)" (s a) (s b)
   | Is_null a -> "is_null(" ^ s a ^ ")"
+  | Block (_, value) -> "slow { ..." ^ (match value with None -> " }" | Some v -> "; " ^ s v ^ " }")
 
 let rec string_of_rstmts indent stmts = String.concat "" (List.map (string_of_rstmt indent) stmts)
 
@@ -257,6 +264,7 @@ and string_of_rstmt indent (st : rstmt) =
   let pad = String.make indent ' ' in
   match st.r with
   | R_uniform (n, e) -> Printf.sprintf "%suniform %s : %s = %s\n" pad n (string_of_ty e.ty) (string_of_expr e)
+  | R_slow e -> Printf.sprintf "%sslow %s\n" pad (string_of_expr e)
   | R_pure (n, ty, e, fused) -> Printf.sprintf "%s%s %s : %s = %s\n" pad (if fused then "fused" else "pure") n (string_of_ty ty) (string_of_ast e)
   | R_load (n, el, v, i, c) -> Printf.sprintf "%sload %s : %s = %s[%s%s]\n" pad n (string_of_ty (Rack el)) (string_of_expr v) (if c then "" else "unchecked ") (string_of_expr i)
   | R_gather (n, el, v, i, c) -> Printf.sprintf "%sgather %s : %s = %s[%s%s]\n" pad n (string_of_ty (Rack el)) (string_of_expr v) (if c then "" else "unchecked ") i

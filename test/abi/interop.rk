@@ -20,6 +20,13 @@ slow count_call() -> i32:
   calls <- calls + 1
   return calls
 
+~~ The explicit block calls C with a captured view while a v128 stays live
+~~ in the run. Its scalar result is broadcast back into the vector add.
+run offset_by_sum(values: []i32, out: mut []i32):
+  let rack = values[<0>]
+  let <offset: i32> = slow { interop_sum(addr(values[0]), count(values)) }
+  out[<0>] <- rack + <offset>
+
 slow main() -> i32:
   values: [6]i32 := [4, 8, 15, 16, 23, 42]
   if interop_sum(addr(values[0]), 6) != 108:
@@ -53,4 +60,8 @@ slow main() -> i32:
   let second = count_call()
   if first != 1 or second != 2 or calls != 2:
     return 9
+  shifted: [4]i32 := [0; 4]
+  offset_by_sum(values, shifted)
+  if shifted[0] != 112 or shifted[1] != 116 or shifted[2] != 123 or shifted[3] != 124:
+    return 10
   return 0

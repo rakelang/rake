@@ -8,7 +8,7 @@
 
 type state = {
   indents : int list;
-  pending_block : (int * int) option;
+  pending_block : (int * int * bool) option;  (** parent, opener line, colon body *)
   delimiter_depth : int;
   block_comment_depth : int;
 }
@@ -82,22 +82,24 @@ let validate_line filename number state line =
         if depth_before > 0 then
           let pending_block =
             if delimiter_depth = 0 && String.ends_with ~suffix:":" content
-            then Some (List.hd state.indents, number)
+            then Some (List.hd state.indents, number, true)
             else state.pending_block
           in
           Ok { state with pending_block; delimiter_depth; block_comment_depth }
         else
           match state.pending_block with
-          | Some (parent, opener_line) when indent <= parent ->
+          | Some (parent, _, false) when indent = parent && String.starts_with ~prefix:"}" content ->
+              Ok { state with pending_block = None; delimiter_depth; block_comment_depth }
+          | Some (parent, opener_line, _) when indent <= parent ->
               error filename number indent
                 (Printf.sprintf "expected an indented body after line %d" opener_line)
-          | Some (_, _) ->
+          | Some (_, _, _) ->
               let opens_block =
                 String.ends_with ~suffix:":" content || String.ends_with ~suffix:"{" content
               in
               Ok {
                 indents = indent :: state.indents;
-                pending_block = if opens_block then Some (indent, number) else None;
+                pending_block = if opens_block then Some (indent, number, String.ends_with ~suffix:":" content) else None;
                 delimiter_depth;
                 block_comment_depth;
               }
@@ -112,7 +114,7 @@ let validate_line filename number state line =
                   in
                   Ok {
                     indents;
-                    pending_block = if opens_block then Some (indent, number) else None;
+                    pending_block = if opens_block then Some (indent, number, String.ends_with ~suffix:":" content) else None;
                     delimiter_depth;
                     block_comment_depth;
                   })
@@ -123,7 +125,7 @@ let validate ~filename source =
     | [] -> (
         match state.pending_block with
         | None -> Ok ()
-        | Some (_, opener_line) ->
+        | Some (_, opener_line, _) ->
             error filename opener_line 0 "block header has no indented body")
     | line :: rest -> (
         match validate_line filename number state line with
