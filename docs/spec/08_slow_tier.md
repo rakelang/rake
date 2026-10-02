@@ -10,14 +10,15 @@ scalar function can instead be declared `slow name(...)`.
 
 Slow blocks are available in 0.5.0-beta and in the playground.
 
-A program with any slow, run, record, state, embed, const or extern
+A program with any slow, run, record, union, state, embed, const or extern
 definition is a whole program. On `wasm-simd128` it compiles to one C
 translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
 `wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
 compiler also emits native C and objects combining slow orchestration and
-register kernels on x86-64 and AArch64. Native runs and packs remain work in
-progress.
+register kernels on x86-64 and AArch64. AVX2 additionally supports the
+[native stream subset](02_packs_and_run.md#native-avx2-streams). General native
+runs remain work in progress.
 
 ### Native kernel calls
 
@@ -30,7 +31,7 @@ Other native scalar kernel boundaries remain work in progress.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
-crunch carry(<value: f32>) -> f32:
+scratch carry(<value: f32>) -> f32:
   <value>
 
 slow main() -> i32:
@@ -75,12 +76,12 @@ interpreter supplies `program` at `argv[0]` and no additional arguments.
 
 <!-- rake-check: run 33 -->
 ```rake
-stack Samples {
+pack Samples {
   f32: value;
   u8: quality;
 }
 
-run weigh(input: pack Samples, <count: i64>, <scale: f32>) -> f32:
+run weigh(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
   for chunk in input using f32s up to <count>:
     let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
     yield chunk.value * <scale> + quality
@@ -97,7 +98,7 @@ slow main() -> i32:
   values: [8]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
   qualities: [8]u8 := [0, 1, 0, 1, 0, 1, 0, 1]
   weighed: [8]f32 := [0.0; 8]
-  weigh(Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
+  weigh(stack Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
   sums: [8]f32 := [0.0; 8]
   running_sum(weighed, sums, <8>)
   calls <- calls + 1
@@ -107,7 +108,7 @@ slow main() -> i32:
 `rakec --interpret program.rk` runs `main` in Rake's executable semantics and
 prints its result. `rakec --emit-asm --target wasm-simd128 -o program.c
 program.rk` writes the C unit, and `--verify-native` compiles it and checks
-every crunch, rake and run in the object (see [Verification](#verification)).
+every scratch, rake and run in the object (see [Verification](#verification)).
 
 ## Slow blocks
 
@@ -154,7 +155,7 @@ that function, as in Rust. Runs have no early `return`: use the block's final
 expression to produce its result. In a run, `break` and `continue` inside a
 block refer only to scalar loops inside that block.
 
-Crunches, rakes and fused regions remain pure vector kernels and reject slow
+Scratches, rakes and fused regions remain pure vector kernels and reject slow
 blocks. Put scalar orchestration in the run that calls them. Blocks and whole
 programs with memory runs currently compile for WebAssembly only. The
 development compiler also supports native slow functions and register kernels.
@@ -167,6 +168,7 @@ development compiler also supports native slow functions and register kernels.
 | `extern slow name(parameters) -> T from "header.h"` | a C function |
 | `record Name { T: field, field; }` | a record with Rake's layout |
 | `record Name from "header.h" { T: field; }` | a C struct |
+| `union Name from "header.h" { T: field; }` | a C union, available in the development compiler |
 | `state name: T := constant`, `state name: T` | module state |
 | `embed name from "file"` | a file's bytes |
 | `const name: T = constant` | a compile-time constant |
@@ -180,6 +182,64 @@ includes the header, and each declared scalar, pointer or scalar-array field
 gets a `_Static_assert` that its C size matches. Function-pointer fields are
 also checked in the development compiler. Other records have Rake's
 layout. A record can't contain itself, directly or through other records.
+
+### Opaque C pointer types
+
+An empty header-backed declaration preserves a C API's opaque typedef:
+
+<!-- rake-check: frontend -->
+```rake
+record wasm_trap_t from "wasmtime.h" {}
+record wasmtime_caller_t from "wasmtime.h" {}
+
+extern slow inspect(caller: ptr wasmtime_caller_t) -> ptr wasm_trap_t from "wasmtime.h"
+```
+
+The header remains the only owner of the type's layout. Rake neither invents
+fields nor emits a replacement struct. These types are used through pointers,
+including exact pointee types in callback signatures. By-value use and record
+construction are rejected. Empty Rake-owned records are rejected too.
+
+### C unions
+
+The development compiler after 0.6.0-beta accepts header-backed unions. All
+their members overlap the same storage. C owns their size, alignment and ABI,
+including a union embedded in a struct, passed to an imported function or
+returned by value. An ordinary slow parameter borrows the union, just as it
+borrows a record. An imported C parameter passes it by value.
+
+<!-- rake-check: frontend -->
+```rake
+union foreign_value_t from "values.h" {
+  i32: i32;
+  i64: i64;
+  f64: f64;
+  [16]u8: v128;
+}
+
+slow integer_value(value: i64) -> foreign_value_t:
+  return foreign_value_t { i64: value }
+```
+
+The header supplies the C typedef `foreign_value_t`. A union literal selects
+exactly one member, and a field assignment changes the active member. Read
+the member selected by the C API's protocol, such as a neighbouring tag.
+Rake adds no hidden tag and does not define reinterpretation through an
+inactive member. Use a numeric `bitcast` for an equal-width bit conversion.
+Reading the wrong union member, or keeping a pointer after its storage ends,
+remains the caller's responsibility at this C boundary.
+
+Aggregate identifiers may retain a C typedef's lowercase spelling. Primitive
+spellings such as `i32` are also allowed for member declarations, literal
+fields and selections like `value.i32`. The generated C checks that the header
+actually declares a union, that its declared members overlap at offset zero,
+and that scalar, pointer and scalar-array member sizes agree.
+
+This is compiled C interoperation. The interpreter explicitly rejects C union
+storage because it has no platform C layout. The ABI checks compile an
+independent C header and exercise real calls on every CPU profile and
+WebAssembly. Rake-owned union layouts and interpreted union storage remain
+work in progress.
 
 `state` is module state: a C static that holds its value for the life of the
 process, across turns of a judge's loop. Its initial value is a constant, or
@@ -199,10 +259,11 @@ accepts typed function pointers.
 | `[N]T` | an array of `N >= 1` elements held by value |
 | `[]T` | a view: a borrowed run of elements with an `i32` count |
 | `ptr T` | a C pointer, for extern interoperation |
+| `ptr const T` | a C pointer through which the pointed-to object is read-only |
 | `ptr ()` | an opaque C `void *`, available in the development compiler |
 | `slow(T, ...) -> U` | a typed C function pointer, available in the development compiler |
 | `Name` | a record |
-| `mut T` | in a parameter list: a view, pack, array or record the callee writes |
+| `mut T` | in a parameter list: a view, stack, array or record the callee writes |
 
 Arrays and records are values: binding or assigning one copies it. Views and
 pointers alias the storage they name. A slow parameter of array or record type
@@ -210,9 +271,9 @@ is passed by reference and is read-only. `mut` makes it writable, and the
 argument must then be a location the caller may write. A view parameter is
 passed by value and is writable through when declared `mut []T`.
 
-Slow code has no rack, mask or pack values. A pack exists only as the argument
-of a run call, written as a record literal of the stack whose fields are
-views: `Samples { value: values, quality: qualities }`.
+Slow code holds individual packs as ordinary records. It has no rack or mask
+values. A stack is currently constructed at a run call by supplying views
+for the pack's fields: `stack Samples { value: values, quality: qualities }`.
 
 ## Statements
 
@@ -257,7 +318,7 @@ operand's precision.
 | `r.field`, `p.field` | a record's field, directly or through a pointer |
 | `Name { field: e, ... }` | a record literal naming every field |
 | `[a, b, c]`, `[e; n]` | array literals |
-| `"text"` | a string literal, only as an extern's `ptr u8` or `ptr i8` argument |
+| `"text"` | a string literal, only as an extern's `ptr const u8` or `ptr const i8` argument |
 
 Slow code's built-in functions:
 
@@ -282,18 +343,53 @@ the interpreter, so every target agrees bit for bit. Float `min` and `max` of
 a NaN give a NaN. Of two zeros, `min` gives negative zero if either is, and
 `max` positive zero if either is.
 
+### Read-only pointers
+
+The development compiler after 0.6.0-beta preserves C pointer qualifiers.
+`ptr const T` corresponds to `const T *`: it prevents writes through that
+pointer. Another writable alias may still change the same object. An immutable
+`let` binding prevents replacement of the pointer itself, which is a separate
+restriction.
+
+`addr(place)` produces a writable pointer when the location is writable and
+a read-only pointer otherwise. Taking the address of a checked element also
+checks its bounds, even before the pointer is dereferenced. A writable pointer
+may be borrowed as `ptr const T`. Nested pointer types must match exactly at every deeper level.
+For example, a pointer to writable pointers cannot become a pointer to
+read-only pointers implicitly.
+
+`unchecked_view` preserves its pointer's access. A view formed from
+`ptr const T` is `[]T`, and a writable view may be borrowed as `[]T` without
+copying its elements. Erasing and restoring a pointer through `ptr ()` or
+`ptr const ()` must preserve read-only access. These checks do not establish
+the pointer's lifetime, bounds or alignment.
+
+<!-- rake-check: run 11 -->
+```rake
+slow read(value: ptr const i32) -> i32:
+  return value[unchecked 0]
+
+slow main() -> i32:
+  value: i32 := 7
+  let borrowed: ptr const i32 = addr(value)
+  value <- 11
+  return read(borrowed)
+```
+
 ## Function pointers and callbacks
 
 The development compiler after 0.6.0-beta supports C function pointers in
 slow code. Write `slow(i32) -> i32` for a pointer to a function taking an
 `i32` and returning an `i32`. Write `-> ()` for a callback returning C
 `void`. Function-pointer arguments and results use the platform C ABI.
-They may be scalars, data pointers, other function pointers or C structs
+They may be scalars, data pointers, other function pointers or C aggregates
 passed by value.
 
 `addr(function)` takes the address of a slow function or an imported C
 function. A callback carries no captured variables, so pass its context
 explicitly. For an opaque C context, `ptr ()` corresponds to `void *`.
+Use `ptr const ()` for a read-only `const void *` context. Callback signatures
+retain these qualifiers in both imported and exported C declarations.
 `bitcast(ptr (), pointer)` erases a data pointer's type, and
 `bitcast(ptr Context, opaque)` restores it. The context must still be alive
 and have the restored type and alignment when it is accessed.
@@ -337,11 +433,11 @@ implementation as a direct C call.
 
 ## Calling vector code
 
-Slow code calls a run as a statement and a crunch or rake as an expression:
+Slow code calls a run as a statement and a scratch or rake as an expression:
 
 <!-- rake-check: run 7 -->
 ```rake
-crunch score(<x: f32>, <y: f32>) -> f32:
+scratch score(<x: f32>, <y: f32>) -> f32:
   extract(<x> * <y> + <1.0>, 0)
 
 slow main() -> i32:
@@ -352,24 +448,24 @@ slow main() -> i32:
 ```
 
 The run call in [the example](#an-example) above,
-`weigh(Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)`,
-passes a pack, two uniforms and its output view.
+`weigh(stack Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)`,
+passes a stack, two uniforms and its output view.
 
-Memory arguments, views and packs, are passed bare. An array passed where a
+Memory arguments, views and stacks, are passed bare. An array passed where a
 view is expected lends all its elements. Every scalar argument is marked
 `<...>`, as in `<name>`, `<3>`, `<record.field>` or `<view[index]>`, because it
 becomes a rack in the callee. A run declared `-> T` takes its output view as a last argument. A
-crunch or rake is callable from slow code only when all its parameters are
+scratch or rake is callable from slow code only when all its parameters are
 uniform and its result is a scalar. Slow code can't pass or receive a rack.
 
-At a run call, every column of a traversed pack, of a pack the traversal
+At a run call, every column of a traversed stack, of a stack the traversal
 stores into, and the output view must hold the traversal's count, or the call
 traps before the run starts.
 
 ## The explicitness rules
 
 - Slow code can't name, hold, pass or return a rack, mask or rack array.
-- Slow code reaches vector work only by calling a run, or a crunch or rake
+- Slow code reaches vector work only by calling a run, or a scratch or rake
   with uniform parameters, and every scalar that becomes a rack is marked
   `<...>` at the call. A `<...>` mark anywhere else in slow code is an error.
 - Outside a slow block, vector code can't call slow code or an extern, and
@@ -390,10 +486,10 @@ traps before the run starts.
   `through`, a sweep or a mask `if`.
 - Scalars and broadcasts stay explicit. A scalar returned by a slow block
   meets a rack only at an explicit `<...>` broadcast.
-- Properties are proved or rejected. Every crunch, rake and run in a whole
+- Properties are proved or rejected. Every scratch, rake and run in a whole
   program goes through the same checks and object verification as before, and
   slow code has its own checked semantics.
-- Existing lowering is unchanged. Crunches and rakes are emitted by the same
+- Existing lowering is unchanged. Scratches and rakes are emitted by the same
   selection and C emission. A run's pure rack expressions become always-inline
   functions lowered through that same pipeline. Slow code is plain C beside
   them.
@@ -405,7 +501,7 @@ C. It runs slow code over values, copying records and arrays and aliasing
 views and pointers. It traps where the C traps: checked arithmetic,
 conversions, indexing, slices and the counts at run calls. Only the frame
 stack's limit is the C's alone. It evaluates a run's rack expressions in the
-same reference semantics as crunches. An extern has no implementation there,
+same reference semantics as scratches. An extern has no implementation there,
 so programs that call C are tested through C (`test/abi/interop.rk`).
 
 `test/program_test.sh` runs every `test/program/*.rk` in the interpreter and,
@@ -436,7 +532,8 @@ layout, including native pointer widths and padding. Rake emits checked
 scalar C; the platform compiler owns its register allocation and calling
 convention. This does not delegate vector kernel compilation to C.
 
-Unions remain work in progress. Native slow frames are
+Header-backed unions use the same C boundary, with the access contract above.
+Native slow frames are
 thread-local, while module state remains process-wide and needs the caller's
 normal synchronization when several threads use it.
 
@@ -461,7 +558,7 @@ embedded register kernel in the final object. The ordinary slow functions
 retain the platform compiler's C semantics and are outside that vector
 instruction contract. A slow-only unit uses `--emit-obj`.
 
-On WebAssembly, `rakec --verify-native` compiles the unit and disassembles it. Every crunch
+On WebAssembly, `rakec --verify-native` compiles the unit and disassembles it. Every scratch
 and rake must be locals, constants and register SIMD only. A run may call only
 the scalar helpers emitted for its explicit slow blocks. The verifier checks
 each direct call's relocation against those helper symbols. It rejects every

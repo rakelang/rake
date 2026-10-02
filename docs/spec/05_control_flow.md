@@ -22,7 +22,7 @@ comparison and one `v128.bitselect`. A mask conditional compiles on
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
-crunch distance(v: f32s, w: f32s) -> f32s:
+scratch distance(v: f32s, w: f32s) -> f32s:
   if v > w then v - w else w - v
 ```
 
@@ -34,7 +34,7 @@ only:
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
-crunch pick(near: f32s, far: f32s, <late: i32>) -> f32s:
+scratch pick(near: f32s, far: f32s, <late: i32>) -> f32s:
   if <late> > <0> then near else far
 ```
 
@@ -56,13 +56,13 @@ constants, and the brackets mark the index as uniform. Inside the body the
 index is a constant, so it can index an array of rack locations and take part
 in address arithmetic.
 
-In a crunch or rake, `repeat` unrolls completely, and the body may update
-mutable rack locations, so a crunch stays straight-line code. This compiles on
+In a scratch or rake, `repeat` unrolls completely, and the body may update
+mutable rack locations, so a scratch stays straight-line code. This compiles on
 every production profile:
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
-crunch cube(a: f32s) -> f32s:
+scratch cube(a: f32s) -> f32s:
   power := a
   repeat <i: i32> from <0> up to <2>:
     power <- power * a
@@ -114,7 +114,7 @@ values across iterations. In a traversal's tail an assignment updates only
 the active lanes.
 
 A traversal, `for chunk in input using f32s up to <count>:`, is a different
-loop: it visits a pack's records a rack at a time, as [packs and
+loop: it visits a stack's records a rack at a time, as [packs and
 runs](02_packs_and_run.md) define. A counted loop may contain a traversal, and
 a traversal may contain counted loops, `repeat`, statement `if` and a
 traversal of the same lane count.

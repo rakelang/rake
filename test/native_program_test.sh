@@ -34,7 +34,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     fi
   fi
 
-  for name in slow_tier frames speck; do
+  for name in slow_tier frames speck const_pointers; do
     source="${test_dir}/program/${name}.rk"
     expected="$("${rakec}" --interpret "${source}")"
     "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/${name}.o" "${source}"
@@ -53,6 +53,12 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/callbacks.o" "${test_dir}/abi/callbacks.rk"
   "${cc}" -O2 -Wall -Wextra -Werror "${link_flags[@]}" "${test_dir}/abi/callbacks.c" "${tmp}/callbacks.o" -o "${tmp}/callbacks"
   "${runner[@]}" "${tmp}/callbacks"
+  "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/opaque.o" "${test_dir}/abi/opaque.rk"
+  "${cc}" -O2 -Wall -Wextra -Werror "${link_flags[@]}" "${test_dir}/abi/opaque.c" "${tmp}/opaque.o" -o "${tmp}/opaque"
+  "${runner[@]}" "${tmp}/opaque"
+  "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/unions.o" "${test_dir}/abi/unions.rk"
+  "${cc}" -O2 -Wall -Wextra -Werror "${link_flags[@]}" "${test_dir}/abi/unions.c" "${tmp}/unions.o" -o "${tmp}/unions"
+  "${runner[@]}" "${tmp}/unions"
   expected="$("${rakec}" --interpret "${test_dir}/program/callbacks.rk")"
   test "${expected}" = 31
   "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/local-callbacks.o" "${test_dir}/program/callbacks.rk"
@@ -102,7 +108,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
 done
 
 # These cases must retain their interpreter traps in the native C lowering.
-for name in add_overflow convert_range divide_zero float_convert index_bounds slice_bounds null_callback; do
+for name in add_overflow convert_range divide_zero float_convert index_bounds addr_bounds slice_bounds null_callback; do
   source="${test_dir}/program/trap/${name}.rk"
   if "${rakec}" --interpret "${source}" >"${tmp}/trap.log" 2>&1; then
     echo "${name}: interpreter did not trap" >&2; exit 1

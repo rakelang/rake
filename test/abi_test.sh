@@ -33,6 +33,19 @@ clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdl
 test "$(wasmtime run --invoke __main_void "${tmp}/callbacks.wasm" 2>/dev/null)" = 0
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/callbacks.o" "${test_dir}/abi/callbacks.rk"
 
+"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/opaque.c" "${test_dir}/abi/opaque.rk"
+clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdlib \
+  -Wl,--no-entry -Wl,--export=__main_void -I"${test_dir}/abi" \
+  -o "${tmp}/opaque.wasm" "${tmp}/opaque.c" "${test_dir}/abi/opaque.c"
+test "$(wasmtime run --invoke __main_void "${tmp}/opaque.wasm" 2>/dev/null)" = 0
+
+"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/unions.c" "${test_dir}/abi/unions.rk"
+clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdlib \
+  -Wl,--no-entry -Wl,--export=__main_void -I"${test_dir}/abi" \
+  -o "${tmp}/unions.wasm" "${tmp}/unions.c" "${test_dir}/abi/unions.c"
+test "$(wasmtime run --invoke __main_void "${tmp}/unions.wasm" 2>/dev/null)" = 0
+"${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/unions.o" "${test_dir}/abi/unions.rk"
+
 # Process arguments use WASI's real command startup, including argv[argc].
 : "${RAKE_WASI_LIBC:?process startup checks need WASI libc from the development shell}"
 : "${RAKE_WASI_LIBC_DEV:?process startup checks need WASI headers from the development shell}"

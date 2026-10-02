@@ -1,6 +1,6 @@
 (** Direct lowering from checked Rake AST to native, rack-preserving SSA.
 
-    The executable slice covers straight-line [crunch] definitions and
+    The executable slice covers straight-line [scratch] definitions and
     predicated [rake] definitions. Unsupported forms fail here rather than
     leaking into target legalization. *)
 
@@ -57,9 +57,9 @@ let ir_typ_of_annotation typ =
   | TMask -> Ok Ir.Mask
   | _ ->
       error typ.loc
-        "only f32, u8, i16, i32, u32, i64 and u64 rack, f32 and u32 scalar, and mask annotations are supported by native crunch lowering"
+        "only f32, u8, i16, i32, u32, i64 and u64 rack, f32 and u32 scalar, and mask annotations are supported by native scratch lowering"
 
-(** Racks a native crunch takes and returns. *)
+(** Racks a native scratch takes and returns. *)
 let native_racks = [ Ir.Rack Ir.F32; Ir.Rack Ir.U8; Ir.Rack Ir.I16; Ir.Rack Ir.I32; Ir.Rack Ir.I64 ]
 
 let is_integer_rack = function Ir.Rack (Ir.I16 | Ir.I32) -> true | _ -> false
@@ -294,7 +294,7 @@ let expand_math state loc name x =
   in
   (value, f32_rack)
 
-(* Inlining of user crunches and rakes: set by the lowering entry points,
+(* Inlining of user scratches and rakes: set by the lowering entry points,
    implemented once the statement lowering below exists. *)
 let callees : def StringMap.t ref = ref StringMap.empty
 
@@ -364,7 +364,7 @@ let rec lower_expr state provenance (expr : expr) =
       let operation = match operation with And -> Ir.And | Or -> Ir.Or | _ -> assert false in
       Ok (emit state expr.loc provenance Ir.Mask (Ir.Mask_binary (operation, fst left, fst right)))
   | EBinop (_, operation, _) ->
-      errorf expr.loc "binary operator %s is not supported by native crunch lowering"
+      errorf expr.loc "binary operator %s is not supported by native scratch lowering"
         (show_binop operation)
   | EUnop ((Neg | FNeg), operand) ->
       let* operand = lower_expr state provenance operand in
@@ -409,7 +409,7 @@ let rec lower_expr state provenance (expr : expr) =
       let callee = StringMap.find name !callees in
       let parameters =
         match callee.v with
-        | DCrunch (_, parameters, _, _) | DRake (_, parameters, _, _, _, _, _) -> parameters
+        | DScratch (_, parameters, _, _) | DRake (_, parameters, _, _, _, _, _) -> parameters
         | _ -> []
       in
       if List.length parameters <> List.length arguments then
@@ -579,7 +579,7 @@ let rec lower_expr state provenance (expr : expr) =
                | "shift_bits_left" -> Ir.Shift_left | "shift_bits_right" -> Ir.Shift_right | _ -> Ir.Shift_right_signed
              in
              Ok (emit state expr.loc provenance (snd x) (Ir.Shift { operand = fst x; count; shift })))
-  | ECall (name, _) -> errorf expr.loc "call to '%s' is not supported by native crunch lowering" name
+  | ECall (name, _) -> errorf expr.loc "call to '%s' is not supported by native scratch lowering" name
   | EFma (a, b, c) ->
       let* a = lower_expr state provenance a in
       let* b = lower_expr state provenance b in
@@ -591,16 +591,16 @@ let rec lower_expr state provenance (expr : expr) =
       let b = sanitize_operand state expr.loc provenance (Masked_safety.fma_operand 1) b in
       let c = sanitize_operand state expr.loc provenance (Masked_safety.fma_operand 2) c in
       Ok (emit state expr.loc provenance (Ir.Rack Ir.F32) (Ir.Fma (fst a, fst b, fst c)))
-  | EBool _ -> error expr.loc "boolean literals are not supported by native crunch lowering"
-  | ELambda _ -> error expr.loc "lambdas are not supported by native crunch lowering"
-  | EPipe _ -> error expr.loc "pipelines are not supported by native crunch lowering"
-  | EFusedPipe _ -> error expr.loc "fused pipelines are not supported by native crunch lowering"
-  | ELet _ -> error expr.loc "expression-local let is not supported by native crunch lowering"
-  | EField _ -> error expr.loc "field access is not supported by native crunch lowering"
-  | ERecord _ -> error expr.loc "record construction is not supported by native crunch lowering"
-  | EWith _ -> error expr.loc "record updates are not supported by native crunch lowering"
-  | ELaneIndex -> error expr.loc "lane indices are not supported by native crunch lowering"
-  | ELanes -> error expr.loc "lane counts are not supported by native crunch lowering"
+  | EBool _ -> error expr.loc "boolean literals are not supported by native scratch lowering"
+  | ELambda _ -> error expr.loc "lambdas are not supported by native scratch lowering"
+  | EPipe _ -> error expr.loc "pipelines are not supported by native scratch lowering"
+  | EFusedPipe _ -> error expr.loc "fused pipelines are not supported by native scratch lowering"
+  | ELet _ -> error expr.loc "expression-local let is not supported by native scratch lowering"
+  | EField _ -> error expr.loc "field access is not supported by native scratch lowering"
+  | ERecord _ | EStack _ -> error expr.loc "aggregate construction belongs to slow code"
+  | EWith _ -> error expr.loc "record updates are not supported by native scratch lowering"
+  | ELaneIndex -> error expr.loc "lane indices are not supported by native scratch lowering"
+  | ELanes -> error expr.loc "lane counts are not supported by native scratch lowering"
   | EReduce (operation, operand) ->
       if provenance.Ir.through <> None then
         error expr.loc "reductions are forbidden in predicated regions"
@@ -643,21 +643,21 @@ let rec lower_expr state provenance (expr : expr) =
            Ok (emit state expr.loc provenance typ
                  (Ir.Shuffle { racks = List.map fst racks; indices }))
        | _ -> error expr.loc "shuffle requires one rack or two equal racks")
-  | EShift _ -> error expr.loc "lane shifts are not supported by native crunch lowering"
-  | ERotate _ -> error expr.loc "lane rotates are not supported by native crunch lowering"
-  | EGather _ -> error expr.loc "gather is not supported by native crunch lowering"
-  | EScatter _ -> error expr.loc "scatter is not supported by native crunch lowering"
-  | ECompress _ -> error expr.loc "compression is not supported by native crunch lowering"
-  | EExpand _ -> error expr.loc "expansion is not supported by native crunch lowering"
-  | ETines _ -> error expr.loc "inline tines are not supported by native crunch lowering"
-  | EOuter _ -> error expr.loc "outer products are not supported by native crunch lowering"
-  | ETuple _ -> error expr.loc "tuples are not supported by native crunch lowering"
+  | EShift _ -> error expr.loc "lane shifts are not supported by native scratch lowering"
+  | ERotate _ -> error expr.loc "lane rotates are not supported by native scratch lowering"
+  | EGather _ -> error expr.loc "gather is not supported by native scratch lowering"
+  | EScatter _ -> error expr.loc "scatter is not supported by native scratch lowering"
+  | ECompress _ -> error expr.loc "compression is not supported by native scratch lowering"
+  | EExpand _ -> error expr.loc "expansion is not supported by native scratch lowering"
+  | ETines _ -> error expr.loc "inline tines are not supported by native scratch lowering"
+  | EOuter _ -> error expr.loc "outer products are not supported by native scratch lowering"
+  | ETuple _ -> error expr.loc "tuples are not supported by native scratch lowering"
   | EBroadcast _ ->
       error expr.loc
-        "native crunch lowering currently supports broadcasts of literal f32 values"
-  | EUnit -> error expr.loc "unit expressions are not supported by native crunch lowering"
+        "native scratch lowering currently supports broadcasts of literal f32 values"
+  | EUnit -> error expr.loc "unit expressions are not supported by native scratch lowering"
   | EString _ | EIndex _ | EConvert _ | EArray _ | ESlow _ ->
-      errorf expr.loc "%s is not supported by native crunch lowering"
+      errorf expr.loc "%s is not supported by native scratch lowering"
         (Capabilities.id (Capabilities.feature_of_expr expr.v))
 
 (** Two operands, an integer literal among them typed by the other. Without
@@ -790,9 +790,9 @@ let lower_binding state provenance loc name annotation expression =
   let* () = bind state loc name value in
   Ok value
 
-(** A statement of a crunch body, or of a crunch or rake inlined under the
+(** A statement of a scratch body, or of a scratch or rake inlined under the
     caller's predication [through]. Mutable locations are SSA rebindings, and
-    [repeat] unrolls: a crunch stays straight-line code. *)
+    [repeat] unrolls: a scratch stays straight-line code. *)
 let rec lower_statement_in state ~through active_fused (statement : stmt) =
   let plain = { Ir.source with through } in
   match statement.v with
@@ -865,9 +865,9 @@ let rec lower_statement_in state ~through active_fused (statement : stmt) =
           in
           copies first
       | _ -> error statement.loc "repeat's bounds are integer literals")
-  | SOver _ -> error statement.loc "over loops are not supported by native crunch lowering"
+  | SOver _ -> error statement.loc "over loops are not supported by native scratch lowering"
   | SStore _ | SReturn _ | SYield _ | SBreak | SContinue | SIf _ | SWhile _ | SLoop _ ->
-      errorf statement.loc "%s is not supported by native crunch lowering"
+      errorf statement.loc "%s is not supported by native scratch lowering"
         (Capabilities.id (Capabilities.feature_of_stmt statement.v))
 
 and lower_statements_in state ~through statements =
@@ -889,7 +889,7 @@ let add_parameter state function_loc index = function
         | Some typ ->
             let* typ = ir_typ_of_annotation typ in
             if List.mem typ (Ir.Mask :: native_racks) then Ok ()
-            else error function_loc "native crunch parameters must be f32, u8, i16 or i32 racks"
+            else error function_loc "native scratch parameters must be f32, u8, i16 or i32 racks"
       in
       let typ =
         match Option.map ir_typ_of_annotation annotation with
@@ -906,12 +906,12 @@ let add_parameter state function_loc index = function
         | Some typ ->
             let* typ = ir_typ_of_annotation typ in
             if List.mem typ Ir.[ Scalar F32; Scalar I32; Scalar I16; Scalar U8; Scalar I64; Scalar I1 ] then Ok typ
-            else error function_loc "native scalar crunch parameters must be f32 or u32"
+            else error function_loc "native scalar scratch parameters must be f32 or u32"
       in
       let parameter = { Ir.id = index; typ; name = Some name } in
       let* () = bind state function_loc name (index, typ) in
       Ok parameter
-  | PSpread _ -> error function_loc "spread crunch parameters are not supported by native lowering"
+  | PSpread _ -> error function_loc "spread scratch parameters are not supported by native lowering"
 
 let result_annotation result body =
   List.map (fun (statement : stmt) -> match statement.v with
@@ -919,7 +919,7 @@ let result_annotation result body =
         { statement with v = SLet { binding with bind_type = result.result_type } }
     | _ -> statement) body
 
-let lower_crunch definition_loc name parameters result body =
+let lower_scratch definition_loc name parameters result body =
   let state =
     {
       next_value = List.length parameters;
@@ -945,7 +945,7 @@ let lower_crunch definition_loc name parameters result body =
     | Some annotation ->
         let* typ = ir_typ_of_annotation annotation in
         if List.mem typ (native_racks @ Ir.[ Scalar F32; Scalar I32; Mask; Scalar I1; Scalar I16; Scalar U8; Scalar I64 ]) then Ok ()
-        else error annotation.loc "native crunch results must be an f32, u8, i16 or i32 rack, or an f32 or u32 scalar"
+        else error annotation.loc "native scratch results must be an f32, u8, i16 or i32 rack, or an f32 or u32 scalar"
   in
   let rec lower_body active_fused = function
     | [] -> Ok ()
@@ -958,7 +958,7 @@ let lower_crunch definition_loc name parameters result body =
   let* () =
     match result.result_type with
     | Some annotation -> check_annotation (Some annotation) (snd return_value)
-    | None -> expect_type definition_loc "implicit crunch result" (Ir.Rack Ir.F32) return_value
+    | None -> expect_type definition_loc "implicit scratch result" (Ir.Rack Ir.F32) return_value
   in
   let func =
     {
@@ -1027,7 +1027,7 @@ let lower_through ?outer state (through : through) =
     | Some outer -> fst (emit state through.through_result.loc Ir.source Ir.Mask (Ir.Mask_binary (Ir.And, outer, fst mask)))
   in
   let provenance = { Ir.source with through = Some active } in
-  (* Consecutive fused bindings share a region, as in a crunch body. *)
+  (* Consecutive fused bindings share a region, as in a scratch body. *)
   let rec lower_body active_fused = function
     | [] -> Ok ()
     | statement :: rest -> (
@@ -1248,7 +1248,7 @@ let lower_rake definition_loc name parameters result setup tines throughs sweep 
       errorf definition_loc "generated invalid native rake IR: %s"
         (String.concat "; " (List.map Ir.format_error errors))
 
-(** Inlining a call to a user crunch or rake: the callee's body is lowered
+(** Inlining a call to a user scratch or rake: the callee's body is lowered
     in the caller's function, with its parameters bound to the arguments and
     its operations under the caller's predication. Vector code calls no
     function at run time. *)
@@ -1273,7 +1273,7 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
     in
     go (parameters, values)
   in
-  if !inline_depth > 32 then error loc "crunch calls nest more than 32 deep; recursion has no vector meaning"
+  if !inline_depth > 32 then error loc "scratch calls nest more than 32 deep; recursion has no vector meaning"
   else (
     incr inline_depth;
     let saved_bindings = state.bindings and saved_locations = state.locations and saved_tines = state.tines in
@@ -1283,7 +1283,7 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
     let through = provenance.through in
     let result =
       match callee.v with
-      | DCrunch (_, parameters, result, body) ->
+      | DScratch (_, parameters, result, body) ->
           let* () = bind_parameters parameters in
           let* () = lower_statements_in state ~through (result_annotation result body) in
           let* value = find_binding state loc result.result_name in
@@ -1310,7 +1310,7 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
           let* value = lower_sweep ?outer:through state loc sweep in
           let* () = check_annotation result.result_type (snd value) in
           Ok value
-      | _ -> error loc "only crunches and rakes are inlined"
+      | _ -> error loc "only scratches and rakes are inlined"
     in
     decr inline_depth;
     state.bindings <- saved_bindings;
@@ -1324,12 +1324,12 @@ let callee_table definitions =
   List.fold_left
     (fun table (definition : def) ->
       match definition.v with
-      | DCrunch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> StringMap.add name definition table
+      | DScratch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> StringMap.add name definition table
       | _ -> table)
     StringMap.empty definitions
 
 (** One pure expression of a run as a function of its free names, lowered by
-    the same rules as a crunch body. [mask] names a parameter whose lanes are
+    the same rules as a scratch body. [mask] names a parameter whose lanes are
     the only active ones: a traversal's tail, under whose predication every
     exception-capable operation is sanitised. *)
 let lower_expression ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
@@ -1382,22 +1382,22 @@ let lower_expression ~definitions ~name ~parameters ?mask ~fused loc (expression
 
 let lower_definition (definition : def) =
   match definition.v with
-  | DCrunch (name, parameters, result, body) ->
-      lower_crunch definition.loc name parameters result body
-  | DStack _ -> error definition.loc "stack definitions are not supported by native lowering"
+  | DScratch (name, parameters, result, body) ->
+      lower_scratch definition.loc name parameters result body
+  | DPack _ -> error definition.loc "pack definitions are not supported by native lowering"
   | DSingle _ -> error definition.loc "single definitions are not supported by native lowering"
   | DType _ -> error definition.loc "type aliases are not supported by native lowering"
   | DRake (name, parameters, result, setup, tines, throughs, sweep) ->
       lower_rake definition.loc name parameters result setup tines throughs sweep
   | DRun _ -> error definition.loc "run definitions are not supported by native lowering"
-  | DRecord _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
-      errorf definition.loc "%s is lowered by the slow tier, not native crunch lowering"
+  | DRecord _ | DUnion _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
+      errorf definition.loc "%s is lowered by the slow tier, not native scratch lowering"
         (Capabilities.id (Capabilities.feature_of_def definition.v))
 
 let lower_module module_ =
   let rec lower reversed = function
     | [] -> Ok (List.rev reversed)
-    | ({ v = (DStack _ | DSingle _ | DType _); _ } : def) :: rest ->
+    | ({ v = (DPack _ | DSingle _ | DType _); _ } : def) :: rest ->
         lower reversed rest
     | definition :: rest ->
         let* func = lower_definition definition in

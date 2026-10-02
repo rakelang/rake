@@ -16,7 +16,7 @@ lesson promises.
 | Rake playground     Lesson 4 of 12: Marking uniforms     [Prev] [Next] |
 +----------------------------+-------------------------------------------+
 | Lesson text                | Editor                                    |
-|                            |  crunch scale(values: f32s,               |
+|                            |  scratch scale(values: f32s,               |
 | What the lesson            |               <factor: f32>) -> f32s:     |
 | introduces, the task and   |    values * <factor>                      |
 | what to inspect after      |                                           |
@@ -78,7 +78,7 @@ updated.
 | 1 | [A program](#1-a-program) | definitions, indentation, `->`, `let`, comments | changing `6 * 7` and seeing the new result |
 | 2 | [Changing values](#2-changing-values) | `:=` and `<-`, `for`, `if`, `%` | assigning to a `let` is refused |
 | 3 | [A rack](#3-a-rack) | `f32s`, views, `run`, a rack load and store | Lanes shows one vector multiply on four lanes |
-| 4 | [Marking uniforms](#4-marking-uniforms) | `crunch`, `<factor: f32>` and `<factor>` | removing the brackets is an error that points at the broadcast |
+| 4 | [Marking uniforms](#4-marking-uniforms) | `scratch`, `<factor: f32>` and `<factor>` | removing the brackets is an error that points at the broadcast |
 | 5 | [Loops and reductions](#5-loops-and-reductions) | counted vector loops, rack locations, `sum`, `let <x: T>` | the four running sums fold into one |
 | 6 | [Fused stages](#6-fused-stages) | `\| name <\| e`, fused multiply-add | the x86 Code tab shows one `vfmadd231ps` |
 | 7 | [Choosing by lane](#7-choosing-by-lane) | masks, `if ... then ... else` on racks | both branches run and a select joins them |
@@ -163,14 +163,14 @@ a row of four cells, `1 2 3 4`, and the multiply turns the whole row into
 
 ## 4. Marking uniforms
 
-A `crunch` is a function of racks. `<factor: f32>` declares a uniform, one
+A `scratch` is a function of racks. `<factor: f32>` declares a uniform, one
 scalar shared by every lane, and `<factor>` uses it. The brackets appear at
 both places on purpose: wherever a scalar becomes a rack, the page shows it.
 
 <!-- rake-check: run 40 -->
 <!-- playground-starter -->
 ```rake
-crunch scale(values: f32s, <factor: f32>) -> f32s:
+scratch scale(values: f32s, <factor: f32>) -> f32s:
   values * <factor>
 
 run scale_all(x: []f32, out: mut []f32, <factor: f32>):
@@ -186,11 +186,11 @@ slow main() -> i32:
 
 Result: `main returned 40`. Slow code writes `factor` bare, because there it
 is just a number. It is marked `<factor>` at the call, where it crosses into
-vector code. Delete the brackets around `factor` inside the crunch and run:
+vector code. Delete the brackets around `factor` inside the scratch and run:
 
 <!-- rake-check: reject "'factor' is a uniform scalar: write <factor> where it meets a rack" -->
 ```rake
-crunch scale(values: f32s, <factor: f32>) -> f32s:
+scratch scale(values: f32s, <factor: f32>) -> f32s:
   values * factor
 ```
 
@@ -237,14 +237,14 @@ reader, so the compiler sees `positions + velocities * <dt>`.
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 <!-- playground-starter -->
 ```rake
-crunch advance(positions: f32s, velocities: f32s, <dt: f32>) -> f32s:
+scratch advance(positions: f32s, velocities: f32s, <dt: f32>) -> f32s:
   | step  <| velocities * <dt>
   | moved <| positions + step
   moved
 ```
 
 This lesson has no `main`. Select `x86-avx2`, run the compiler and open Code.
-Find the two instructions that implement the crunch:
+Find the two instructions that implement the scratch:
 
 ```text
 advance:
@@ -265,7 +265,7 @@ w then v - w else w - v` with a mask condition chooses lane by lane.
 <!-- rake-check: run 4703 -->
 <!-- playground-starter -->
 ```rake
-crunch distance(v: f32s, w: f32s) -> f32s:
+scratch distance(v: f32s, w: f32s) -> f32s:
   if v > w then v - w else w - v
 
 run distances(a: []f32, b: []f32, out: mut []f32):
@@ -292,7 +292,7 @@ number is NaN:
 
 <!-- rake-check: trap "does not fit i32" -->
 ```rake
-crunch roots(values: f32s) -> f32s:
+scratch roots(values: f32s) -> f32s:
   sqrt(values)
 
 run all_roots(x: []f32, out: mut []f32):
@@ -356,8 +356,9 @@ result. `sweep:` is the rake's result form, so it needs no `return` keyword.
 ## 9. Columns
 
 Data for vector code is usually stored as columns, one array for each field.
-A `stack` declares the columns, grouped by stored type, and a `pack` is the
-columns themselves. `for particle in particles using f32s up to <count>:`
+A `pack` describes one particle with its position, velocity and age. A
+`stack` stores many particles as a separate column for each field.
+`for particle in particles using f32s up to <count>:`
 visits the records a rack at a time. A byte column is stored one byte per
 record, and `widen` turns a chunk of it into a rack of 32-bit lanes when the
 code needs it.
@@ -365,12 +366,12 @@ code needs it.
 <!-- rake-check: run 1570 -->
 <!-- playground-starter -->
 ```rake
-stack Particles {
+pack Particles {
   f32: position, velocity;
   u8: age;
 }
 
-run advance(particles: pack Particles, <count: i64>, <dt: f32>) -> f32:
+run advance(particles: stack Particles, <count: i64>, <dt: f32>) -> f32:
   for particle in particles using f32s up to <count>:
     let age = to_f32(bitcast(i32s, widen(particle.age)))
     yield particle.position + particle.velocity * <dt> / (age + <1.0>)
@@ -380,7 +381,7 @@ slow main() -> i32:
   velocities: [6]f32 := [4.0, 4.0, 4.0, 4.0, 4.0, 4.0]
   ages: [6]u8 := [0, 1, 3, 0, 1, 3]
   moved: [6]f32 := [0.0; 6]
-  advance(Particles { position: positions, velocity: velocities, age: ages }, <6>, <0.5>, moved)
+  advance(stack Particles { position: positions, velocity: velocities, age: ages }, <6>, <0.5>, moved)
   total := 0.0
   for i from 0 up to 6:
     total <- total + moved[i]
@@ -472,10 +473,10 @@ program it compiles obeys. Physical profiles keep every rack in one register
 without calls or spills. WebAssembly keeps every rack as one `v128` and uses
 only the virtual instructions the profile lists. Rake has no vector sine yet:
 
-<!-- rake-check: reject "call to 'sin' is not supported by native crunch lowering" -->
+<!-- rake-check: reject "call to 'sin' is not supported by native scratch lowering" -->
 <!-- playground-starter -->
 ```rake
-crunch wave(values: f32s) -> f32s:
+scratch wave(values: f32s) -> f32s:
   sin(values)
 ```
 
@@ -499,7 +500,7 @@ and `repeat` runs its body a fixed number of times.
 ```rake
 ~~ One step of a flood fill on an 8 by 8 board, a row to each byte lane:
 ~~ every reached cell spreads to its east and west neighbours that are open.
-crunch spread(reached: u8s, open: u8s) -> u8s:
+scratch spread(reached: u8s, open: u8s) -> u8s:
   let east = shift_bits_left(reached, 1)
   let west = shift_bits_right(reached, 1)
   bit_and(bit_or(reached, bit_or(east, west)), open)
@@ -536,7 +537,7 @@ editor.
 
 Function and control-flow bodies use indentation: a line ending in `:` opens
 the lines indented below it, as in Python. Tabs aren't allowed. Braces enclose
-stack and record fields, record literals and `slow { ... }` blocks. In a slow
+pack and record fields, stack constructors and `slow { ... }` blocks. In a slow
 block, multiline statements are indented, while inline statements use
 semicolons. Its last expression is its value unless a semicolon discards it.
 

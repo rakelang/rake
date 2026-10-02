@@ -11,11 +11,11 @@ type target = Frontend
 type status = Checked | Reserved | Unavailable
 
 type feature =
-  | Type_float_rack | Type_scalar | Type_mask | Type_stack | Type_pack
+  | Type_float_rack | Type_scalar | Type_mask | Type_pack | Type_stack
   | Type_single | Type_compound_rack | Type_compound_scalar
   | Type_function | Type_tuple | Type_unit
   | Primitive_float | Primitive_int | Primitive_int64 | Primitive_other
-  | Def_stack | Def_single | Def_alias | Def_crunch | Def_rake | Def_run
+  | Def_pack | Def_single | Def_alias | Def_scratch | Def_rake | Def_run
   | Param_rack | Param_scalar | Param_spread
   | Result_annotation
   | Expr_int | Expr_float | Expr_bool | Expr_var | Expr_scalar_var
@@ -37,12 +37,12 @@ type feature =
   | Masked_cross_lane
   | Integer_rack_comparison | Bitmask_reduction
   | Integer_rack_arithmetic | Integer_rack_conversion | Integer_rack_bits
-  | Crunch_scalar_param | Rake_spread_param | Run_spread_param
-  | Crunch_implicit_result | Value_non_f32 | Pack_non_f32_field
+  | Scratch_scalar_param | Rake_spread_param | Run_spread_param
+  | Scratch_implicit_result | Value_non_f32 | Stack_non_f32_field
   | Result_non_float_rack
   (* The slow tier, general runs and control flow *)
   | Type_array | Type_view | Type_pointer | Type_mutable | Type_record
-  | Def_record | Def_slow | Def_extern | Def_state | Def_embed | Def_const
+  | Def_record | Def_union | Def_slow | Def_extern | Def_state | Def_embed | Def_const
   | Expr_string | Expr_index | Expr_conversion | Expr_if | Expr_array | Expr_slow
   | Stmt_store | Stmt_return | Stmt_yield | Stmt_break | Stmt_continue
   | Stmt_if | Stmt_while | Stmt_loop | Stmt_repeat | Stmt_uniform
@@ -71,8 +71,8 @@ let all = [
   supported Type_float_rack "type.float-rack" "type" "float rack values";
   supported Type_scalar "type.scalar" "type" "scalar type syntax";
   supported Type_mask "type.mask" "type" "lane masks";
-  supported Type_stack "type.stack" "type" "stack references";
   supported Type_pack "type.pack" "type" "pack references";
+  supported Type_stack "type.stack" "type" "stack references";
   unavailable Type_single "type.single" "type" "single references";
   unavailable Type_compound_rack "type.compound-rack" "type" "compound racks";
   unavailable Type_compound_scalar "type.compound-scalar" "type" "compound scalars";
@@ -83,10 +83,10 @@ let all = [
   supported Primitive_int "primitive.int" "type" "run-loop scalar int";
   supported Primitive_int64 "primitive.int64" "type" "run-loop scalar int64";
   supported Primitive_other "primitive.other" "type" "fixed-width primitive storage and rack types";
-  supported Def_stack "definition.stack" "definition" "stack declarations";
+  supported Def_pack "definition.pack" "definition" "pack declarations";
   unavailable Def_single "definition.single" "definition" "single declarations";
   unavailable Def_alias "definition.type-alias" "definition" "type aliases";
-  supported Def_crunch "definition.crunch" "definition" "crunch semantic checks";
+  supported Def_scratch "definition.scratch" "definition" "scratch semantic checks";
   supported Def_rake "definition.rake" "definition" "rake semantic checks";
   supported Def_run "definition.run" "definition" "run semantic checks";
   supported Param_rack "parameter.rack" "parameter" "rack parameters";
@@ -112,7 +112,7 @@ let all = [
   unavailable Expr_fused_pipeline "expression.fused-pipeline" "expression" "fused expression pipelines";
   unavailable Expr_let "expression.let" "expression" "let expressions (no source syntax)";
   supported Expr_field "expression.field" "expression" "field access";
-  supported Expr_record "expression.record" "expression" "record and pack literals in slow code";
+  supported Expr_record "expression.record" "expression" "record, pack and stack literals in slow code";
   unavailable Expr_record_update "expression.record-update" "expression" "record updates";
   unavailable Expr_lane_index "expression.lane-index" "expression" "zero-based profile-resolved rack lane index (reserved; no lowering yet)";
   unavailable Expr_lane_count "expression.lane-count" "expression" "profile-resolved rack lane count (reserved; no lowering yet)";
@@ -145,7 +145,7 @@ let all = [
   supported Stmt_assign "statement.assignment" "statement" "location assignment";
   supported Stmt_fused "statement.fused" "statement" "verified pure inlineable-SSA bindings";
   supported Stmt_expression "statement.expression" "statement" "expression statements";
-  supported Stmt_over "statement.over" "statement" "pack iteration";
+  supported Stmt_over "statement.over" "statement" "stack iteration";
   unavailable Predicate_expr "predicate.expression" "predicate" "mask expressions as predicates (no source syntax)";
   supported Predicate_comparison "predicate.comparison" "predicate" "comparisons";
   unavailable Predicate_is "predicate.is" "predicate" "is and is-not comparisons (no source syntax)";
@@ -172,21 +172,22 @@ let all = [
     "dot of i16 racks into i32, narrow of i32 racks into saturated i16, widen_low and widen_high of u8 racks into i16, to_f32 of i32 racks and to_i32 of f32 racks";
   supported Integer_rack_bits "expression.integer-rack-bits" "expression"
     "bit_and, bit_or, bit_xor and bit_andnot of equal integer racks, and shift_bits_left, shift_bits_right and shift_bits_right_signed of an integer rack by an integer literal or a uniform u32";
-  supported Crunch_scalar_param "crunch.scalar-parameter" "boundary"
-    "explicit uniform f32 and u32 crunch parameters";
+  supported Scratch_scalar_param "scratch.scalar-parameter" "boundary"
+    "explicit uniform f32 and u32 scratch parameters";
   unavailable Rake_spread_param "rake.spread-parameter" "boundary" "spread rake parameters";
   unavailable Run_spread_param "run.spread-parameter" "boundary" "spread run parameters";
-  supported Crunch_implicit_result "crunch.implicit-result" "boundary" "a crunch's final expression supplies its result";
+  supported Scratch_implicit_result "scratch.implicit-result" "boundary" "a scratch's final expression supplies its result";
   supported Value_non_f32 "value.non-f32" "boundary" "typed non-f32 frontend values";
-  supported Pack_non_f32_field "pack.non-f32-field" "boundary" "mixed-width pack storage fields";
+  supported Stack_non_f32_field "stack.non-f32-field" "boundary" "mixed-width stack storage fields";
   supported Result_non_float_rack "result.non-float-rack" "boundary"
     "typed non-f32 frontend rack results";
   supported Type_array "type.array" "type" "[N]T: fixed arrays in memory, or rack arrays held in registers";
   supported Type_view "type.view" "type" "[]T: a borrowed run of elements with a runtime count";
-  supported Type_pointer "type.pointer" "type" "ptr T: C pointers for extern interoperation, accessed unchecked";
+  supported Type_pointer "type.pointer" "type" "ptr T and ptr const T: C pointers with explicit pointee access, accessed unchecked";
   supported Type_mutable "type.mutable" "type" "mut T: parameters the callee may write";
   supported Type_record "type.record" "type" "records, with Rake or C layout";
   supported Def_record "definition.record" "definition" "record declarations, including C structs named by header";
+  supported Def_union "definition.union" "definition" "header-backed C unions with one selected literal member; compiled C interoperation only";
   supported Def_slow "definition.slow" "definition" "slow functions: scalar orchestration code";
   supported Def_extern "definition.extern" "definition" "extern slow declarations of C functions";
   supported Def_state "definition.state" "definition" "module state that persists across calls";
@@ -240,8 +241,8 @@ let feature_of_type = function
   | TCompoundRack _ -> Type_compound_rack
   | TScalar _ -> Type_scalar
   | TCompoundScalar _ -> Type_compound_scalar
-  | TStack _ -> Type_stack
   | TPack _ -> Type_pack
+  | TStack _ -> Type_stack
   | TSingle _ -> Type_single
   | TMask -> Type_mask
   | TFun _ -> Type_function
@@ -268,7 +269,7 @@ let feature_of_expr = function
   | EUnop (op, _) -> feature_of_unop op
   | ECall _ -> Expr_call | ELambda _ -> Expr_lambda
   | EPipe _ -> Expr_pipeline | EFusedPipe _ -> Expr_fused_pipeline
-  | ELet _ -> Expr_let | EField _ -> Expr_field | ERecord _ -> Expr_record
+  | ELet _ -> Expr_let | EField _ -> Expr_field | ERecord _ | EStack _ -> Expr_record
   | EWith _ -> Expr_record_update | ELaneIndex -> Expr_lane_index
   | ELanes -> Expr_lane_count | EExtract _ -> Expr_extract
   | EInsert _ -> Expr_insert | EReduce _ -> Expr_reduce | EScan _ -> Expr_scan
@@ -298,9 +299,9 @@ let feature_of_predicate = function
   | PTineRef _ -> Predicate_tine_ref
 
 let feature_of_def = function
-  | DStack _ -> Def_stack | DSingle _ -> Def_single | DType _ -> Def_alias
-  | DCrunch _ -> Def_crunch | DRake _ -> Def_rake | DRun _ -> Def_run
-  | DRecord _ -> Def_record | DSlow _ -> Def_slow | DExtern _ -> Def_extern
+  | DPack _ -> Def_pack | DSingle _ -> Def_single | DType _ -> Def_alias
+  | DScratch _ -> Def_scratch | DRake _ -> Def_rake | DRun _ -> Def_run
+  | DRecord _ -> Def_record | DUnion _ -> Def_union | DSlow _ -> Def_slow | DExtern _ -> Def_extern
   | DState _ -> Def_state | DEmbed _ -> Def_embed | DConst _ -> Def_const
 
 let print oc =

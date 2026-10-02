@@ -1,2 +1,2 @@
-crunch add(a: f32s, b: f32s) -> f32s:
+scratch add(a: f32s, b: f32s) -> f32s:
   a + b

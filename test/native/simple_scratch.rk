@@ -1,35 +1,35 @@
-~~ Test: simple_crunch.rk
-~~ Tests basic crunch function with simple arithmetic operations.
+~~ Test: simple_scratch.rk
+~~ Tests basic scratch function with simple arithmetic operations.
 
 ~~ Simple addition of two racks
-crunch add_racks(a: f32s, b: f32s) -> f32s:
+scratch add_racks(a: f32s, b: f32s) -> f32s:
   a + b
 
 ~~ Simple multiplication
-crunch mul_racks(a: f32s, b: f32s) -> f32s:
+scratch mul_racks(a: f32s, b: f32s) -> f32s:
   a * b
 
 ~~ Compound arithmetic: a*b + c (fused multiply-add pattern)
-crunch fma_racks(a: f32s, b: f32s, c: f32s) -> f32s:
+scratch fma_racks(a: f32s, b: f32s, c: f32s) -> f32s:
   a * b + c
 
 ~~ Unary negation
-crunch negate_rack(x: f32s) -> f32s:
+scratch negate_rack(x: f32s) -> f32s:
   -x
 
 ~~ Multiple operations chained
-crunch complex_arith(a: f32s, b: f32s, c: f32s) -> f32s:
+scratch complex_arith(a: f32s, b: f32s, c: f32s) -> f32s:
   let t1 = a + b
   let t2 = t1 * c
   t2 - a
 
 ~~ Fused source syntax does not promise a hardware FMA instruction
-crunch multiply_add(a: f32s, b: f32s, c: f32s) -> f32s:
+scratch multiply_add(a: f32s, b: f32s, c: f32s) -> f32s:
   | result: f32s <| a * b + c
   result
 
 ~~ An unrolled repeat whose copies never read the index.
-crunch cube(a: f32s) -> f32s:
+scratch cube(a: f32s) -> f32s:
   power := a
   repeat <i: i32> from <0> up to <2>:
     power <- power * a

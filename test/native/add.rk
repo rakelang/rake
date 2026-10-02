@@ -1,2 +1,2 @@
-crunch lowering_add(a: f32s, b: f32s) -> f32s:
+scratch lowering_add(a: f32s, b: f32s) -> f32s:
   a + b

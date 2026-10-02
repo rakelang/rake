@@ -1,0 +1,47 @@
+~~ Addresses retain location identity through scalar and aggregate assignment.
+~~ Read-only pointers and views borrow that same storage without copying it.
+record Pair {
+    i32: left;
+    [2]i32: right;
+}
+
+slow sum_view(values: []i32) -> i32:
+    total: i32 := 0
+    for index from 0 up to count(values):
+        total <- total + values[index]
+    return total
+
+slow read_pair(pair: ptr const Pair) -> i32:
+    return pair.left + pair.right[0] + pair.right[1]
+
+slow main() -> i32:
+    value: i32 := 2
+    let writable = addr(value)
+    writable[unchecked 0] <- 7
+    if value != 7:
+        return 1
+    let readonly: ptr const i32 = writable
+    value <- 11
+    if readonly[unchecked 0] != 11:
+        return 2
+    let view = unchecked_view(readonly, 1)
+    value <- 13
+    if sum_view(view) != 13:
+        return 3
+    pair: Pair := Pair { left: 3, right: [5, 7] }
+    let member = addr(pair.right[1])
+    let whole = addr(pair)
+    pair <- Pair { left: 11, right: [13, 17] }
+    if member[unchecked 0] != 17 or read_pair(whole) != 41:
+        return 4
+    let borrowed = slice(pair.right, 0, 2)
+    let readonly_view: []i32 = borrowed
+    if sum_view(borrowed) != 30 or sum_view(readonly_view) != 30:
+        return 5
+    let constant: i32 = 19
+    let constant_pointer = addr(constant)
+    let erased = bitcast(ptr const (), constant_pointer)
+    let restored = bitcast(ptr const i32, erased)
+    if restored[unchecked 0] != 19:
+        return 6
+    return 0

@@ -30,7 +30,7 @@ run dense(pairs_in: []i32, weights: []i16, rows: []f32, biases: []f32, sums: mut
       sums[<o>] <- to_f32(acc[<k>]) * (rows[<o>] * <scale>) + biases[<o>]
 
 ~~ Eight outputs' sums requantised to 16 bits (neural_kernels.rk's requantise).
-crunch requantise(low: i32s, high: i32s, scale: f32s, low_offset: f32s, high_offset: f32s, ceiling: i16s) -> i16s:
+scratch requantise(low: i32s, high: i32s, scale: f32s, low_offset: f32s, high_offset: f32s, ceiling: i16s) -> i16s:
   | a <| to_i32(to_f32(low) * scale + low_offset)
   | b <| to_i32(to_f32(high) * scale + high_offset)
   min(max(narrow(a, b), <0>), ceiling)

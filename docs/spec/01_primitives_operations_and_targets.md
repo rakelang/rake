@@ -4,17 +4,17 @@ A rack is one vector value on the current CPU and WebAssembly profiles.
 Its type specifies its element: `f32s` is a
 rack of `f32` lanes. The target profile gives its width. This page
 defines the profiles, the operations each one compiles, the floating-point
-rules and the calling conventions of crunches and rakes.
+rules and the calling conventions of scratches and rakes.
 
 ## Profiles
 
 | Profile | Register | `f32` lanes | Status |
 | --- | --- | ---: | --- |
-| `x86-sse2` | one 128-bit XMM register, SSE2 | 4 | `f32s` crunches and rakes, as GNU assembly |
-| `x86-avx2` | one 256-bit YMM register, AVX2 and FMA3 | 8 | `f32s` crunches and rakes, as GNU assembly |
-| `x86-avx512` | one 512-bit ZMM register, AVX-512F | 16 | `f32s` crunches and rakes, as GNU assembly |
-| `aarch64-neon` | one 128-bit vector register, AAPCS64 | 4 | `f32s` crunches and rakes, as GNU assembly |
-| `wasm-simd128` | one `v128` | 4 | float and integer crunches and rakes, runs and whole programs, as C |
+| `x86-sse2` | one 128-bit XMM register, SSE2 | 4 | `f32s` scratches and rakes, as GNU assembly |
+| `x86-avx2` | one 256-bit YMM register, AVX2 and FMA3 | 8 | `f32s` scratches and rakes, as GNU assembly |
+| `x86-avx512` | one 512-bit ZMM register, AVX-512F | 16 | `f32s` scratches and rakes, as GNU assembly |
+| `aarch64-neon` | one 128-bit vector register, AAPCS64 | 4 | `f32s` scratches and rakes, as GNU assembly |
+| `wasm-simd128` | one `v128` | 4 | float and integer scratches and rakes, runs and whole programs, as C |
 | `wasm-simd128-relaxed` | one `v128` | 4 | `wasm-simd128` and the relaxed SIMD operations |
 | `scalar` | none | 1 | WIP*, without the one-register guarantee |
 
@@ -65,7 +65,7 @@ WebAssembly SIMD have no fused multiply-add instruction. Their rejection of
 explicit `fma` preserves its single-rounding semantics, rather than indicating
 an unfinished lowering. Relaxed WebAssembly SIMD is a separate opt-in profile.
 
-A crunch or rake may return a rack or a mask on every profile, a scalar from
+A scratch or rake may return a rack or a mask on every profile, a scalar from
 a reduction on the x86 profiles and `wasm-simd128`, and a `bool` from `all` or
 `any` on `wasm-simd128`. `%` has no float form, and `true` and `false` have
 no rack form: a mask comes from a comparison. `sin`, `cos`, `tan`, `pow` and
@@ -122,10 +122,10 @@ Each is one instruction except `to_i32`, which is `f32x4.nearest` then
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
-crunch accumulate(sums: i32s, pair: i16s, weights: i16s) -> i32s:
+scratch accumulate(sums: i32s, pair: i16s, weights: i16s) -> i32s:
   sums + dot(pair, weights)
 
-crunch requantise(low: i32s, high: i32s, low_scale: f32s, high_scale: f32s) -> i16s:
+scratch requantise(low: i32s, high: i32s, low_scale: f32s, high_scale: f32s) -> i16s:
   | a <| to_i32(to_f32(low) * low_scale)
   | b <| to_i32(to_f32(high) * high_scale)
   max(narrow(a, b), <0>)
@@ -147,7 +147,7 @@ and are unavailable.
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
-crunch step_east(here: u64s, open: u64s, board: u64s, <carry: u32>) -> u64s:
+scratch step_east(here: u64s, open: u64s, board: u64s, <carry: u32>) -> u64s:
   let moving = bit_and(here, open)
   let moved = bit_or(shift_bits_left(moving, 1), shift_bits_right(moving, <carry>))
   bit_or(here, bit_and(moved, board))
@@ -165,10 +165,10 @@ zero. Like a reduction, its result is a scalar.
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
-crunch occupied_bits(tiles: u8s) -> u32:
+scratch occupied_bits(tiles: u8s) -> u32:
   bitmask(tiles != <0>)
 
-crunch reversed(values: f32s) -> f32s:
+scratch reversed(values: f32s) -> f32s:
   shuffle(values, [3, 2, 1, 0])
 ```
 
@@ -203,13 +203,13 @@ with `target("relaxed-simd")`.
 
 <!-- rake-check: verify wasm-simd128-relaxed -->
 ```rake
-crunch blend(a: f32s, b: f32s, weight: f32s) -> f32s:
+scratch blend(a: f32s, b: f32s, weight: f32s) -> f32s:
   relaxed_madd(a - b, weight, b)
 ```
 
 ## Calling conventions
 
-A crunch or rake is a function that C can call. Its parameters arrive in
+A scratch or rake is a function that C can call. Its parameters arrive in
 registers and its result returns in one. No profile passes an argument on
 the stack, so a function that would need to is rejected.
 
@@ -230,12 +230,12 @@ source values to the other 15 registers. AVX2 has 16 vector registers and
 AVX-512 has 32. The AVX-512 emitter also uses `k1` as an instruction-local
 mask. Constant pools are aligned to the profile's 16-, 32- or 64-byte rack.
 
-In this crunch on AVX2, `a` arrives in `ymm0`, `scale` in `xmm1` and `b` in
+In this scratch on AVX2, `a` arrives in `ymm0`, `scale` in `xmm1` and `b` in
 `ymm2`:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
-crunch scaled_sum(a: f32s, <scale: f32>, b: f32s) -> f32s:
+scratch scaled_sum(a: f32s, <scale: f32>, b: f32s) -> f32s:
   a * <scale> + b
 ```
 
@@ -259,8 +259,9 @@ and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
 backends in the 0.6.0-beta tag compile neither runs nor slow code. The
 unreleased development compiler adds native C programs with slow orchestration
 and Rake-selected register kernels. Slow callers can pass uniform `f32`
-arguments and receive `f32` results. Native runs, packs and other scalar
-kernel boundaries remain work in progress.
+arguments and receive `f32` results. AVX2 also supports the
+[native stream subset](02_packs_and_run.md#native-avx2-streams).
+General native runs and other scalar kernel boundaries remain work in progress.
 
 ## Verification
 
@@ -275,7 +276,7 @@ then disassembles the object and checks every function:
   `v15`, no general or scalar float registers, loads only of literal
   constants, every rack in a whole 128-bit register, no lane extraction except
   the `dup` of a uniform, and exactly the selected fused multiply-adds.
-- `wasm-simd128`: a crunch or rake contains only locals, constants, and SIMD
+- `wasm-simd128`: a scratch or rake contains only locals, constants, and SIMD
   and scalar register instructions, with no calls, memory or branches.
 
 The C compiler and disassembler are `$RAKE_WASM_CC` (default `clang`) and

@@ -1,4 +1,4 @@
-crunch native_sum(<value: f32>, <factor: f32>) -> f32:
+scratch native_sum(<value: f32>, <factor: f32>) -> f32:
   sum(<value> * <factor> + <1.0>)
 
 slow main() -> i32:

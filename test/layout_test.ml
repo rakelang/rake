@@ -23,12 +23,12 @@ let expect_invalid fragment source =
 
 let () =
   expect_valid
-    "crunch add(\n  left: f32s,\n  right: f32s\n) -> f32s:\n  left + right\n\ncrunch id(value: f32s) -> f32s:\n  value\n";
+    "scratch add(\n  left: f32s,\n  right: f32s\n) -> f32s:\n  left + right\n\nscratch id(value: f32s) -> f32s:\n  value\n";
   expect_valid
-    "stack Samples {\n  f32: value;\n}\n\n~~ a comment does not affect layout\nrun copy(input: pack Samples, <count: i64>) -> f32:\n  for chunk in input using f32s up to <count>:\n    yield chunk.value\n";
+    "pack Samples {\n  f32: value;\n}\n\n~~ a comment does not affect layout\nrun copy(input: stack Samples, <count: i64>) -> f32:\n  for chunk in input using f32s up to <count>:\n    yield chunk.value\n";
   expect_invalid "indented body"
-    "crunch broken(value: f32s) -> f32s:\nreturn value\n";
+    "scratch broken(value: f32s) -> f32s:\nreturn value\n";
   expect_invalid "enclosing body"
-    "crunch broken(value: f32s) -> f32s:\n  let copy = value\n copy\n";
+    "scratch broken(value: f32s) -> f32s:\n  let copy = value\n copy\n";
   expect_invalid "tabs"
-    "crunch broken(value: f32s) -> f32s:\n\tvalue\n"
+    "scratch broken(value: f32s) -> f32s:\n\tvalue\n"

@@ -1,12 +1,13 @@
 (** Typed intermediate representation of the slow tier and of general runs.
 
     The checker ({!Tier_check}) produces this form; the interpreter
-    ({!Tier_interp}) and the C emitter ({!Tier_c}) consume it. Crunches and
+    ({!Tier_interp}) and the C emitter ({!Tier_c}) consume it. Scratches and
     rakes keep their own pipeline (typed native SSA); a run's pure rack
     expressions stay Rake AST here and are lowered through that same pipeline,
     so a rack operation has one implementation wherever it is written. *)
 
 type scalar = Types.scalar
+type pointer_access = Ast.pointer_access = Read_write | Read_only
 
 type ty =
   | Sc of scalar
@@ -15,10 +16,10 @@ type ty =
   | Rack_array of int * scalar  (** registers: N racks, indexed by constants *)
   | Array of int * ty  (** memory: N elements *)
   | View of ty * bool  (** element, writable *)
-  | Ptr of ty
+  | Ptr of ty * pointer_access
   | Function_pointer of ty list * ty
   | Record of string
-  | Pack of string * bool  (** a stack's columns, writable *)
+  | Stack of string * bool  (** a pack's columns, writable *)
   | Str
   | Void
 
@@ -30,12 +31,12 @@ let rec string_of_ty = function
   | Array (n, t) -> Printf.sprintf "[%d]%s" n (string_of_ty t)
   | View (t, false) -> "[]" ^ string_of_ty t
   | View (t, true) -> "mut []" ^ string_of_ty t
-  | Ptr t -> "ptr " ^ string_of_ty t
+  | Ptr (t, access) -> "ptr " ^ (if access = Read_only then "const " else "") ^ string_of_ty t
   | Function_pointer (args, result) ->
       "slow(" ^ String.concat ", " (List.map string_of_ty args) ^ ") -> " ^ string_of_ty result
   | Record name -> name
-  | Pack (name, false) -> "pack " ^ name
-  | Pack (name, true) -> "mut pack " ^ name
+  | Stack (name, false) -> "stack " ^ name
+  | Stack (name, true) -> "mut stack " ^ name
   | Str -> "string"
   | Void -> "()"
 
@@ -99,18 +100,19 @@ and kind =
   | Function_ref of string
   | Indirect_call of expr * expr list
   | Pointer_cast of expr  (** erase or restore a data pointer through ptr () *)
-  | Vector_call of string * vector_arg list  (** a run, or a crunch with uniform parameters *)
+  | Vector_call of string * vector_arg list  (** a run, or a scratch with uniform parameters *)
   | Field of expr * string
   | Elem of expr * expr * bool  (** element of an array, view or pointer; checked *)
   | Convert of Ast.convert * scalar * expr
   | Cond of expr * expr * expr
   | Record_lit of string * (string * expr) list
-  | Pack_lit of string * (string * expr) list  (** a stack's columns, each a view *)
+  | Stack_lit of string * (string * expr) list  (** a pack's columns, each a view *)
   | Array_lit of expr list
   | Addr of expr
   | Length of expr  (** elements in a view or array *)
   | Slice of expr * expr * expr  (** view of [count] elements from [start]; checked *)
   | Ptr_view of expr * expr  (** unchecked view of [count] elements at a pointer *)
+  | Read_only_view of expr  (** borrow a writable view without write access *)
   | Is_null of expr
   | Block of stmt list * expr option  (** lexical scalar scope; tail expression is its value *)
 
@@ -138,7 +140,7 @@ type entry_parameters = No_arguments | Process_arguments
 let entry_parameters = function
   | [] -> Some No_arguments
   | [ { pty = Sc SInt; pass = By_value; _ };
-      { pty = Ptr (Ptr (Sc SUint8)); pass = By_value; _ } ] -> Some Process_arguments
+      { pty = Ptr (Ptr (Sc SUint8, Read_write), Read_write); pass = By_value; _ } ] -> Some Process_arguments
   | _ -> None
 
 type slow_func = {
@@ -147,7 +149,9 @@ type slow_func = {
   fblock : bool;  (** extracted run block: never inline; view captures use pointer/count ABI *)
 }
 
-type record = { rname : string; rheader : string option; rfields : (string * ty) list; rloc : Ast.loc }
+type record_layout = Rake_struct | C_struct of string | C_union of string
+
+type record = { rname : string; rlayout : record_layout; rfields : (string * ty) list; rloc : Ast.loc }
 
 type extern_func = { ename : string; eheader : string; eparams : param list; eresult : ty }
 
@@ -155,7 +159,7 @@ type extern_func = { ename : string; eheader : string; eparams : param list; ere
    every load, gather and pure rack computation binds a name. *)
 
 type run_param =
-  | Run_pack of string * string * bool  (** name, stack, writable *)
+  | Run_stack of string * string * bool  (** name, pack, writable *)
   | Run_view of string * scalar * bool
   | Run_uniform of string * scalar
   | Run_rack of string * scalar
@@ -178,13 +182,13 @@ and rkind =
   | R_traverse of traverse
   | R_chunk_load of string * scalar * string * scalar
       (** name, rack element, field, stored element: a chunk's column, widened when narrower *)
-  | R_output of string * string * string  (** output pack, field, rack *)
+  | R_output of string * string * string  (** output stack, field, rack *)
   | R_yield of string
   | R_block of rstmt list  (** one unrolled repeat iteration: its names are its own *)
 
 and traverse = {
-  t_pack : string;
   t_stack : string;
+  t_pack : string;
   t_domain : scalar;
   t_count : expr;
   t_body : rstmt list;
@@ -198,11 +202,11 @@ type run = {
   run_loc : Ast.loc;
 }
 
-type stack = { sname : string; sfields : (string * scalar) list }
+type pack = { pack_name : string; pack_fields : (string * scalar) list }
 
 type program = {
   source : Ast.program;
-  stacks : stack list;
+  packs : pack list;
   records : record list;  (** declaration order; fields only name earlier records *)
   externs : extern_func list;
   states : (string * ty * expr option) list;
@@ -210,10 +214,10 @@ type program = {
   consts : (string * ty * expr) list;
   slows : slow_func list;
   runs : run list;
-  vector_defs : Ast.def list;  (** crunches and rakes, lowered by the native pipeline *)
+  vector_defs : Ast.def list;  (** scratches and rakes, lowered by the native pipeline *)
 }
 
-let find_stack program name = List.find (fun s -> s.sname = name) program.stacks
+let find_pack program name = List.find (fun s -> s.pack_name = name) program.packs
 let find_record program name = List.find (fun r -> r.rname = name) program.records
 
 (* ─── Text ──────────────────────────────────────────────────────────── *)
@@ -266,12 +270,13 @@ let rec string_of_expr (e : expr) =
   | Elem (a, i, checked) -> Printf.sprintf "%s[%s%s]" (s a) (if checked then "" else "unchecked ") (s i)
   | Convert (_, t, a) -> Printf.sprintf "%s(%s)" (string_of_ty (Sc t)) (s a)
   | Cond (c, a, b) -> Printf.sprintf "if %s then %s else %s" (s c) (s a) (s b)
-  | Record_lit (n, _) | Pack_lit (n, _) -> n ^ " {...}"
+  | Record_lit (n, _) | Stack_lit (n, _) -> n ^ " {...}"
   | Array_lit items -> Printf.sprintf "[%d items]" (List.length items)
   | Addr a -> "addr(" ^ s a ^ ")"
   | Length a -> "count(" ^ s a ^ ")"
   | Slice (a, b, c) -> Printf.sprintf "slice(%s, %s, %s)" (s a) (s b) (s c)
   | Ptr_view (a, b) -> Printf.sprintf "unchecked_view(%s, %s)" (s a) (s b)
+  | Read_only_view a -> "read_only(" ^ s a ^ ")"
   | Is_null a -> "is_null(" ^ s a ^ ")"
   | Block (_, value) -> "slow { ..." ^ (match value with None -> " }" | Some v -> "; " ^ s v ^ " }")
 
@@ -293,7 +298,7 @@ and string_of_rstmt indent (st : rstmt) =
         (match by with Some e -> " by " ^ string_of_expr e | None -> "") (string_of_rstmts (indent + 2) body)
   | R_if (c, a, b) -> Printf.sprintf "%sif %s:\n%s%selse:\n%s" pad (string_of_expr c) (string_of_rstmts (indent + 2) a) pad (string_of_rstmts (indent + 2) b)
   | R_traverse t ->
-      Printf.sprintf "%straverse %s (%s) using %s up to %s:\n%s" pad t.t_pack t.t_stack (string_of_ty (Rack t.t_domain)) (string_of_expr t.t_count)
+      Printf.sprintf "%straverse %s (%s) using %s up to %s:\n%s" pad t.t_stack t.t_pack (string_of_ty (Rack t.t_domain)) (string_of_expr t.t_count)
         (string_of_rstmts (indent + 2) t.t_body)
   | R_chunk_load (n, el, f, stored) -> Printf.sprintf "%scolumn %s : %s = %s (stored %s)\n" pad n (string_of_ty (Rack el)) f (string_of_ty (Sc stored))
   | R_output (p, f, v) -> Printf.sprintf "%soutput %s.%s <- %s\n" pad p f v

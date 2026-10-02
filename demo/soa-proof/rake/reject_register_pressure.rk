@@ -1,7 +1,7 @@
 ~~ Negative proof: these fused rack values are all needed by the final result.
 ~~ AVX2 has only 16 YMM registers, so accepting this kernel would require a
 ~~ spill. Rake must reject it instead of silently using stack memory.
-crunch reject_register_pressure(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s) -> f32s:
+scratch reject_register_pressure(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s) -> f32s:
   | t0 <| a + b
   | t1 <| a + b
   | t2 <| a + b

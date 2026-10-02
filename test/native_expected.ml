@@ -13,16 +13,16 @@ let definitions = function
   | [ { mod_defs; _ } ] -> mod_defs
   | _ -> fail "native semantic fixture must contain exactly one module"
 
-let find_crunch name program =
+let find_scratch name program =
   match
     definitions program
     |> List.find_opt (fun definition ->
            match definition.v with
-           | DCrunch (candidate, _, _, _) -> String.equal candidate name
+           | DScratch (candidate, _, _, _) -> String.equal candidate name
            | _ -> false)
   with
   | Some definition -> definition
-  | None -> fail ("missing crunch definition " ^ name)
+  | None -> fail ("missing scratch definition " ^ name)
 
 let find_rake name program =
   match
@@ -36,7 +36,7 @@ let find_rake name program =
   | None -> fail ("missing rake definition " ^ name)
 
 let evaluate definition arguments =
-  match eval_crunch ~lanes:8 definition arguments with
+  match eval_scratch ~lanes:8 definition arguments with
   | Ok (F32_rack values) -> values
   | Ok value ->
       fail
@@ -45,7 +45,7 @@ let evaluate definition arguments =
   | Error error -> fail (format_error error)
 
 let evaluate_value definition arguments =
-  match eval_crunch ~lanes:8 definition arguments with
+  match eval_scratch ~lanes:8 definition arguments with
   | Ok value -> value
   | Error error -> fail (format_error error)
 
@@ -64,18 +64,18 @@ let () =
   match Array.to_list Sys.argv with
   | [ _; add_source; select_source; scalar_source; predication_source;
       cross_lane_source ] ->
-      let add = find_crunch "lowering_add" (parse_file add_source) in
+      let add = find_scratch "lowering_add" (parse_file add_source) in
       evaluate add
         [ rack [| -8.0; -3.5; -0.0; 1.0; 2.5; 8.0; 16.0; 1024.0 |];
           rack [| 3.0; 1.5; 0.0; -4.0; 2.5; 0.25; -8.0; 0.5 |] ]
       |> Array.iter print_bits;
-      let select = find_crunch "choose_positive" (parse_file select_source) in
+      let select = find_scratch "choose_positive" (parse_file select_source) in
       evaluate select
         [ rack [| -8.0; 3.5; -0.0; 1.0; -2.5; 8.0; -16.0; 1024.0 |];
           rack [| 9.0; 9.0; 9.0; 9.0; 9.0; 9.0; 9.0; 9.0 |] ]
       |> Array.iter print_bits;
-      let scalar_crunch = find_crunch "scale_and_add" (parse_file scalar_source) in
-      evaluate scalar_crunch
+      let scalar_scratch = find_scratch "scale_and_add" (parse_file scalar_source) in
+      evaluate scalar_scratch
         [ rack [| -8.0; -3.5; -0.0; 1.0; 2.5; 8.0; 16.0; 1024.0 |];
           scalar 0.5;
           rack [| 3.0; 1.5; 0.0; -4.0; 2.5; 0.25; -8.0; 0.5 |] ]
@@ -106,7 +106,7 @@ let () =
         ("strict_reduce_min", extrema_inputs);
         ("strict_reduce_max", extrema_inputs) ]
       |> List.iter (fun (name, inputs) ->
-             match evaluate_value (find_crunch name cross_lane) [ rack inputs ] with
+             match evaluate_value (find_scratch name cross_lane) [ rack inputs ] with
              | F32_scalar value -> print_bits value
              | value ->
                  fail
@@ -117,7 +117,7 @@ let () =
         ("strict_scan_min", extrema_inputs);
         ("strict_scan_max", extrema_inputs) ]
       |> List.iter (fun (name, inputs) ->
-             evaluate (find_crunch name cross_lane) [ rack inputs ]
+             evaluate (find_scratch name cross_lane) [ rack inputs ]
              |> Array.iter print_bits)
   | _ ->
       fail

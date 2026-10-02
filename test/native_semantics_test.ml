@@ -102,7 +102,7 @@ let test_typed_error () =
   | Error error -> fail error
   | Ok _ -> failwith "undefined variable unexpectedly evaluated"
 
-let test_crunch_evaluation () =
+let test_scratch_evaluation () =
   let result = { result_name = "result"; result_type = None } in
   let binding =
     {
@@ -113,14 +113,14 @@ let test_crunch_evaluation () =
   in
   let definition =
     node
-      (DCrunch
+      (DScratch
          ( "add",
            [ PRack ("left", None); PRack ("right", None) ],
            result,
            [ node (SLet binding) loc; node (SExpr (var "result")) loc ] ))
       loc
   in
-  eval_crunch ~lanes:4 definition
+  eval_scratch ~lanes:4 definition
     [ rack [| 1.0; -2.0; 16_777_216.0; -0.0 |];
       rack [| 3.0; 0.5; 1.0; 0.0 |] ]
   |> get |> expect_rack [| 4.0; -1.5; 16_777_216.0; 0.0 |]
@@ -258,7 +258,7 @@ let () =
   test_division ();
   test_explicit_fma_is_fused ();
   test_typed_error ();
-  test_crunch_evaluation ();
+  test_scratch_evaluation ();
   test_strict_reductions_and_scans ();
   test_rake_priority_and_inactive_lanes ();
   print_endline "native executable semantics tests passed"

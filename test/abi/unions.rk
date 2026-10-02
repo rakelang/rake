@@ -1,0 +1,69 @@
+~~ C owns these layouts. A union literal selects one protocol-active member.
+record union_pair_t from "unions.h" {
+  u8: tag;
+  f64: weight;
+  u64: ticks;
+}
+
+union foreign_value_t from "unions.h" {
+  i32: i32;
+  i64: i64;
+  f32: f32;
+  f64: f64;
+  ptr (): address;
+  [16]u8: v128;
+  union_pair_t: pair;
+}
+
+record union_envelope_t from "unions.h" {
+  u8: kind;
+  foreign_value_t: of;
+  u32: tail;
+}
+
+extern slow union_make_integer(value: i64) -> foreign_value_t from "unions.h"
+extern slow union_echo(value: foreign_value_t) -> foreign_value_t from "unions.h"
+extern slow union_inspector() -> slow(ptr const (), ptr const foreign_value_t) -> i64 from "unions.h"
+extern slow union_invoke(callback: slow(ptr const (), ptr const foreign_value_t) -> i64, context: ptr const (), value: ptr const foreign_value_t) -> i64 from "unions.h"
+extern slow union_abi_test() -> i32 from "unions.h"
+
+state union_bytes: foreign_value_t := foreign_value_t { v128: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
+
+slow rake_union_integer(value: i64) -> foreign_value_t:
+  return foreign_value_t { i64: value }
+
+slow rake_union_float() -> foreign_value_t:
+  return foreign_value_t { f64: 1.5 }
+
+slow rake_union_bytes() -> foreign_value_t:
+  let bytes: [16]u8 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  if union_bytes.v128[15] != 16:
+    return foreign_value_t { i64: 0 }
+  return foreign_value_t { v128: bytes }
+
+slow rake_union_pair() -> foreign_value_t:
+  return foreign_value_t { pair: union_pair_t { tag: 5, weight: 1.25, ticks: 4294967327 } }
+
+slow rake_union_envelope() -> union_envelope_t:
+  return union_envelope_t { kind: 2, of: foreign_value_t { f64: 2.5 }, tail: 0xABC }
+
+slow rake_union_mutate(value: mut foreign_value_t):
+  value.i64 <- value.i64 + 11
+
+slow rake_union_call_c() -> i64:
+  let value = union_make_integer(4294967317)
+  let echoed = union_echo(value)
+  return echoed.i64
+
+slow rake_union_inspect(context: ptr const (), value: ptr const foreign_value_t) -> i64:
+  let bias = bitcast(ptr const i32, context)
+  return value.i64 + i64(bias[unchecked 0])
+
+slow rake_union_callback(value: ptr const foreign_value_t) -> i64:
+  let bias: i32 = 10
+  let context = bitcast(ptr const (), addr(bias))
+  let callback = union_inspector()
+  return callback(context, value) + union_invoke(addr(rake_union_inspect), context, value)
+
+slow main() -> i32:
+  return union_abi_test()

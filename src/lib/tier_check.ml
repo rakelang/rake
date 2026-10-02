@@ -3,16 +3,16 @@
     Slow code is scalar orchestration: records, arrays, views, module state,
     embedded data, control flow and calls. It can't name or hold a rack type.
     A run's lexical slow blocks capture scalars and views, never live racks.
-    Slow code reaches vector work only by calling a run, or a crunch whose parameters
+    Slow code reaches vector work only by calling a run, or a scratch whose parameters
     are all uniform, and marks every scalar argument that becomes a rack at
     that boundary with angle brackets.
 
-    A run is vector code over memory: views, packs and uniform scalars in,
+    A run is vector code over memory: views, stacks and uniform scalars in,
     stores out, with counted loops, unrolled [repeat], uniform [if] and
     traversals. Its statements are put in A-normal form ({!Tier_ir.rstmt}):
     each load, gather and pure rack computation binds a name, and the pure
-    computations are typed by the crunch checker ({!Typecheck}) so that a
-    rack operation means the same in a run as in a crunch. *)
+    computations are typed by the scratch checker ({!Typecheck}) so that a
+    rack operation means the same in a run as in a scratch. *)
 
 open Tier_ir
 module SM = Map.Make (String)
@@ -26,11 +26,11 @@ let format_error (loc : Ast.loc) message =
 
 type vector_sig =
   | Sig_run of run_param list * scalar option
-  | Sig_crunch of (string * ty * bool) list * ty  (** name, type, uniform; result *)
+  | Sig_scratch of (string * ty * bool) list * ty  (** name, type, uniform; result *)
 
 type ctx = {
   records : (string, record) Hashtbl.t;
-  stacks : (string, stack) Hashtbl.t;
+  packs : (string, pack) Hashtbl.t;
   slows : (string, param list * ty) Hashtbl.t;
   externs : (string, extern_func) Hashtbl.t;
   vectors : (string, vector_sig) Hashtbl.t;
@@ -85,13 +85,13 @@ let rec ty_of ctx (t : Ast.typ) =
       | _ -> Array (n, storable ctx inner))
   | TView inner -> View (storable ctx inner, false)
   | TMut { v = TView inner; _ } -> View (storable ctx inner, true)
-  | TMut { v = TPack name; _ } ->
-      if not (Hashtbl.mem ctx.stacks name) then fail t.loc "unknown stack '%s'" name;
-      Pack (name, true)
-  | TPack name ->
-      if not (Hashtbl.mem ctx.stacks name) then fail t.loc "unknown stack '%s'" name;
-      Pack (name, false)
-  | TPtr inner -> Ptr (pointee ctx inner)
+  | TMut { v = TStack name; _ } ->
+      if not (Hashtbl.mem ctx.packs name) then fail t.loc "unknown pack '%s'" name;
+      Stack (name, true)
+  | TStack name ->
+      if not (Hashtbl.mem ctx.packs name) then fail t.loc "unknown pack '%s'" name;
+      Stack (name, false)
+  | TPtr (inner, access) -> Ptr (pointee ctx inner, access)
   | TFun (args, result) ->
       let abi_type (t : Ast.typ) =
         match ty_of ctx t with
@@ -101,12 +101,18 @@ let rec ty_of ctx (t : Ast.typ) =
       let result = match result.v with TUnit -> Void | _ -> abi_type result in
       Function_pointer (List.map abi_type args, result)
   | TNamed name ->
-      if Hashtbl.mem ctx.records name then Record name
-      else if Hashtbl.mem ctx.stacks name then
-        fail t.loc "'%s' is a stack: write pack %s for its columns" name name
+      if Hashtbl.mem ctx.records name then (
+        let record = Hashtbl.find ctx.records name in
+        match record.rlayout, record.rfields with
+        | C_struct _, [] -> fail t.loc "opaque C type '%s' is used through ptr %s, not by value" name name
+        | _ -> Record name)
+      else if Hashtbl.mem ctx.packs name then
+        fail t.loc "'%s' is a pack: write stack %s for its columns" name name
       else fail t.loc "unknown record '%s'" name
-  | TMut _ -> fail t.loc "mut marks a writable parameter: mut []T, mut pack S, or a mut record or array"
-  | TStack _ -> fail t.loc "a stack is a column schema: write pack S"
+  | TMut _ -> fail t.loc "mut marks a writable parameter: mut []T, mut stack S, or a mut record or array"
+  | TPack name ->
+      if not (Hashtbl.mem ctx.packs name) then fail t.loc "unknown pack '%s'" name;
+      Record name
   | TCompoundRack _ | TCompoundScalar _ | TSingle _ | TTuple _ | TUnit ->
       fail t.loc "this type has no published contract"
 
@@ -128,19 +134,29 @@ let rec equal_ty a b =
   | Rack_array (n, x), Rack_array (m, y) -> n = m && x = y
   | Array (n, x), Array (m, y) -> n = m && equal_ty x y
   | View (x, w), View (y, v) -> w = v && equal_ty x y
-  | Ptr x, Ptr y -> equal_ty x y
+  | Ptr (x, access), Ptr (y, other) -> access = other && equal_ty x y
   | Function_pointer (xs, x), Function_pointer (ys, y) ->
       List.length xs = List.length ys && List.for_all2 equal_ty xs ys && equal_ty x y
   | Record x, Record y -> x = y
-  | Pack (x, w), Pack (y, v) -> x = y && w = v
+  | Stack (x, w), Stack (y, v) -> x = y && w = v
   | Str, Str | Void, Void -> true
   | _ -> false
 
 let is_aggregate = function Array _ | Record _ -> true | _ -> false
 
 let require loc expected actual what =
-  if not (equal_ty expected actual) then
+  let compatible = equal_ty expected actual || match expected, actual with
+    | Ptr (element, Read_only), Ptr (source, Read_write) -> equal_ty element source
+    | _ -> false
+  in
+  if not compatible then
     fail loc "%s has type %s; expected %s" what (string_of_ty actual) (string_of_ty expected)
+
+let read_only_view expected (value : expr) =
+  match expected, value.ty with
+  | View (element, false), View (source, true) when equal_ty element source ->
+      mk (Read_only_view value) expected value.loc
+  | _ -> value
 
 let integer_scalar loc what = function
   | Sc s when is_integer s -> s
@@ -195,7 +211,7 @@ let rec mentions_racks env (e : Ast.expr) =
   match e.v with
   | EVar name -> (
       match SM.find_opt name env.vars with
-      | Some { bty = Rack _ | Mask _ | Rack_array _ | Pack _; _ } -> true
+      | Some { bty = Rack _ | Mask _ | Rack_array _ | Stack _; _ } -> true
       | Some { bty = View _; _ } -> true
       | _ -> false)
   | EScalarVar _ | EInt _ | EFloat _ | EBool _ | EString _ | ELanes -> false
@@ -244,8 +260,8 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
             (match bty with
              | Rack _ | Mask _ | Rack_array _ when env.mode = Slow_mode ->
                  fail loc "slow code can't hold rack or mask '%s'; reduce or extract it before the slow block" name
-             | Pack _ when env.mode = Slow_mode ->
-                 fail loc "slow code can't use traversal chunk or pack '%s'; pass its memory to a run" name
+             | Stack _ when env.mode = Slow_mode ->
+                 fail loc "slow code can't use traversal chunk or stack '%s'; pass its memory to a run" name
              | _ -> ());
             if env.mode = Vector_mode && not buniform then
               fail loc "'%s' is not a uniform scalar" name;
@@ -258,7 +274,7 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
                 mk (Global name) ty loc
             | None -> fail loc "undefined name '%s'" name))
   in
-  match e.v with
+  let value = match e.v with
   | EInt value -> literal_int value
   | EFloat value -> literal_float value
   | EBool value -> mk (Bool value) (Sc SBool) loc
@@ -321,7 +337,10 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
   | EConvert (Ast.Convert_bitcast, target, value) when (match target.v with TPtr _ -> true | _ -> false) ->
       let target = ty_of env.ctx target and value = check_uniform env value in
       (match (target, value.ty) with
-       | Ptr Void, Ptr _ | Ptr _, Ptr Void -> mk (Pointer_cast value) target loc
+       | Ptr (Void, access), Ptr (_, source) | Ptr (_, access), Ptr (Void, source) ->
+           if source = Read_only && access = Read_write then
+             fail loc "a pointer bitcast cannot discard const access";
+           mk (Pointer_cast value) target loc
        | _ -> fail loc "a pointer bitcast erases or restores a data pointer through ptr ()")
   | EConvert (kind, target, value) -> (
       let target_s =
@@ -358,13 +377,14 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
       let base = check_uniform env base in
       let record =
         match base.ty with
-        | Record name | Ptr (Record name) -> Hashtbl.find env.ctx.records name
+        | Record name | Ptr (Record name, _) -> Hashtbl.find env.ctx.records name
         | ty -> fail loc "%s has no fields" (string_of_ty ty)
       in
       match List.assoc_opt field record.rfields with
       | Some ty -> mk (Field (base, field)) ty loc
       | None -> fail loc "record %s has no field '%s'" record.rname field)
   | ERecord (name, inits) -> record_literal env loc name inits
+  | EStack (name, inits) -> stack_literal env loc name inits
   | EArray items -> (
       match expected with
       | Some (Array (n, element)) ->
@@ -380,6 +400,8 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
   | _ ->
       if env.mode = Vector_mode then fail loc "this expression is a rack computation, not a uniform scalar"
       else fail loc "this expression is vector code; slow code reaches it by calling a run"
+  in
+  match expected with Some ty -> read_only_view ty value | None -> value
 
 and element env loc base index unchecked =
   (* The base is memory, named bare even in vector code. *)
@@ -388,7 +410,7 @@ and element env loc base index unchecked =
   ignore (integer_scalar index.loc "an index" index.ty);
   match base.ty with
   | Array (_, element) | View (element, _) -> mk (Elem (base, index, not unchecked)) element loc
-  | Ptr element ->
+  | Ptr (element, _) ->
       if element = Void then fail loc "ptr () has no element type; restore its typed pointer before indexing";
       if not unchecked then fail loc "a pointer carries no bounds; write p[unchecked i]";
       mk (Elem (base, index, false)) element loc
@@ -423,9 +445,14 @@ and same_type env ?expected a b =
 
 and record_literal env loc name inits =
   match Hashtbl.find_opt env.ctx.records name with
+  | Some { rlayout = C_struct _; rfields = []; _ } ->
+      fail loc "opaque C type '%s' can't be constructed in Rake" name
   | Some record ->
       let given = List.map (fun (i : Ast.field_init) -> i.init_field) inits in
-      List.iter (fun (field, _) -> if not (List.mem field given) then fail loc "record %s literal lacks field '%s'" name field) record.rfields;
+      (match record.rlayout with
+       | C_union _ -> if List.length inits <> 1 then fail loc "C union %s literal selects exactly one field" name
+       | Rake_struct | C_struct _ ->
+           List.iter (fun (field, _) -> if not (List.mem field given) then fail loc "record %s literal lacks field '%s'" name field) record.rfields);
       let fields =
         List.map
           (fun (i : Ast.field_init) ->
@@ -438,26 +465,32 @@ and record_literal env loc name inits =
           inits
       in
       mk (Record_lit (name, fields)) (Record name) loc
-  | None -> (
-      match Hashtbl.find_opt env.ctx.stacks name with
-      | Some stack ->
-          (* A pack: each column a view of the stack's stored element. *)
+  | None -> fail loc "unknown record or pack '%s'" name
+
+and stack_literal env loc name inits =
+      match Hashtbl.find_opt env.ctx.packs name with
+      | Some pack ->
+          let given = List.map (fun (i : Ast.field_init) -> i.init_field) inits in
+          if List.length given <> List.length (List.sort_uniq compare given) then
+            fail loc "stack %s repeats a column" name;
+          List.iter (fun field -> if not (List.mem_assoc field pack.pack_fields) then
+            fail loc "pack %s has no field '%s'" name field) given;
           let fields =
             List.map
               (fun (field, element) ->
                 match List.find_opt (fun (i : Ast.field_init) -> i.init_field = field) inits with
-                | None -> fail loc "pack %s literal lacks column '%s'" name field
+                | None -> fail loc "stack %s literal lacks column '%s'" name field
                 | Some i ->
                     let v = as_view env (check_uniform env i.init_value) in
                     (match v.ty with
                      | View (Sc s, _) when s = element -> ()
                      | ty -> fail i.init_value.loc "column %s holds %s; got %s" field (string_of_ty (Sc element)) (string_of_ty ty));
                     (field, v))
-              stack.sfields
+              pack.pack_fields
           in
           let writable = List.for_all (fun (_, v) -> match v.ty with View (_, w) -> w | _ -> false) fields in
-          mk (Pack_lit (name, fields)) (Pack (name, writable)) loc
-      | None -> fail loc "unknown record or stack '%s'" name)
+          mk (Stack_lit (name, fields)) (Stack (name, writable)) loc
+      | None -> fail loc "unknown pack '%s'" name
 
 (** An array passed where a view is expected is a borrow of all its elements. *)
 and as_view env (e : expr) =
@@ -472,9 +505,9 @@ and is_writable_place env (e : expr) =
   match e.k with
   | Var name -> (match SM.find_opt name env.vars with Some b -> b.bmut | None -> false)
   | Global name -> (match Hashtbl.find_opt env.ctx.globals name with Some (_, w) -> w | None -> false)
-  | Field (base, _) -> (match base.ty with Ptr _ -> true | _ -> is_writable_place env base)
+  | Field (base, _) -> (match base.ty with Ptr (_, access) -> access = Read_write | _ -> is_writable_place env base)
   | Elem (base, _, _) -> (
-      match base.ty with View (_, w) -> w | Ptr _ -> true | _ -> is_writable_place env base)
+      match base.ty with View (_, w) -> w | Ptr (_, access) -> access = Read_write | _ -> is_writable_place env base)
   | _ -> false
 
 and call env ?expected loc name args =
@@ -534,8 +567,8 @@ and call env ?expected loc name args =
       let p = arg p and count = arg ~expected:(Sc SInt) count in
       require count.loc (Sc SInt) count.ty "a view's count";
       match p.ty with
-      | Ptr Void -> fail loc "ptr () has no element type; restore its typed pointer before forming a view"
-      | Ptr element -> mk (Ptr_view (p, count)) (View (element, true)) loc
+      | Ptr (Void, _) -> fail loc "ptr () has no element type; restore its typed pointer before forming a view"
+      | Ptr (element, access) -> mk (Ptr_view (p, count)) (View (element, access = Read_write)) loc
       | ty -> fail loc "unchecked_view takes a pointer, got %s" (string_of_ty ty))
   | "addr", [ { Ast.v = EVar name; _ } ]
     when env.mode = Slow_mode && not (SM.mem name env.vars || Hashtbl.mem env.ctx.globals name || Hashtbl.mem env.ctx.consts name)
@@ -553,7 +586,7 @@ and call env ?expected loc name args =
       (match place.k with
        | Var _ | Global _ | Field _ | Elem _ -> ()
        | _ -> fail loc "addr takes a location");
-      mk (Addr place) (Ptr place.ty) loc
+      mk (Addr place) (Ptr (place.ty, if is_writable_place env place then Read_write else Read_only)) loc
   | "is_null", [ p ] ->
       let p = arg p in
       (match p.ty with Ptr _ | Function_pointer _ -> () | ty -> fail loc "is_null takes a pointer, got %s" (string_of_ty ty));
@@ -586,7 +619,7 @@ and call env ?expected loc name args =
                   (fun p (a : Ast.expr) ->
                     let v = check_uniform env ~expected:p.pty a in
                     (match (p.pty, v.ty) with
-                     | Ptr (Sc (SUint8 | SInt8)), Str -> ()
+                     | Ptr (Sc (SUint8 | SInt8), Read_only), Str -> ()
                      | expected, actual -> require a.loc expected actual ("argument " ^ p.pname));
                     v)
                   ext.eparams args
@@ -613,9 +646,9 @@ and pass_argument env (p : param) (a : Ast.expr) =
     | Var _ | Global _ | Field _ | Elem _ -> ()
     | _ when p.pass = Borrow -> ()
     | _ -> fail a.loc "argument %s is borrowed: pass a location" p.pname);
-  v
+  read_only_view p.pty v
 
-(** A slow call into vector code: views and packs pass unmarked, and every
+(** A slow call into vector code: views and stacks pass unmarked, and every
     uniform scalar is marked <x> at the call, where it becomes a rack. *)
 and vector_call env loc name signature args =
   let uniform_arg s (a : Ast.expr) =
@@ -637,12 +670,12 @@ and vector_call env loc name signature args =
          if not w then fail a.loc "this run writes the argument: pass a writable view";
          require a.loc (View (e, true)) (View (f, true)) "a view argument"
      | View (e, false), View (f, _) -> require a.loc (View (e, false)) (View (f, false)) "a view argument"
-     | Pack (s, true), Pack (t, w) ->
-         if not w then fail a.loc "this run writes the pack: pass writable columns";
-         if s <> t then fail a.loc "a pack of %s is expected, got %s" s t
-     | Pack (s, false), Pack (t, _) -> if s <> t then fail a.loc "a pack of %s is expected, got %s" s t
+     | Stack (s, true), Stack (t, w) ->
+         if not w then fail a.loc "this run writes the stack: pass writable columns";
+         if s <> t then fail a.loc "a stack of %s is expected, got %s" s t
+     | Stack (s, false), Stack (t, _) -> if s <> t then fail a.loc "a stack of %s is expected, got %s" s t
      | expected, actual -> require a.loc expected actual "a memory argument");
-    Arg_memory v
+    Arg_memory (read_only_view expected v)
   in
   match signature with
   | Sig_run (params, stream) ->
@@ -660,7 +693,7 @@ and vector_call env loc name signature args =
               match p with
               | Run_uniform (_, s) -> uniform_arg s a
               | Run_view (_, s, w) -> memory_arg (View (Sc s, w)) a
-              | Run_pack (_, stack, w) -> memory_arg (Pack (stack, w)) a
+              | Run_stack (_, pack, w) -> memory_arg (Stack (pack, w)) a
               | Run_rack (pname, _) ->
                   fail a.loc "run %s takes rack %s, which slow code can't hold" name pname
             in
@@ -668,7 +701,7 @@ and vector_call env loc name signature args =
         | _ -> fail loc "argument count mismatch"
       in
       mk (Vector_call (name, go params args)) Void loc
-  | Sig_crunch (params, result) ->
+  | Sig_scratch (params, result) ->
       if List.length params <> List.length args then
         fail loc "%s takes %d arguments, got %d" name (List.length params) (List.length args);
       (match result with
@@ -735,7 +768,7 @@ and check_slow_stmt env (stmt : Ast.stmt) =
     (match ty with
      | Void -> fail loc "'%s' would hold nothing" name
      | Str -> fail loc "a string literal is passed to an extern, not stored"
-     | Pack _ -> fail loc "a pack is built at the run call it is passed to"
+     | Stack _ -> fail loc "a stack is built at the run call it is passed to"
      | _ -> ());
     let env = bind env loc name { bty = ty; bmut = mutable_; buniform = false; bconst = None } in
     (env, st (Decl (name, ty, Some v, mutable_)))
@@ -803,7 +836,7 @@ let slow_params ctx loc (params : Ast.param list) =
               | () -> (
                   match ty_of ctx inner with
                   | (Array _ | Record _) as ty -> { pname = name; pty = ty; pass = Borrow_mut }
-                  | ty -> fail loc "%s can't be mut: only views, packs, records and arrays are written through a parameter" (string_of_ty ty)))
+                  | ty -> fail loc "%s can't be mut: only views, stacks, records and arrays are written through a parameter" (string_of_ty ty)))
           | _ -> (
               match ty_of ctx t with
               | (Array _ | Record _) as ty -> { pname = name; pty = ty; pass = Borrow }
@@ -822,10 +855,10 @@ let run_params ctx loc (params : Ast.param list) =
           | ty -> fail loc "<%s> must be a scalar, got %s" name (string_of_ty ty))
       | PRack (name, Some t) -> (
           match ty_of ctx t with
-          | Pack (stack, w) -> Run_pack (name, stack, w)
+          | Stack (pack, w) -> Run_stack (name, pack, w)
           | View (Sc s, w) -> Run_view (name, s, w)
           | Rack s -> Run_rack (name, s)
-          | ty -> fail loc "a run takes packs, views of scalars, racks and <uniform> scalars, not %s" (string_of_ty ty))
+          | ty -> fail loc "a run takes stacks, views of scalars, racks and <uniform> scalars, not %s" (string_of_ty ty))
       | _ -> fail loc "run parameters are typed")
     params
 
@@ -847,8 +880,8 @@ let constant_value ctx (e : expr) =
 (** Names a statement's normalisation has bound so far (see [bound] below). *)
 let bound_names : binding SM.t ref = ref SM.empty
 
-(** The traversal a run statement sits in: chunk name, stack, domain. *)
-type traversal_scope = { chunk : string; chunk_stack : stack; domain : scalar; outer : traversal_scope option }
+(** The traversal a run statement sits in: chunk name, pack, domain. *)
+type traversal_scope = { chunk : string; chunk_pack : pack; domain : scalar; outer : traversal_scope option }
 
 type run_env = { env : env; scope : traversal_scope option; emit : rstmt list ref }
 
@@ -869,8 +902,8 @@ let ty_of_types loc = function
         (string_of_ty (Sc stored)) (string_of_ty (Rack domain))
   | t -> fail loc "%s is not a rack value" (Types.show_concise t)
 
-(** Type a pure rack expression with the crunch checker, so a rack operation
-    means the same in a run as in a crunch. *)
+(** Type a pure rack expression with the scratch checker, so a rack operation
+    means the same in a run as in a scratch. *)
 let infer_pure renv (e : Ast.expr) =
   let tc = Typecheck.copy_env renv.env.ctx.tc in
   SM.iter
@@ -960,7 +993,7 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
         | Rack _ | Mask _ -> e
         | Rack_array _ -> fail loc "rack array %s is used one element at a time: %s[<k>]" name name
         | View _ -> fail loc "%s is memory: load a rack with %s[<index>]" name name
-        | Pack _ -> fail loc "%s is a pack: use a traversal over it" name
+        | Stack _ -> fail loc "%s is a stack: use a traversal over it" name
         | Sc _ -> fail loc "uniform scalar %s is written <%s>" name name
         | ty -> fail loc "%s holds %s, which is not a rack" name (string_of_ty ty))
   | EScalarVar name -> (
@@ -1040,8 +1073,8 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
 and chunk_column renv loc chunk field widened =
   match renv.scope with
   | Some scope when scope.chunk = chunk -> (
-      match List.assoc_opt field scope.chunk_stack.sfields with
-      | None -> fail loc "stack %s has no column '%s'" scope.chunk_stack.sname field
+      match List.assoc_opt field scope.chunk_pack.pack_fields with
+      | None -> fail loc "pack %s has no column '%s'" scope.chunk_pack.pack_name field
       | Some stored ->
           let element =
             if bits stored = bits scope.domain then (
@@ -1231,9 +1264,9 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
           | ty -> fail loc "%s holds %s and can't be stored to" base (string_of_ty ty))
       | EField ({ v = EVar output; _ }, field) -> (
           match ((lookup renv.env loc output).bty, renv.scope) with
-          | Pack (stack, true), Some scope ->
-              let stack = Hashtbl.find renv.env.ctx.stacks stack in
-              let element = match List.assoc_opt field stack.sfields with Some e -> e | None -> fail loc "stack %s has no column %s" stack.sname field in
+          | Stack (pack, true), Some scope ->
+              let pack = Hashtbl.find renv.env.ctx.packs pack in
+              let element = match List.assoc_opt field pack.pack_fields with Some e -> e | None -> fail loc "pack %s has no column %s" pack.pack_name field in
               if bits element <> bits scope.domain then
                 fail loc "output column %s must have the traversal domain's lane width" field;
               let renv, pure, ty = rack_value renv value in
@@ -1242,7 +1275,7 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
               emit renv loc (R_pure (name, ty, pure, false));
               emit renv loc (R_output (output, field, name));
               renv
-          | Pack (_, false), _ -> fail loc "pack %s is read-only: declare it mut pack" output
+          | Stack (_, false), _ -> fail loc "stack %s is read-only: declare it mut stack" output
           | _ -> fail loc "%s.%s is stored only inside a traversal over the same records" output field)
       | _ -> fail loc "vector code stores to view[<index>], rack array elements and output columns")
   | SExpr ({ v = ESlow _; _ } as value) ->
@@ -1301,9 +1334,9 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
       emit renv loc (R_if (c, a, b));
       renv
   | SOver o -> (
-      match (lookup renv.env loc o.over_pack).bty with
-      | Pack (stack_name, _) ->
-          let stack = Hashtbl.find renv.env.ctx.stacks stack_name in
+      match (lookup renv.env loc o.over_stack).bty with
+      | Stack (pack_name, _) ->
+          let pack = Hashtbl.find renv.env.ctx.packs pack_name in
           let domain = scalar_of_prim o.over_domain in
           (* A nested traversal's lanes are its outer traversal's, so their
              tails combine into one prefix mask. *)
@@ -1317,8 +1350,8 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
            | Sc (SInt | SInt64) -> ()
            | ty -> fail o.over_count.loc "Over loop count must be scalar int/int64, got %s" (string_of_ty ty));
           let inner =
-            { renv with scope = Some { chunk = o.over_chunk; chunk_stack = stack; domain; outer = renv.scope };
-              env = bind renv.env loc o.over_chunk { bty = Pack (stack_name, false); bmut = false; buniform = false; bconst = None } }
+            { renv with scope = Some { chunk = o.over_chunk; chunk_pack = pack; domain; outer = renv.scope };
+              env = bind renv.env loc o.over_chunk { bty = Stack (pack_name, false); bmut = false; buniform = false; bconst = None } }
           in
           let _, body = check_run_block inner o.over_body ~yield_last:true in
           (* Its stores would be bounded by both traversals at once: it
@@ -1327,9 +1360,9 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
             let rec stores stmts = List.exists (fun s -> match s.r with R_yield _ | R_output _ | R_store _ -> true | R_for (_, _, _, _, b) | R_block b -> stores b | R_if (_, a, b) -> stores a || stores b | R_traverse t -> stores t.t_body | _ -> false) stmts in
             if stores body then
               fail loc "a nested traversal can't yield or store: accumulate into a location and store it in the outer traversal");
-          emit renv loc (R_traverse { t_pack = o.over_pack; t_stack = stack_name; t_domain = domain; t_count = count; t_body = body });
+          emit renv loc (R_traverse { t_stack = o.over_stack; t_pack = pack_name; t_domain = domain; t_count = count; t_body = body });
           renv
-      | ty -> fail loc "Expected pack type, got %s" (string_of_ty ty))
+      | ty -> fail loc "Expected stack type, got %s" (string_of_ty ty))
   | SWhile _ -> fail loc "vector code loops are counted: for <i: i32> from <a> up to <b>"
   | SBreak | SContinue -> fail loc "vector loops run every iteration; there is no break"
   | SReturn _ -> fail loc "a run ends after its last statement"
@@ -1350,7 +1383,7 @@ let check_run_body env params stream body loc =
   let env =
     List.fold_left
       (fun env -> function
-        | Run_pack (name, stack, w) -> bind env loc name { bty = Pack (stack, w); bmut = false; buniform = false; bconst = None }
+        | Run_stack (name, pack, w) -> bind env loc name { bty = Stack (pack, w); bmut = false; buniform = false; bconst = None }
         | Run_view (name, s, w) -> bind env loc name { bty = View (Sc s, w); bmut = false; buniform = false; bconst = None }
         | Run_uniform (name, s) -> bind env loc name { bty = Sc s; bmut = false; buniform = true; bconst = None }
         | Run_rack (name, s) -> bind env loc name { bty = Rack s; bmut = false; buniform = false; bconst = None })
@@ -1380,31 +1413,40 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
   let tc = Typecheck.check_program program in
   let ctx =
     {
-      records = Hashtbl.create 16; stacks = Hashtbl.create 16; slows = Hashtbl.create 32;
+      records = Hashtbl.create 16; packs = Hashtbl.create 16; slows = Hashtbl.create 32;
       externs = Hashtbl.create 32; vectors = Hashtbl.create 32; globals = Hashtbl.create 16;
       consts = Hashtbl.create 16; tc; base_dir; block_functions = ref [];
     }
   in
   let defs = List.concat_map (fun (m : Ast.module_) -> m.mod_defs) program in
-  (* Names first: records and stacks may refer to each other in any order. *)
+  let record_declaration (d : Ast.def) = match d.v with
+    | DPack (name, fields) -> Some (name, Rake_struct, fields)
+    | DRecord (name, header, fields) ->
+        Some (name, (match header with None -> Rake_struct | Some path -> C_struct path), fields)
+    | DUnion (name, header, fields) -> Some (name, C_union header, fields)
+    | _ -> None
+  in
+  (* Names first: records and packs may refer to each other in any order. *)
   List.iter
     (fun (d : Ast.def) ->
-      match d.v with
-      | DRecord (name, header, _) ->
+      match record_declaration d, d.v with
+      | Some (name, layout, fields), definition ->
           if Hashtbl.mem ctx.records name then fail d.loc "record %s is declared twice" name;
-          Hashtbl.replace ctx.records name { rname = name; rheader = header; rfields = []; rloc = d.loc }
-      | DStack (name, fields) ->
-          let fields =
-            List.map (fun (f : Ast.field) -> match f.field_type.v with TScalar p -> (f.field_name, scalar_of_prim p) | _ -> fail d.loc "stack columns are scalars") fields
-          in
-          Hashtbl.replace ctx.stacks name { sname = name; sfields = fields }
-      | _ -> ())
+          Hashtbl.replace ctx.records name { rname = name; rlayout = layout; rfields = []; rloc = d.loc };
+          (match definition with
+           | DPack _ ->
+               let fields = List.map (fun (f : Ast.field) -> match f.field_type.v with
+                 | TScalar p -> (f.field_name, scalar_of_prim p)
+                 | _ -> fail d.loc "a pack's fields store scalar elements") fields in
+               Hashtbl.replace ctx.packs name { pack_name = name; pack_fields = fields }
+           | _ -> ())
+      | None, _ -> ())
     defs;
   let records =
     List.filter_map
       (fun (d : Ast.def) ->
-        match d.v with
-        | DRecord (name, header, fields) ->
+        match record_declaration d with
+        | Some (name, layout, fields) ->
             let rfields =
               List.map
                 (fun (f : Ast.field) ->
@@ -1418,10 +1460,10 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
             let names = List.map fst rfields in
             if List.length (List.sort_uniq compare names) <> List.length names then
               fail d.loc "record %s repeats a field" name;
-            let record = { rname = name; rheader = header; rfields; rloc = d.loc } in
+            let record = { rname = name; rlayout = layout; rfields; rloc = d.loc } in
             Hashtbl.replace ctx.records name record;
             Some record
-        | _ -> None)
+        | None -> None)
       defs
   in
   (* Records in an order where each follows the records its fields hold. *)
@@ -1462,7 +1504,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
           embeds := (name, contents) :: !embeds
       | DSlow (name, params, result, _) ->
           let result = match result with Some t -> ty_of ctx t | None -> Void in
-          (match result with Array _ -> fail d.loc "a slow function returns arrays through a mut parameter" | View _ | Pack _ | Rack _ | Mask _ | Rack_array _ -> fail d.loc "%s can't be returned by slow code" (string_of_ty result) | _ -> ());
+          (match result with Array _ -> fail d.loc "a slow function returns arrays through a mut parameter" | View _ | Stack _ | Rack _ | Mask _ | Rack_array _ -> fail d.loc "%s can't be returned by slow code" (string_of_ty result) | _ -> ());
           let params = slow_params ctx d.loc params in
           if name = "main" && (entry_parameters params = None || result <> Sc SInt) then
             fail d.loc "main is slow main() -> i32 or slow main(argc: i32, argv: ptr ptr u8) -> i32";
@@ -1485,7 +1527,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
       | DRun (name, params, result, _) ->
           let stream = Option.map (fun (t : Ast.typ) -> match ty_of ctx t with Sc s -> s | ty -> fail t.loc "a stream run stores scalars, got %s" (string_of_ty ty)) result.result_type in
           Hashtbl.replace ctx.vectors name (Sig_run (run_params ctx d.loc params, stream))
-      | DCrunch (name, params, result, _) | DRake (name, params, result, _, _, _, _) -> (
+      | DScratch (name, params, result, _) | DRake (name, params, result, _, _, _, _) -> (
           try
             let params =
               List.map
@@ -1496,7 +1538,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
                 params
             in
             let result = match result.result_type with Some t -> ty_of ctx t | None -> Rack SFloat in
-            Hashtbl.replace ctx.vectors name (Sig_crunch (params, result))
+            Hashtbl.replace ctx.vectors name (Sig_scratch (params, result))
           with Exit -> ())
       | _ -> ())
     defs;
@@ -1552,13 +1594,13 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
                 let env = { top_env with mode = Vector_mode; return_allowed = false } in
                 let body = check_run_body env params stream body d.loc in
                 Some { run_name = name; run_params = params; run_stream = stream; run_body = body; run_loc = d.loc }
-            | Sig_crunch _ -> None)
+            | Sig_scratch _ -> None)
         | _ -> None)
       defs
   in
   {
     source = program;
-    stacks = Hashtbl.fold (fun _ s acc -> s :: acc) ctx.stacks [] |> List.sort compare;
+    packs = Hashtbl.fold (fun _ s acc -> s :: acc) ctx.packs [] |> List.sort compare;
     records;
     externs = List.rev !externs;
     states = List.rev !states;
@@ -1566,7 +1608,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     consts = List.rev !consts;
     slows = slows @ List.rev !(ctx.block_functions);
     runs;
-    vector_defs = List.filter (fun (d : Ast.def) -> match d.v with DCrunch _ | DRake _ -> true | _ -> false) defs;
+    vector_defs = List.filter (fun (d : Ast.def) -> match d.v with DScratch _ | DRake _ -> true | _ -> false) defs;
   }
 
 let check ?base_dir program =

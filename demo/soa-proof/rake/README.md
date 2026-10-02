@@ -11,7 +11,7 @@ the source does not name SSE, AVX2, or AVX-512 vector types.
   two columnar fields, accepts a runtime count and scalar `dt`, and traverses
   the pack in target-native chunks. Runs compile for `wasm-simd128` only, so
   on x86 this harness only type-checks it.
-- `advance_rack.rk` is the same arithmetic body as a straight-line `crunch`.
+- `advance_rack.rk` is the same arithmetic body as a straight-line `scratch`.
   The current AVX2 backend emits an object for it and verifies that its rack
   operations stay in YMM registers without calls, spills, stack use, or scalar
   lane arithmetic. Its named `displacement` is a transparent fused alias: the

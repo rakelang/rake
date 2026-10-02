@@ -47,14 +47,17 @@ type compound =
 [@@deriving show]
 
 (** Type expressions *)
+type pointer_access = Read_write | Read_only
+[@@deriving show]
+
 type typ = typ_kind node
 and typ_kind =
   | TRack of prim                      (** float rack *)
   | TCompoundRack of compound          (** vec3 rack *)
   | TScalar of prim                    (** scalar float (uniform) *)
   | TCompoundScalar of compound        (** scalar vec3 *)
-  | TStack of ident                    (** Particle stack *)
-  | TPack of ident                     (** Particle pack *)
+  | TPack of ident                    (** Particle pack *)
+  | TStack of ident                     (** Particle stack *)
   | TSingle of ident                   (** Config single *)
   | TMask                              (** boolean rack (tine result) *)
   | TFun of typ list * typ             (** function type *)
@@ -62,7 +65,7 @@ and typ_kind =
   | TUnit                              (** () *)
   | TArray of int * typ                (** [N]T: N elements in memory, or N racks in registers *)
   | TView of typ                       (** []T: a borrowed run of elements with a runtime count *)
-  | TPtr of typ                        (** ptr T: a C pointer, for extern interoperation *)
+  | TPtr of typ * pointer_access       (** ptr T or ptr const T: a C pointer with pointee access *)
   | TMut of typ                        (** mut T: a parameter the callee may write *)
   | TNamed of ident                    (** a record *)
 [@@deriving show]
@@ -130,6 +133,7 @@ and expr_kind =
   (* Records *)
   | EField of expr * ident             (** p.pos *)
   | ERecord of ident * field_init list (** Point { x := a, y := b } *)
+  | EStack of ident * field_init list  (** stack Point { x: xs, y: ys }: borrowed SoA columns *)
   | EWith of expr * field_init list    (** { p with x := a } *)
 
   (* Lane operations *)
@@ -279,7 +283,7 @@ and stmt_kind =
   | SAssign of ident * expr            (** x <- e (mutates existing location) *)
   | SFused of fused_binding            (** | x <| e (verified inlineable SSA) *)
   | SExpr of expr                      (** expression statement *)
-  | SOver of over_loop                 (** for chunk in pack using f32s up to <count> *)
+  | SOver of over_loop                 (** for chunk in stack using f32s up to <count> *)
   | SUniform of binding                (** let <name: T> = e: a uniform scalar in vector code *)
   | SStore of expr * expr              (** place <- e, for a field, element or rack location *)
   | SReturn of expr option             (** return, return e *)
@@ -290,20 +294,20 @@ and stmt_kind =
   | SWhile of expr * stmt list
   | SLoop of counted_loop              (** for i from a up to b, repeat <i: i32> from <a> up to <b> *)
 
-(** Pack traversal: iterate over storage in target-native rack chunks.
-    for chunk in pack using f32s up to <count>:
+(** Stack traversal: iterate over storage in target-native rack chunks.
+    for chunk in stack using f32s up to <count>:
       yield expression
 
     Expands to:
       for i = 0 to ceil(count / lanes):
-        chunk = load_stack(pack, i * lanes)
+        chunk = load_pack(stack, i * lanes)
         body (with tail masking on last iteration)
 *)
 and over_loop = {
-  over_pack: ident;                    (** pack variable to iterate *)
+  over_stack: ident;                    (** stack variable to iterate *)
   over_domain: prim;                   (** physical rack type fixing logical lanes *)
   over_count: expr;                    (** element count expression *)
-  over_chunk: ident;                   (** binding for each stack chunk *)
+  over_chunk: ident;                   (** binding for each pack chunk *)
   over_body: stmt list;                (** body executed per chunk *)
 }
 
@@ -322,7 +326,7 @@ and counted_loop = {
 
 [@@deriving show]
 
-(** Field in stack/single definitions *)
+(** Field in pack/single definitions *)
 type field = {
   field_name: ident;
   field_type: typ;
@@ -333,13 +337,13 @@ type field = {
 type def = def_kind node
 and def_kind =
   (* Type definitions *)
-  | DStack of ident * field list       (** stack Particle { ... } *)
+  | DPack of ident * field list       (** pack Particle { ... } *)
   | DSingle of ident * field list      (** single Config { ... } *)
   | DType of ident * typ               (** type alias *)
 
   (* Function definitions *)
-  | DCrunch of ident * param list * result_spec * stmt list
-      (** crunch name(parameters) -> type: body return expression *)
+  | DScratch of ident * param list * result_spec * stmt list
+      (** scratch name(parameters) -> type: body return expression *)
   | DRake of ident * param list * result_spec * stmt list * tine list * through list * sweep
       (** rake name params -> result: setup tines through* sweep *)
   | DRun of ident * param list * result_spec * stmt list
@@ -348,6 +352,8 @@ and def_kind =
   (* The slow tier *)
   | DRecord of ident * string option * field list
       (** record Name { ... }, or record Name from "header.h" { ... } naming a C struct *)
+  | DUnion of ident * string * field list
+      (** union Name from "header.h" { ... }: C-owned overlapping storage *)
   | DSlow of ident * param list * typ option * stmt list
   | DExtern of ident * param list * typ option * string
       (** extern slow name(params) -> T from "header.h" *)

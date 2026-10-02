@@ -1,5 +1,5 @@
 (* The compiler accepts nested block comments (* at every source level. *) *)
-crunch absolute(values: f32s) -> f32s:
+scratch absolute(values: f32s) -> f32s:
   let result = abs(values)
   (* A nested comment (* between statements *) remains layout-neutral. *)
   result (* Comments can also follow an expression. *)

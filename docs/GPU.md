@@ -11,7 +11,8 @@ temporary values in registers where the profile requires it, and make memory
 and synchronisation costs explicit. Hardware schedules warps. Rake will
 control the algorithm's lane mapping and check the resulting execution structure.
 
-<figure class="diagram">
+<figure class="diagram diagram-gpu-rack">
+<div class="diagram-scroll" tabindex="0" role="region" aria-label="GPU rack diagram, scroll horizontally on a narrow screen">
 <svg viewBox="0 0 680 264" role="img" aria-labelledby="gpu-rack-title gpu-rack-description">
 <title id="gpu-rack-title">A GPU rack spans a warp</title>
 <desc id="gpu-rack-description">A column maps to 32 thread lanes. Each lane calculates its own value. A mask disables selected lanes. Hardware schedules the warp, while Rake defines and verifies the lane mapping.</desc>
@@ -35,6 +36,7 @@ control the algorithm's lane mapping and check the resulting execution structure
 <text class="diagram-instruction" x="340" y="196">The operation runs in each participating lane.</text>
 <text class="diagram-label" x="18" y="249">Rake checks the mapping. Hardware schedules the warp.</text>
 </svg>
+</div>
 <figcaption>One rack spans a warp. Grey lanes illustrate a programmer-selected mask, not a compiler fallback.</figcaption>
 </figure>
 

@@ -14,7 +14,7 @@ indentation. Indentation uses spaces, and a tab in indentation is an error.
 
 Lines inside parentheses, brackets or data braces continue the line they
 started on, so a long parameter list can be spread over several lines. A
-multiline stack or record body is indented. A `slow { ... }` body restores
+multiline pack or record body is indented. A `slow { ... }` body restores
 statement layout, even inside a call: its statements are indented, and its
 closing brace returns to the opening line's indentation. Empty braces need
 no body. On one line, a slow block separates statements with semicolons.
@@ -27,15 +27,18 @@ a block comment, and block comments nest.
 
 An identifier starts with a lowercase letter or an underscore and continues
 with letters, digits and underscores. A name that starts with an uppercase
-letter is a type name, used for stacks and records, such as `Samples`. A lone
+letter is a type name, used for packs and records, such as `Samples`.
+Records and header-backed unions may also retain lowercase C typedef
+identifiers. Primitive type spellings such as `i32` may appear as member
+identifiers after a field type, in a literal or after `.`. A lone
 `_` is the default arm of a sweep, not an identifier. These words are reserved and can't be used as identifiers:
 
 ```text
-and bool bools break by const continue crunch else embed extern f32 f32s f64
+and bool bools break by const continue scratch else embed extern f32 f32s f64
 f64s false fma for from i16 i16s i32 i32s i64 i64s i8 i8s if in into lanes
 let mask mut not or pack ptr rake record repeat return rotate_left
 rotate_right run shift_left shift_right shuffle slow stack state sweep then
-through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked up using
+through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked union up using
 means while yield
 ```
 
@@ -75,7 +78,7 @@ A file holds one or more definitions:
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
-crunch scale(values: f32s, <factor: f32>) -> f32s:
+scratch scale(values: f32s, <factor: f32>) -> f32s:
   values * <factor>
 
 rake safe_root(values: f32s) -> f32s:
@@ -91,33 +94,35 @@ rake safe_root(values: f32s) -> f32s:
 
 | Definition | Meaning | Defined in |
 | --- | --- | --- |
-| `crunch name(parameters) -> T:` | straight-line rack computation | [Fused bindings](04_fused_bindings.md) |
+| `scratch name(parameters) -> T:` | straight-line rack computation | [Fused bindings](04_fused_bindings.md) |
 | `rake name(parameters) -> T:` | rack computation with named lane masks | [Tines, through and sweeps](03_tines_and_through.md) |
 | `run name(parameters) -> T:` | vector code over memory | [Packs and runs](02_packs_and_run.md) |
-| `stack Name { T: field, field; }` | the columns of structure-of-arrays storage | [Packs and runs](02_packs_and_run.md) |
+| `pack Name { T: field, field; }` | one record, also defining the fields of its columnar stack | [Packs, stacks and runs](02_packs_and_run.md) |
 | `slow name(parameters) -> T:` | scalar code | [The slow tier](08_slow_tier.md) |
 | `extern slow name(parameters) -> T from "file.h"` | a C function | [The slow tier](08_slow_tier.md) |
-| `record Name { T: field; }` | a record of fields | [The slow tier](08_slow_tier.md) |
+| `record Name { T: field; }` | a general scalar record | [The slow tier](08_slow_tier.md) |
+| `union Name from "file.h" { T: field; }` | a header-backed C union | [The slow tier](08_slow_tier.md#c-unions) |
 | `state name: T := value`, `state name: T` | module state | [The slow tier](08_slow_tier.md) |
 | `embed name from "file"` | a file's bytes | [The slow tier](08_slow_tier.md) |
 | `const name: T = value` | a compile-time constant | [The slow tier](08_slow_tier.md) |
 
-A stack or record groups its fields by type, with the type first:
-`f32: position, velocity;` gives two `f32` columns. A stack column is a
+A pack or record groups its fields by type, with the type first:
+`f32: position, velocity;` gives two `f32` fields. A stack column is a
 scalar type, and a record field can be any type. A C struct is declared as
-`record Name from "file.h" { ... }`.
+`record Name from "file.h" { ... }`. A header-backed union uses the same field
+groups, and its literal initialises exactly one field.
 
 ## Parameters and results
 
 Parameters are written `name: type` and separated by commas. A uniform scalar
-parameter is written `<name: type>`. A result type follows `->`. A crunch's
+parameter is written `<name: type>`. A result type follows `->`. A scratch's
 last expression supplies its result. A rake ends with its sweep. A run declared
 `-> f32` yields racks from a traversal and writes their lanes to an `f32`
 output stream, and a run without a result type writes through its `mut`
 parameters instead. A slow function without a result type returns nothing.
-`return` is reserved for leaving a slow function, not for a crunch.
+`return` is reserved for leaving a slow function, not for a scratch.
 
-A crunch, rake or run may call crunches and rakes. The call is inlined, so
+A scratch, rake or run may call scratches and rakes. The call is inlined, so
 calls nest at most 32 deep and recursion is rejected.
 
 ## Types
@@ -127,18 +132,18 @@ calls nest at most 32 deep and recursion is rejected.
 | `f32` `f64` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `bool` | a scalar |
 | `f32s` `u8s` `i16s` `i32s` `u32s` `i64s` `u64s` | a rack: one vector value of lanes of that element |
 | `mask` | a lane mask |
-| `pack Name`, `mut pack Name` | the columns of a stack, read or written |
+| `stack Name`, `mut stack Name` | the columns of a stack, read or written |
+| `Name`, `pack Name` | one pack record |
 | `[]T`, `mut []T` | a view: elements with a runtime count |
 | `[N]T` | an array of `N` elements, or of `N` racks when `T` is a rack |
-| `ptr T` | a C pointer |
+| `ptr T`, `ptr const T` | a C pointer with writable or read-only pointed-to storage |
 | `Name` | a record |
 | `mut T` | a parameter the callee writes |
 
 `f32s` racks work on every production profile. The integer racks `u8s`,
 `i16s`, `i32s`, `u32s`, `i64s` and `u64s` are implemented for `wasm-simd128`
 only. The types `i8s`, `u16s`, `f64s` and `bools` parse but have no
-implementation yet, and neither does `stack Name` as a type: a stack is a
-column layout, used through `pack Name`.
+implementation yet.
 
 ## Statements
 
@@ -156,10 +161,10 @@ column layout, used through `pack Name`.
 | `while c:` | a loop in slow code |
 | `for i from a up to b:`, `for i from a up to b by s:` | a counted loop, written `for <i: T> from <a> up to <b>:` in vector code |
 | `repeat <i: T> from <0> up to <4>:` | a vector loop with constant bounds, unrolled when it is small |
-| `for chunk in p using f32s up to <n>:` | a traversal of a pack |
+| `for chunk in p using f32s up to <n>:` | a traversal of a stack |
 | `break`, `continue` | inside a slow loop |
 | `slow { statements; value }` | a scoped scalar escape in a run or slow function, optionally producing a scalar |
-| `e` | a crunch's final result, or a call evaluated for its effect |
+| `e` | a scratch's final result, or a call evaluated for its effect |
 
 A name is bound once in its scope and can't shadow an enclosing name. A mutable location
 changes with `<-`. [Control flow](05_control_flow.md) defines the
@@ -219,7 +224,8 @@ does.
 
 Other primary forms are calls `f(a, b)`, conversions `i32(x)` (checked),
 `wrap(u8, x)` (the low bits) and `bitcast(u32, x)` (the same bits), record
-literals `Name { field: e }`, and array literals `[a, b, c]` and `[e; n]`.
+literals `Name { field: e }`, stack constructors `stack Name { field: column }`,
+and array literals `[a, b, c]` and `[e; n]`.
 
 Rack operations use function-call syntax rather than operators:
 
@@ -250,6 +256,6 @@ them and says which feature is missing.
 `<|`, `=>`, `->`, `<-`, `:=`, `<=`, `>=` and `!=` are single tokens. `<-1.0>`
 is a uniform literal, not `<-` followed by `1.0>`, because a mark around a
 literal is read as one token. Parentheses group and hold parameter lists and
-arguments, braces hold stack and record bodies and record literals, and
+arguments, braces hold pack and record bodies, aggregate literals, and
 brackets hold indices, array types and literals, and shuffle lane lists.
 `;` ends a field group, and `:` introduces a type or a body.

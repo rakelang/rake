@@ -24,6 +24,7 @@ run "AArch64 NEON semantic differential runtime" bash test/neon_backend_test.sh
 run "whole-program differential under wasmtime" bash test/program_test.sh
 run "wasm32 run boundary and C interop" bash test/abi_test.sh
 run "native program semantics and C ABI" bash test/native_program_test.sh
+run "native stream semantics, tail memory and bounded C comparison" bash demo/safe-root/run.sh
 run "compiler/Tree-sitter parser differential" bash test/parser_differential.sh
 run "website" bash tools/check_website.sh
 

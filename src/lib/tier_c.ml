@@ -1,12 +1,12 @@
 (** One C translation unit for WebAssembly and native programs.
 
-    Native crunches and rakes are opaque Rake-selected assembly, checked in
-    the final object. Slow callers use scalar f32 C boundaries. Native runs
-    remain unavailable. WebAssembly kernels keep their verified emission
-    ({!Wasm_simd128_c}).
-    A run becomes an external, never-inlined C function whose body is Rake's
+    Native scratches and rakes are opaque Rake-selected assembly, checked in
+    the final object. Slow callers use scalar f32 C boundaries. Native AVX2
+    stream traversals embed complete selected loops. WebAssembly kernels
+    keep their verified emission ({!Wasm_simd128_c}).
+    A WebAssembly run becomes an external, never-inlined C function whose body is Rake's
     loops, loads and stores; its pure rack expressions become always-inline
-    functions lowered through the crunch pipeline, so each rack operation is
+    functions lowered through the scratch pipeline, so each rack operation is
     one selected instruction wherever it is written. Slow code becomes plain
     C: records, arrays and views as structs, module state and embedded data
     as statics, and integer arithmetic, conversions and indexing checked by
@@ -27,6 +27,11 @@ open Tier_ir
 type addressing = Barrier | Plain
 
 type execution_target = WebAssembly | Native_program of Target.profile
+
+type native_selection = {
+  registers : Native_backend.allocated option;
+  traversals : Native_traversal.compiled option;
+}
 
 exception Emission_error of Ast.loc * string
 
@@ -97,7 +102,7 @@ let slow_symbol u name =
           @ List.map (fun e -> function_name e.ename) u.program.externs
           @ List.map (fun r -> function_name r.run_name) u.program.runs
           @ List.filter_map (fun (d : Ast.def) -> match d.v with
-              | DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> Some (function_name n)
+              | DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> Some (function_name n)
               | _ -> None) u.program.vector_defs in
         let rec choose candidate =
           if List.mem candidate occupied then choose (candidate ^ "_") else candidate in
@@ -111,14 +116,14 @@ let helper u name text =
 
 let record_c u name =
   match List.find_opt (fun r -> r.rname = name) u.program.records with
-  | Some { rheader = Some _; _ } -> name
+  | Some { rlayout = (C_struct _ | C_union _); _ } -> name
   | _ -> "rake_" ^ name
 
 let rec tag = function
   | Sc s -> scalar_tag s
   | Array (n, t) -> Printf.sprintf "a%d_%s" n (tag t)
-  | View (t, _) -> "v_" ^ tag t
-  | Ptr t -> "p_" ^ tag t
+  | View (t, writable) -> (if writable then "v_" else "cv_") ^ tag t
+  | Ptr (t, access) -> (if access = Read_only then "cp_" else "p_") ^ tag t
   | Function_pointer (args, result) ->
       let part ty = let text = tag ty in Printf.sprintf "%d_%s" (String.length text) text in
       "fn_" ^ String.concat "_" (List.map part args) ^ "_ret_" ^ part result
@@ -137,14 +142,14 @@ let rec ctype u ty =
         Hashtbl.replace u.defined name ();
         Buffer.add_string u.types (Printf.sprintf "typedef struct { %s e[%d]; } %s;\n" element n name));
       name
-  | View (t, _) ->
-      let name = "rake_view_" ^ tag t in
+  | View (t, writable) ->
+      let name = "rake_" ^ tag ty in
       if not (Hashtbl.mem u.defined name) then (
-        let element = ctype u t in
+        let pointer = ctype u (Ptr (t, if writable then Read_write else Read_only)) in
         Hashtbl.replace u.defined name ();
-        Buffer.add_string u.types (Printf.sprintf "typedef struct { %s *data; int32_t count; } %s;\n" element name));
+        Buffer.add_string u.types (Printf.sprintf "typedef struct { %s data; int32_t count; } %s;\n" pointer name));
       name
-  | Ptr t -> ctype u t ^ " *"
+  | Ptr (t, access) -> ctype u t ^ (if access = Read_only then " const *" else " *")
   | Function_pointer (args, result) ->
       let name = "rake_" ^ tag ty in
       if not (Hashtbl.mem u.defined name) then (
@@ -154,8 +159,8 @@ let rec ctype u ty =
           (if args = [] then "void" else String.concat ", " args)));
       name
   | Record name -> record_c u name
-  | Pack (stack, false) -> pack_type u stack false
-  | Pack (stack, true) -> pack_type u stack true
+  | Stack (stack, false) -> stack_type u stack false
+  | Stack (stack, true) -> stack_type u stack true
   | Rack _ | Mask _ -> "v128_t"
   | Str -> "const char *"
   | Void -> "void"
@@ -166,7 +171,7 @@ and complete u ty =
   match ty with
   | Record name -> (
       match List.find_opt (fun r -> r.rname = name) u.program.records with
-      | Some ({ rheader = None; _ } as r) ->
+      | Some ({ rlayout = Rake_struct; _ } as r) ->
           let cname = record_c u name in
           if not (Hashtbl.mem u.defined cname) then (
             let fields = List.map (fun (f, t) -> Printf.sprintf "    %s %s;\n" (ctype u t) f) r.rfields in
@@ -177,13 +182,13 @@ and complete u ty =
   | Array (_, t) -> ignore (ctype u ty); complete u t
   | _ -> ()
 
-and pack_type u stack writable =
-  let name = Printf.sprintf "struct rake_%spack_%s_v1" (if writable then "mut_" else "") stack in
+and stack_type u stack writable =
+  let name = Printf.sprintf "struct rake_%sstack_%s_v1" (if writable then "mut_" else "") stack in
   if not (Hashtbl.mem u.defined name) then (
     Hashtbl.replace u.defined name ();
-    let s = find_stack u.program stack in
+    let s = find_pack u.program stack in
     let fields =
-      List.map (fun (f, e) -> Printf.sprintf "    %s%s *%s;\n" (if writable then "" else "const ") (scalar_c e) f) s.sfields
+      List.map (fun (f, e) -> Printf.sprintf "    %s%s *%s;\n" (if writable then "" else "const ") (scalar_c e) f) s.pack_fields
     in
     Buffer.add_string u.types (Printf.sprintf "%s {\n%s};\n" name (String.concat "" fields)));
   name
@@ -207,9 +212,12 @@ let checked u op s =
 
 let index_helper u =
   helper u "rake_index"
-    "static inline int32_t rake_index(int64_t i, int64_t n)\n{\n    if (i < 0 || i >= n) __builtin_trap();\n    return (int32_t)i;\n}\n\
-     static inline int32_t rake_span(int64_t i, int64_t lanes, int64_t n)\n{\n    if (i < 0 || i + lanes > n) __builtin_trap();\n    return (int32_t)i;\n}\n";
+    "static inline int32_t rake_index(int64_t i, int64_t n)\n{\n    if (i < 0 || i >= n) __builtin_trap();\n    return (int32_t)i;\n}\n";
   "rake_index"
+
+let span_helper u =
+  helper u "rake_span"
+    "static inline int32_t rake_span(int64_t i, int64_t lanes, int64_t n)\n{\n    if (i < 0 || i > n || lanes > n - i) __builtin_trap();\n    return (int32_t)i;\n}\n"
 
 let float_extreme u op s =
   let t = scalar_c s and k = scalar_tag s in
@@ -371,7 +379,7 @@ let rec expr u scope (e : expr) : string =
         List.map
           (fun (a : expr) ->
             match a.ty with
-            | Ptr _ -> "(void *)(" ^ go a ^ ")"
+            | Ptr (_, access) -> (if access = Read_only then "(const void *)(" else "(void *)(") ^ go a ^ ")"
             | Str -> "(const void *)" ^ go a
             | _ -> go a)
           args
@@ -395,7 +403,7 @@ let rec expr u scope (e : expr) : string =
         (if result = Void then "" else "return ") (String.concat ", " arguments));
       Printf.sprintf "%s(%s)" name (String.concat ", " (go callee :: List.map go args))
   | Vector_call (name, args) ->
-      (* A crunch with uniform parameters, reached through its boundary. *)
+      (* A scratch with uniform parameters, reached through its boundary. *)
       let args = List.map (function Arg_uniform a -> go a | Arg_memory a -> go a) args in
       Printf.sprintf "rake_boundary_%s(%s)" name (String.concat ", " args)
   | Field (base, field) -> (
@@ -407,33 +415,58 @@ let rec expr u scope (e : expr) : string =
   | Cond (c, a, b) -> Printf.sprintf "(%s ? %s : %s)" (go c) (go a) (go b)
   | Record_lit (name, fields) ->
       complete u e.ty;
-      Printf.sprintf "((%s){ %s })" (record_c u name)
-        (String.concat ", " (List.map (fun (f, v) -> Printf.sprintf ".%s = %s" f (go v)) fields))
+      let record = List.find (fun r -> r.rname = name) u.program.records in
+      if record.rlayout <> Rake_struct && List.exists (fun (_, v) -> match v.ty with Array _ -> true | _ -> false) fields then (
+        (* Header-backed arrays use C's raw storage, not Rake's array wrapper.
+           Evaluate each initializer once, then copy its array bytes. *)
+        let destination = "rake_aggregate_value" in
+        let assignments = List.map (fun (field, value) ->
+          match value.ty with
+          | Array _ ->
+              if raw_array u value then
+                Printf.sprintf "    __builtin_memcpy(%s.%s, %s, sizeof(%s.%s));\n" destination field (go value) destination field
+              else
+                let source = "rake_field_value_" ^ field in
+                Printf.sprintf "    const %s %s = %s;\n    __builtin_memcpy(%s.%s, %s.e, sizeof(%s.%s));\n"
+                  (ctype u value.ty) source (go value) destination field source destination field
+          | _ -> Printf.sprintf "    %s.%s = %s;\n" destination field (go value)) fields in
+        Printf.sprintf "({ %s %s = {0};\n%s    %s; })" (record_c u name) destination (String.concat "" assignments) destination
+      ) else
+        Printf.sprintf "((%s){ %s })" (record_c u name)
+          (String.concat ", " (List.map (fun (f, v) -> Printf.sprintf ".%s = %s" f (go v)) fields))
   | Array_lit items when List.for_all is_zero items -> Printf.sprintf "((%s){0})" (ctype u e.ty)
   | Array_lit items ->
       Printf.sprintf "((%s){ { %s } })" (ctype u e.ty) (String.concat ", " (List.map go items))
-  | Pack_lit _ -> fail e.loc "a pack is built at the run call it is passed to"
+  | Stack_lit _ -> fail e.loc "a pack is built at the run call it is passed to"
   | Addr place -> "(&" ^ addressable u scope place ^ ")"
   | Length a -> (
       match a.ty with
       | Array (n, _) -> string_of_int n
       | _ -> Printf.sprintf "(%s).count" (go a))
   | Slice (base, start, count) ->
-      let element = match e.ty with View (t, _) -> t | _ -> assert false in
+      let element, writable = match e.ty with View (t, writable) -> t, writable | _ -> assert false in
       let view = ctype u e.ty in
+      let pointer = ctype u (Ptr (element, if writable then Read_write else Read_only)) in
       let data, n =
         match base.ty with
         | Array (n, _) when raw_array u base -> (Printf.sprintf "(%s)" (go base), string_of_int n)
         | Array (n, _) -> (Printf.sprintf "(%s).e" (addressable u scope base), string_of_int n)
         | _ -> let v = go base in (Printf.sprintf "(%s).data" v, Printf.sprintf "(%s).count" v)
       in
-      let name = "rake_slice_" ^ tag element in
+      let name = "rake_slice_" ^ tag e.ty in
       helper u name
         (Printf.sprintf
-           "static inline %s %s(%s *data, int32_t n, int32_t start, int32_t count)\n{\n    if (start < 0 || count < 0 || start > n - count) __builtin_trap();\n    return (%s){ data + start, count };\n}\n"
-           view name (ctype u element) view);
-      Printf.sprintf "%s((%s *)%s, %s, %s, %s)" name (ctype u element) data n (go start) (go count)
+           "static inline %s %s(%s data, int32_t n, int32_t start, int32_t count)\n{\n    if (start < 0 || count < 0 || start > n - count) __builtin_trap();\n    return (%s){ data + start, count };\n}\n"
+           view name pointer view);
+      Printf.sprintf "%s((%s)%s, %s, %s, %s)" name pointer data n (go start) (go count)
   | Ptr_view (p, count) -> Printf.sprintf "((%s){ %s, %s })" (ctype u e.ty) (go p) (go count)
+  | Read_only_view value ->
+      let name = "rake_read_only_" ^ tag value.ty in
+      let target = ctype u e.ty and source = ctype u value.ty in
+      helper u name (Printf.sprintf
+        "static inline %s %s(%s value) { return (%s){ value.data, value.count }; }\n"
+        target name source target);
+      Printf.sprintf "%s(%s)" name (go value)
   | Is_null p -> Printf.sprintf "(%s == 0)" (go p)
   | Block (body, value) ->
       let inner = { scope with places = Hashtbl.copy scope.places } in
@@ -446,8 +479,8 @@ and raw_array u (e : expr) =
   match e.k with
   | Field (base, _) -> (
       match base.ty with
-      | Record name | Ptr (Record name) -> (
-          match List.find_opt (fun r -> r.rname = name) u.program.records with Some { rheader = Some _; _ } -> true | _ -> false)
+      | Record name | Ptr (Record name, _) -> (
+          match List.find_opt (fun r -> r.rname = name) u.program.records with Some { rlayout = (C_struct _ | C_union _); _ } -> true | _ -> false)
       | _ -> false)
   | _ -> false
 
@@ -476,14 +509,15 @@ and element u scope (e : expr) base index checked =
           let idx = if checked then Printf.sprintf "%s(%s, %d)" (index_helper u) i n else i in
           if raw_array u base then Printf.sprintf "(%s)[%s]" (expr u scope base) idx
           else Printf.sprintf "(%s).e[%s]" (expr u scope base) idx
-      | View _ ->
+      | View (_, writable) ->
           let v = expr u scope base in
           if checked then (
             ignore (index_helper u);
-            let name = "rake_at_" ^ tag e.ty in
+            let name = "rake_at_" ^ tag base.ty in
+            let pointer = ctype u (Ptr (e.ty, if writable then Read_write else Read_only)) in
             helper u name
-              (Printf.sprintf "static inline %s *%s(%s view, int64_t i)\n{\n    return view.data + rake_index(i, view.count);\n}\n"
-                 (ctype u e.ty) name (ctype u base.ty));
+              (Printf.sprintf "static inline %s %s(%s view, int64_t i)\n{\n    return view.data + rake_index(i, view.count);\n}\n"
+                 pointer name (ctype u base.ty));
             Printf.sprintf "(*%s(%s, %s))" name v i)
           else Printf.sprintf "(%s).data[%s]" v i
       | Ptr _ -> Printf.sprintf "(%s)[%s]" (expr u scope base) i
@@ -648,7 +682,7 @@ and run_call u scope pad loc name args =
   let fresh = let n = ref 0 in fun () -> incr n; Printf.sprintf "rake_arg%d" !n in
   let params = run.run_params in
   let counts =
-    (* Pack parameters and the uniform parameter their traversal counts. *)
+    (* Stack parameters and the uniform parameter their traversal counts. *)
     let rec outputs stmts =
       List.concat_map (fun s -> match s.r with R_output (o, _, _) -> [ o ] | R_for (_, _, _, _, b) | R_block b -> outputs b | R_if (_, a, b) -> outputs a @ outputs b | _ -> []) stmts
     in
@@ -659,7 +693,7 @@ and run_call u scope pad loc name args =
           | R_traverse t -> (
               (* The traversed pack, and every pack it stores columns of, hold the count. *)
               match t.t_count.k with
-              | Var count -> ((t.t_pack, count) :: List.map (fun o -> (o, count)) (outputs t.t_body)) @ traversals t.t_body
+              | Var count -> ((t.t_stack, count) :: List.map (fun o -> (o, count)) (outputs t.t_body)) @ traversals t.t_body
               | _ -> traversals t.t_body)
           | R_for (_, _, _, _, b) | R_block b -> traversals b
           | R_if (_, a, b) -> traversals a @ traversals b
@@ -681,9 +715,9 @@ and run_call u scope pad loc name args =
           let t = fresh () in
           Buffer.add_string temps (Printf.sprintf "%s    const %s %s = %s;\n" pad (ctype u v.ty) t (go v));
           passed := Printf.sprintf "%s.count" t :: Printf.sprintf "%s.data" t :: !passed
-      | Some (Run_pack (pname, stack, w)), Arg_memory { k = Pack_lit (_, columns); _ } ->
+      | Some (Run_stack (pname, stack, w)), Arg_memory { k = Stack_lit (_, columns); _ } ->
           let t = fresh () in
-          let s = find_stack u.program stack in
+          let s = find_pack u.program stack in
           let column_temps =
             List.map
               (fun (field, _) ->
@@ -691,10 +725,10 @@ and run_call u scope pad loc name args =
                 let c = fresh () in
                 Buffer.add_string temps (Printf.sprintf "%s    const %s %s = %s;\n" pad (ctype u v.ty) c (go v));
                 (field, c))
-              s.sfields
+              s.pack_fields
           in
           Buffer.add_string temps
-            (Printf.sprintf "%s    const %s %s = { %s };\n" pad (pack_type u stack w) t
+            (Printf.sprintf "%s    const %s %s = { %s };\n" pad (stack_type u stack w) t
                (String.concat ", " (List.map (fun (_, c) -> c ^ ".data") column_temps)));
           List.iter
             (fun (pack, count) -> if pack = pname then checks := (count, List.map snd column_temps) :: !checks)
@@ -721,12 +755,16 @@ and run_call u scope pad loc name args =
 
 (* ─── Runs ──────────────────────────────────────────────────────────── *)
 
-let rec initializer_ u (e : expr) =
+let rec initializer_ ?(raw_array_field = false) u (e : expr) =
   match e.k with
-  | Record_lit (_, fields) ->
-      "{ " ^ String.concat ", " (List.map (fun (f, v) -> Printf.sprintf ".%s = %s" f (initializer_ u v)) fields) ^ " }"
+  | Record_lit (name, fields) ->
+      let record = List.find (fun r -> r.rname = name) u.program.records in
+      "{ " ^ String.concat ", " (List.map (fun (f, v) ->
+        Printf.sprintf ".%s = %s" f (initializer_ ~raw_array_field:(record.rlayout <> Rake_struct) u v)) fields) ^ " }"
   | Array_lit items when List.for_all is_zero items -> "{0}"
-  | Array_lit items -> "{ { " ^ String.concat ", " (List.map (initializer_ u) items) ^ " } }"
+  | Array_lit items ->
+      let values = String.concat ", " (List.map (initializer_ ~raw_array_field u) items) in
+      if raw_array_field then "{ " ^ values ^ " }" else "{ { " ^ values ^ " } }"
   | _ -> expr u (new_scope ()) e
 
 let ir_element = function
@@ -796,7 +834,7 @@ type run_state = {
 }
 
 (** A pure rack expression as an always-inline function of its free names,
-    lowered by the crunch pipeline; returns the call. *)
+    lowered by the scratch pipeline; returns the call. *)
 let pure_call u rs loc name ty (pure : Ast.expr) fused =
   let free = free_names pure in
   let cname n = local n in
@@ -874,7 +912,7 @@ let rec mentions name (e : expr) =
   match e.k with
   | Var n -> n = name
   | Int _ | Float _ | Bool _ | Str_lit _ | Global _ | Function_ref _ -> false
-  | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> mentions name a
+  | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Read_only_view a | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> mentions name a
   | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) -> mentions name a || mentions name b
   | Cond (a, b, c) | Slice (a, b, c) -> mentions name a || mentions name b || mentions name c
   | _ -> true
@@ -1015,7 +1053,7 @@ and address u rs scope view index element lane_count checked =
       let v = view_c view in
       let i = expr u scope index in
       if checked then (
-        ignore (index_helper u);
+        span_helper u;
         Printf.sprintf "(uint8_t *)%s.data + (int32_t)%d * rake_span(%s, %d, %s.count)" v (bytes element) i lane_count v)
       else Printf.sprintf "(uint8_t *)%s.data + (int32_t)%d * (int32_t)(%s)" v (bytes element) i
 
@@ -1193,7 +1231,7 @@ and loop u rs scope indent var from upto by body =
     | Elem _ when Node_table.mem exempt (Obj.repr e) -> false
     | Var n -> n = name
     | Int _ | Float _ | Bool _ | Str_lit _ | Global _ | Function_ref _ -> false
-    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> expr_uses name a
+    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Read_only_view a | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> expr_uses name a
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) -> expr_uses name a || expr_uses name b
     | Cond (a, b, c) | Slice (a, b, c) -> expr_uses name a || expr_uses name b || expr_uses name c
     | _ -> true
@@ -1260,7 +1298,7 @@ and loop u rs scope indent var from upto by body =
       List.iter
         (fun (index, lane_count, checked) ->
           if checked then (
-            ignore (index_helper u);
+            span_helper u;
             let at name = uniform (substitute [] var name index) in
             line (indent + 4)
               (Printf.sprintf "if (%s < %s_end) { (void)rake_span(%s, %d, %s.count); (void)rake_span(%s, %d, %s.count); }"
@@ -1308,7 +1346,7 @@ and loop u rs scope indent var from upto by body =
 and traverse u rs scope indent t =
   let pad = String.make indent ' ' in
   u.loops <- u.loops + 1;
-  let stack = find_stack u.program t.t_stack in
+  let stack = find_pack u.program t.t_pack in
   let l = lanes t.t_domain in
   let count = expr u scope t.t_count in
   let rec assigned stmts =
@@ -1339,7 +1377,7 @@ and traverse u rs scope indent t =
       match s.r with
       | R_chunk_load (name, element, field, stored) ->
           record_type rs name (Rack element);
-          let column = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer t.t_pack field) (bytes stored) in
+          let column = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer t.t_stack field) (bytes stored) in
           let widen raw =
             if stored = element then raw
             else
@@ -1372,7 +1410,7 @@ and traverse u rs scope indent t =
           if tail then (tail_helpers u (bytes t.t_domain * l) (bytes t.t_domain); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes t.t_domain * l) (bytes t.t_domain) out (local value))
           else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (local value)
       | R_output (output, field, value) ->
-          let element = List.assoc field (find_stack u.program (match Hashtbl.find_opt rs.types output with Some (Pack (s, _)) -> s | _ -> t.t_stack)).sfields in
+          let element = List.assoc field (find_pack u.program (match Hashtbl.find_opt rs.types output with Some (Stack (s, _)) -> s | _ -> t.t_pack)).pack_fields in
           let out = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer ~writable:true output field) (bytes element) in
           if tail then (tail_helpers u (bytes element * l) (bytes element); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes element * l) (bytes element) out (local value))
           else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (local value)
@@ -1455,9 +1493,9 @@ let run_function u (run : run) =
   let params = ref [] and entry = Buffer.create 128 in
   List.iter
     (function
-      | Run_pack (name, stack, w) ->
-          record_type rs name (Pack (stack, w));
-          params := Printf.sprintf "const %s *%s" (pack_type u stack w) (local name) :: !params
+      | Run_stack (name, stack, w) ->
+          record_type rs name (Stack (stack, w));
+          params := Printf.sprintf "const %s *%s" (stack_type u stack w) (local name) :: !params
       | Run_view (name, s, w) ->
           record_type rs name (View (Sc s, w));
           let view = ctype u (View (Sc s, w)) in
@@ -1488,7 +1526,7 @@ let rec approximate_size u = function
   | Array (n, t) -> n * approximate_size u t
   | Record name -> (
       match List.find_opt (fun r -> r.rname = name) u.program.records with
-      | Some { rheader = None; rfields; _ } -> List.fold_left (fun acc (_, t) -> acc + max 4 (approximate_size u t)) 0 rfields
+      | Some { rlayout = Rake_struct; rfields; _ } -> List.fold_left (fun acc (_, t) -> acc + max 4 (approximate_size u t)) 0 rfields
       | _ -> 0)
   | Ptr _ | Function_pointer _ -> (match u.execution_target with WebAssembly -> 4 | Native_program _ -> 8)
   | View _ -> (match u.execution_target with WebAssembly -> 8 | Native_program _ -> 16)
@@ -1545,13 +1583,13 @@ let slow_function u (f : slow_func) =
   let rec framed_expr (e : expr) =
     match e.k with
     | Block (body, value) -> framed_decls body @ Option.fold ~none:[] ~some:framed_expr value
-    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> framed_expr a
+    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Read_only_view a | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> framed_expr a
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> framed_expr a @ framed_expr b
     | Cond (a, b, c) | Slice (a, b, c) -> framed_expr a @ framed_expr b @ framed_expr c
     | Call (_, args) | Extern_call (_, args) | Math (_, args) | Array_lit args -> List.concat_map framed_expr args
     | Indirect_call (callee, args) -> List.concat_map framed_expr (callee :: args)
     | Vector_call (_, args) -> List.concat_map (function Arg_uniform e | Arg_memory e -> framed_expr e) args
-    | Record_lit (_, fields) | Pack_lit (_, fields) -> List.concat_map (fun (_, e) -> framed_expr e) fields
+    | Record_lit (_, fields) | Stack_lit (_, fields) -> List.concat_map (fun (_, e) -> framed_expr e) fields
     | _ -> []
   and framed_decls stmts =
     List.concat_map (fun s ->
@@ -1623,8 +1661,8 @@ int main(int argc, char **argv)
 |} (slow_symbol u f.fname)
   | _ -> ""
 
-(** The crunches and rakes, through their verified emission; and for each
-    crunch slow code calls, a never-inlined boundary function. *)
+(** The scratches and rakes, through their verified emission; and for each
+    scratch slow code calls, a never-inlined boundary function. *)
 let vector_definitions ~source u =
   match u.program.vector_defs with
   | [] -> ("", None)
@@ -1659,12 +1697,12 @@ let boundaries u =
     | Vector_call (name, args) ->
         if not (List.exists (fun r -> r.run_name = name) u.program.runs) then Hashtbl.replace called name ();
         List.iter (function Arg_uniform a | Arg_memory a -> walk_expr a) args
-    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> walk_expr a
+    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Read_only_view a | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> walk_expr a
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> walk_expr a; walk_expr b
     | Cond (a, b, c) | Slice (a, b, c) -> walk_expr a; walk_expr b; walk_expr c
     | Call (_, args) | Extern_call (_, args) | Math (_, args) | Array_lit args -> List.iter walk_expr args
     | Indirect_call (callee, args) -> List.iter walk_expr (callee :: args)
-    | Record_lit (_, fields) | Pack_lit (_, fields) -> List.iter (fun (_, v) -> walk_expr v) fields
+    | Record_lit (_, fields) | Stack_lit (_, fields) -> List.iter (fun (_, v) -> walk_expr v) fields
     | Block (body, value) -> List.iter walk body; Option.iter walk_expr value
     | _ -> ()
   and walk (s : stmt) =
@@ -1679,10 +1717,10 @@ let boundaries u =
   List.iter (fun f -> List.iter walk f.fbody) u.program.slows;
   Hashtbl.fold
     (fun name () acc ->
-      let def = List.find (fun (d : Ast.def) -> match d.v with DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) u.program.vector_defs in
+      let def = List.find (fun (d : Ast.def) -> match d.v with DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) u.program.vector_defs in
       let params, result =
         match def.v with
-        | DCrunch (_, params, result, _) | DRake (_, params, result, _, _, _, _) -> (params, result)
+        | DScratch (_, params, result, _) | DRake (_, params, result, _, _, _, _) -> (params, result)
         | _ -> assert false
       in
       let c_of (t : Ast.typ) =
@@ -1712,10 +1750,7 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
    | WebAssembly -> ()
    | Native_program profile ->
        if not (Target.is_x86 profile || profile = Target.Aarch64_neon) then
-         fail Ast.dummy_loc "native programs require an x86 or AArch64 profile";
-       (match program.runs with
-        | run :: _ -> fail run.run_loc "native runs and packs are work in progress; native programs may combine slow code and register kernels"
-        | [] -> ()));
+         fail Ast.dummy_loc "native programs require an x86 or AArch64 profile");
   let u =
     {
       program; execution_target; addressing; types = Buffer.create 1024; defined = Hashtbl.create 32; helpers = Buffer.create 1024;
@@ -1726,19 +1761,26 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
   let headers =
     List.sort_uniq compare
       (List.map (fun e -> e.eheader) program.externs
-      @ List.filter_map (fun r -> r.rheader) program.records)
+      @ List.filter_map (fun r -> match r.rlayout with Rake_struct -> None | C_struct path | C_union path -> Some path) program.records)
   in
   let forward =
-    List.filter_map (fun r -> match r.rheader with None -> Some (Printf.sprintf "typedef struct rake_%s rake_%s;\n" r.rname r.rname) | Some _ -> None) program.records
+    List.filter_map (fun r -> match r.rlayout with Rake_struct -> Some (Printf.sprintf "typedef struct rake_%s rake_%s;\n" r.rname r.rname) | C_struct _ | C_union _ -> None) program.records
   in
   List.iter (fun r -> complete u (Record r.rname)) program.records;
   (* Extern records: C owns their layout; the declared fields must have the declared sizes. *)
   let layout_checks =
     List.concat_map
       (fun r ->
-        match r.rheader with
-        | Some _ ->
-            List.filter_map
+        match r.rlayout with
+        | C_struct _ | C_union _ ->
+            let overlap_checks = match r.rlayout with
+              | C_union _ ->
+                  Printf.sprintf "_Static_assert(__builtin_classify_type(*(%s *)0) == 13, \"%s must be a C union\");\n" r.rname r.rname
+                  :: List.map (fun (field, _) ->
+                    Printf.sprintf "_Static_assert(__builtin_offsetof(%s, %s) == 0, \"%s.%s must overlap union storage\");\n" r.rname field r.rname field) r.rfields
+              | Rake_struct | C_struct _ -> []
+            in
+            overlap_checks @ List.filter_map
               (fun (field, ty) ->
                 match ty with
                 | Sc _ | Ptr _ | Function_pointer _ ->
@@ -1748,7 +1790,7 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
                     Some (Printf.sprintf "_Static_assert(sizeof(((%s *)0)->%s) == %d, \"%s.%s is declared %s in Rake\");\n" r.rname field (n * bytes s) r.rname field (string_of_ty ty))
                 | _ -> None)
               r.rfields
-        | None -> [])
+        | Rake_struct -> [])
       program.records
   in
   let globals = Buffer.create 256 in
@@ -1770,8 +1812,22 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
         (Printf.sprintf "static const uint8_t rake_embed_%s[%d] __attribute__((aligned(16))) =\n\"%s\";\n" name
            (max 1 (String.length contents)) (escape_bytes contents)))
     program.embeds;
-  let vectors, native_kernels = vector_definitions ~source u in
-  let runs = List.map (run_function u) program.runs in
+  let vectors, registers = vector_definitions ~source u in
+  let runs, traversals = match execution_target, program.runs with
+    | WebAssembly, _ -> List.map (run_function u) program.runs, None
+    | Native_program _, [] -> [], None
+    | Native_program profile, _ ->
+        let selected = try Native_traversal.compile ~profile program with
+          Native_traversal.Unsupported (loc, message) -> fail loc "%s" message in
+        let prototypes = List.map (fun run ->
+          match run.run_params with
+          | [ Run_stack (input, schema, writable); Run_uniform (count, s) ] ->
+              Printf.sprintf "extern void %s(const %s *%s, %s %s, float *rake_out);\n"
+                run.run_name (stack_type u schema writable) (local input) (scalar_c s) (local count)
+          | _ -> assert false) program.runs in
+        prototypes @ [ "__asm__(\"" ^ escape_bytes selected.assembly ^ "\");\n" ], Some selected in
+  let native_kernels = if registers = None && traversals = None then None
+    else Some { registers; traversals } in
   let slows = List.map (slow_function u) program.slows in
   let prototypes = List.filter_map (fun (signature, _) -> if String.starts_with ~prefix:"int main" signature then None else Some (signature ^ ";\n")) slows in
   let entry = process_entry u in

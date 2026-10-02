@@ -5,7 +5,7 @@ test/parser/malformed/dynamic_shuffle_index.rk.invalid	malformed	shuffle indices
 test/parser/malformed/empty_shuffle.rk.invalid	malformed	shuffle index list must be non-empty
 test/parser/malformed/lane_insertion_missing_value.rk.invalid	malformed	lane insertion requires a scalar value
 test/parser/malformed/fused_missing_operator.rk.invalid	malformed	fused binding requires <|
-test/parser/malformed/legacy_bare_crunch.rk.invalid	malformed	legacy bare parameters and named results are not source syntax
+test/parser/malformed/legacy_bare_scratch.rk.invalid	malformed	legacy bare parameters and named results are not source syntax
 test/parser/malformed/over_missing_pipe.rk.invalid	malformed	for traversal requires in
 test/parser/malformed/parenthesized_run_list.rk.invalid	malformed	parameters require comma separators
 test/parser/malformed/scalar_literal_parameter.rk.invalid	malformed	scalar parameter marker contains an identifier

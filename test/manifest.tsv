@@ -15,7 +15,7 @@ test/native/fused_contract.rk	native	x86-avx2	8	native-object	pass	-
 test/native/fused_fma.rk	native	x86-avx2	8	native-object	pass	-
 test/native/identity.rk	native	x86-avx2	8	native-object	pass	-
 test/native/add.rk	native	x86-avx2	8	native-object	pass	-
-test/native/simple_crunch.rk	native	x86-avx2	8	native-object	pass	-
+test/native/simple_scratch.rk	native	x86-avx2	8	native-object	pass	-
 test/native/select.rk	native	x86-avx2	8	native-object	pass	-
 test/native/scalar_parameter.rk	native	x86-avx2	8	native-object	pass	-
 test/native/predication.rk	native	x86-avx2	8	native-object	pass	-
@@ -43,7 +43,7 @@ examples/future/lane_insertion.rk	future	-	-	design	excluded	Uses unavailable la
 examples/future/reductions.rk	future	-	-	design	excluded	Uses unavailable reductions and scans
 examples/future/rearrangements.rk	future	-	-	design	excluded	Uses unavailable static lane rearrangements
 test/program/math.rk	program	wasm-simd128	4	program	differential	-
-test/program/pack_and_dense.rk	program	wasm-simd128	4	program	differential	-
+test/program/stack_and_dense.rk	program	wasm-simd128	4	program	differential	-
 test/program/trap/add_overflow.rk	trap	wasm-simd128	4	program	trap	-
 test/program/trap/convert_range.rk	trap	wasm-simd128	4	program	trap	-
 test/program/trap/divide_zero.rk	trap	wasm-simd128	4	program	trap	-
@@ -57,6 +57,8 @@ test/program/network.rk	program	wasm-simd128	4	program	differential	-
 test/program/speck.rk	program	wasm-simd128	4	program	differential	-
 test/abi/runs.rk	abi	wasm-simd128	4	program	boundary	-
 test/program/slow_tier.rk	program	wasm-simd128	4	program	differential	-
+test/program/const_pointers.rk	program	wasm-simd128	4	program	differential	-
+test/program/trap/addr_bounds.rk	trap	wasm-simd128	4	program	trap	-
 test/program/vector_tier.rk	program	wasm-simd128	4	program	differential	-
 test/program/frames.rk	program	wasm-simd128	4	program	differential	-
 test/abi/interop.rk	abi	wasm-simd128	4	program	c-interop	-
@@ -78,3 +80,4 @@ test/program/slow_blocks.rk	program	wasm-simd128	4	program	differential	-
 test/program/callbacks.rk	program	wasm-simd128	4	program	differential	-
 test/program/trap/null_callback.rk	trap	wasm-simd128	4	program	trap	-
 test/abi/callbacks.rk	abi	wasm-simd128	4	program	c-interop	-
+test/abi/unions.rk	abi	wasm-simd128	4	program	c-interop	-

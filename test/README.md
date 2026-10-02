@@ -45,6 +45,8 @@ verification as runtime agreement.
 
 `test/native_program_test.sh` compares scalar semantics, including
 recursive frames, integer bit casts and checked traps, with the interpreter.
+The pointer fixture checks storage identity after scalar and whole-aggregate
+assignment, including read-only pointers and borrowed views.
 An independent C harness calls imported and exported functions through
 native pointers and a padded struct with a by-value result. The same checks
 run on x86 profiles and AArch64 under QEMU. These establish slow C lowering
@@ -56,9 +58,16 @@ memory runs remain work in progress.
 The callback fixture uses independently authored C prototypes and padded
 structs. C retains and invokes Rake function pointers, and Rake invokes
 pointers returned by C, including callbacks with opaque contexts, mixed
-integer/float arguments and void results. It runs on every physical profile
-and WebAssembly. The local callback fixture also agrees with the interpreter,
-including the trap on an indirect call through a null pointer.
+integer/float arguments and void results. It also checks independently declared
+read-only pointers in callback arguments and C return values. These checks run
+on every physical profile and WebAssembly. The local callback fixture agrees
+with the interpreter, including the trap on an indirect call through a null pointer.
+
+The union fixture includes overlapping integer, floating-point, pointer,
+array and padded-struct members. Independent C calls check member access,
+storage identity, by-value returns, imported by-value arguments and callbacks.
+It runs on the four physical CPU profiles and WebAssembly. C union storage
+has an explicit interpreter diagnostic instead of a guessed layout.
 
 The argument fixture runs through actual process startup and compares its
 byte-level result with independent C and the interpreter. It covers no extra

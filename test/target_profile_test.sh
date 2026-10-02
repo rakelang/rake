@@ -78,7 +78,7 @@ done
 # Relaxed SIMD is opt-in: the default WebAssembly profile rejects it, and only
 # wasm-simd128-relaxed selects, emits and verifies it.
 cat > "${tmp}/relaxed.rk" <<'EOF'
-crunch muladd(a: f32s, b: f32s, c: f32s) -> f32s:
+scratch muladd(a: f32s, b: f32s, c: f32s) -> f32s:
   relaxed_madd(a, b, c)
 EOF
 if "${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/relaxed.c" "${tmp}/relaxed.rk" > "${tmp}/relaxed.out" 2>&1; then

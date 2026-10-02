@@ -1,6 +1,6 @@
-stack Pair {
+pack Pair {
   f32: left, right;
 }
 
-crunch add_pair(Pair as left right) -> f32s:
+scratch add_pair(Pair as left right) -> f32s:
   left + right

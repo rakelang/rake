@@ -22,12 +22,12 @@ integer racks, and `all` and `any` reject racks. `extract(x, lane)` and
 `bitmask(m)`, defined in [primitives, operations, and targets](01_primitives_operations_and_targets.md),
 also turn a rack into a scalar.
 
-A crunch can return a reduction's scalar. In a run, `let <x: T> = ...` binds
+A scratch can return a reduction's scalar. In a run, `let <x: T> = ...` binds
 one as a uniform, and arithmetic on reductions there is scalar work:
 
 <!-- rake-check: run 103 -->
 ```rake
-crunch top(values: f32s) -> f32:
+scratch top(values: f32s) -> f32:
   maximum(values)
 
 run prefix_sums(x: []f32, out: mut []f32):

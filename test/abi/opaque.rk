@@ -1,0 +1,15 @@
+record opaque_caller from "opaque.h" {}
+record opaque_trap from "opaque.h" {}
+
+extern slow run_opaque_callback(callback: slow(ptr opaque_caller, ptr ()) -> ptr opaque_trap, context: ptr ()) -> ptr opaque_trap from "opaque.h"
+extern slow trap_for_caller(caller: ptr opaque_caller) -> ptr opaque_trap from "opaque.h"
+
+state empty_context: ptr ()
+
+slow callback(caller: ptr opaque_caller, context: ptr ()) -> ptr opaque_trap:
+  if is_null(context):
+    return trap_for_caller(caller)
+  return bitcast(ptr opaque_trap, context)
+
+slow opaque_result() -> ptr opaque_trap:
+  return run_opaque_callback(addr(callback), empty_context)

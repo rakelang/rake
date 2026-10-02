@@ -7,11 +7,34 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Support opaque header-backed C typedefs through typed pointers, including
+  callback signatures. Reject by-value opaque objects and their construction.
+- Compile the AVX2 `f32` stream traversal subset as complete Rake-selected
+  assembly, with masked tails and exact final-function verification.
+
+- Rename `crunch` to `scratch`, without retaining the old keyword. `pack`
+  now defines one scalar record. `stack PackType` describes its columnar
+  collection, constructed as `stack PackType { field: column }`. Runs consume
+  those columns a rack at a time. The compiler, grammar, examples and tutorial
+  use the same hierarchy.
+
+- Header-backed C unions have overlapping storage, one-member literals,
+  field access, borrowed arguments and by-value C calls/results. Lowercase
+  C typedefs and primitive-spelled members retain their header identifiers.
+  The platform compiler supplies layout and ABI. Independent C checks cover
+  nested structs, arrays and callbacks on CPU profiles and WebAssembly.
+  Interpreted union storage and Rake-owned union layouts remain WIP.
+- Slow pointers distinguish writable `ptr T` from read-only `ptr const T`.
+  C declarations retain their pointee qualifiers, including callback
+  signatures. Address-taking, view borrowing and opaque pointer casts
+  preserve read-only access. The interpreter now retains location identity
+  through scalar and aggregate assignment, so pointers observe later writes.
+  Taking a checked element's address also checks bounds in the interpreter.
 - Slow code supports typed C function pointers, noncapturing callbacks and
   opaque `ptr ()` contexts. `addr(function)` forms a callback, and data
   pointers can be erased or restored through `bitcast(ptr T, pointer)`.
   Native and WebAssembly calls use the platform C ABI, with null indirect
-  calls trapping. Unions remain work in progress.
+  calls trapping.
 - A process entry may take `argc: i32, argv: ptr ptr u8`. Native C and WASI
   startup pass the count, zero-terminated byte strings and trailing null
   pointer through a compiler-owned typed adapter. The interpreter accepts
@@ -36,14 +59,14 @@ only when the compiler implements it and the tests cover it.
 
 ## 0.6.0-beta
 
-- SSE2 and AVX-512F compile float crunches and rakes to verified vector
+- SSE2 and AVX-512F compile float scratches and rakes to verified vector
   kernels alongside AVX2 and NEON. Rack widths are four, sixteen, eight and
   four binary32 lanes respectively. Native pack traversal and whole programs
   remain work in progress.
 - Native target detection selects AVX-512F, AVX2 with FMA, or SSE2 on x86.
   SSE2 rejects explicit single-rounded `fma` because that instruction is
   absent from its ISA. The AVX-512 profile requires AVX-512F only.
-- Crunches end with their result expression, without `return`. Tines use
+- Scratches end with their result expression, without `return`. Tines use
   `means` instead of `when`. These are breaking source-language changes.
 - The browser tutorial offers all five implemented vector profiles for
   kernel inspection. Execution and whole-program lessons use WebAssembly.
@@ -56,7 +79,7 @@ only when the compiler implements it and the tests cover it.
 ## 0.5.0-beta
 
 - Rakes end with `sweep:`, without `return`. This is the rake's result form.
-  `return` remains the result of a crunch and an exit from a slow function.
+  `return` remains the result of a scratch and an exit from a slow function.
   Compiler examples, Tree-sitter and the browser tutorial use the new form.
 - `slow { ... }` is a scoped scalar escape in runs and slow functions. It
   supports scalar loops, calls, state and memory views, nesting and a scalar
@@ -72,8 +95,8 @@ Changes since 0.3.0.
 ### Language and compiler
 
 - Named target profiles fix rack widths. `x86-avx2` and `aarch64-neon`
-  compile `f32s` crunches and rakes to assembly, and `wasm-simd128` compiles
-  crunches, rakes, runs and whole programs to C with one `wasm_simd128.h`
+  compile `f32s` scratches and rakes to assembly, and `wasm-simd128` compiles
+  scratches, rakes, runs and whole programs to C with one `wasm_simd128.h`
   intrinsic for each selected instruction.
 - `rakec --print-capabilities` reports each language feature's status, and
   each profile rejects what it can't compile with the source location and the
@@ -87,7 +110,7 @@ Changes since 0.3.0.
   single rounding. A fused stage may now introduce a constant or choose by a
   mask, and fused bindings inside a through block form regions of their own.
 - Pure instructions that nothing uses are removed before instruction
-  selection, so a crunch's `repeat` compiles on AVX2 and NEON.
+  selection, so a scratch's `repeat` compiles on AVX2 and NEON.
 - `wasm-simd128` adds:
   - integer racks, `u8s`, `i16s`, `i32s`, `u32s`, `i64s` and `u64s`, with
     wrapping arithmetic, comparisons, `min` and `max`, bitwise operations and
@@ -104,7 +127,7 @@ Changes since 0.3.0.
 - A uniform must be marked where it meets a rack: `values * <factor>`, not
   `values * factor`. The type checker reports the unmarked name.
 - `wrap` and `bitcast` are conversions only before a parenthesis, so they
-  remain usable as identifiers. A crunch, rake or run can't be named after a C
+  remain usable as identifiers. A scratch, rake or run can't be named after a C
   keyword, since each becomes a C function of its own name.
 - A rake's through block and its sweep compile to one select, since a select
   whose arm selects on the same mask takes that arm directly.
@@ -118,11 +141,11 @@ Changes since 0.3.0.
   by lane and never touch an element past the count. They have nested
   traversals, counted loops, `repeat` and uniform `if`, rack locations and
   arrays of them, checked and unchecked loads, stores and gathers, and
-  crunches and rakes inlined with their masks. Rake forms each loop's
+  scratches and rakes inlined with their masks. Rake forms each loop's
   addresses and checks bounds once before the loop. Runs have a published
   wasm32 C boundary.
 - A run's uniform arithmetic may use reductions, extractions, bitmasks and
-  crunch calls, each computed as a uniform of its own.
+  scratch calls, each computed as a uniform of its own.
 - Slow code on `wasm-simd128`: records, arrays, views, pointers, module
   state, embedded files, constants, control flow and calls to C, compiled
   with the runs into one C file with `int main(void)`. Aggregates over 256
@@ -143,7 +166,7 @@ Changes since 0.3.0.
 - `--verify-native` disassembles every object. On x86 and AArch64 it rejects
   calls, stack use, split or scalarised racks, instructions outside the
   profile's list and a wrong count of fused multiply-adds, and it accepts the
-  two-byte nop that pads an AVX2 function. On `wasm-simd128` a crunch may hold
+  two-byte nop that pads an AVX2 function. On `wasm-simd128` a scratch may hold
   only register instructions, including the scalar arithmetic clang makes of
   splat arithmetic, and a run only the vector instructions its source selects
   or their documented equivalents.

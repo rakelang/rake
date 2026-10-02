@@ -3,7 +3,7 @@
 This page describes how `rakec` turns source into machine code, and which
 stage checks each promise from [the goals](GOALS.md).
 
-## Crunches and rakes
+## Scratches and rakes
 
 ```text
 source
@@ -23,14 +23,14 @@ source
 
 The type checker accepts a program only when every construct it uses has a
 type rule and is available, and `rakec --print-capabilities` lists that
-status for each feature. Native lowering turns a crunch or rake into typed
-SSA, inlining the crunches and rakes it calls. The IR verifier checks that
+status for each feature. Native lowering turns a scratch or rake into typed
+SSA, inlining the scratches and rakes it calls. The IR verifier checks that
 every value is defined once and before its uses, that each operation has
 operands of the right types, that a fused region is contiguous and holds only
 pure rack or mask operations, that every block ends in exactly one
 terminator, and, on profiles with floating-point exceptions, that each
 exception-capable operation under a mask has replaced its inactive operands.
-`--emit-native-ir` prints the IR after optimisation. For the `advance` crunch
+`--emit-native-ir` prints the IR after optimisation. For the `advance` scratch
 of [fused bindings](spec/04_fused_bindings.md), on `x86-avx2`:
 
 ```text
@@ -59,11 +59,11 @@ the C on wasm, and the system assembler or clang only encodes it.
 source
   -> parser and type checker
   -> tier checker                  runs and slow code in tier IR; each pure rack
-                                   expression in a run goes through the crunch
+                                   expression in a run goes through the scratch
                                    pipeline above
   -> C emitter                     one C file with a C entry point
   -> clang for wasm32 with SIMD128
-  -> object verifier               crunches, rakes and runs in the object
+  -> object verifier               scratches, rakes and runs in the object
 ```
 
 The tier checker enforces the rules of [the slow tier](spec/08_slow_tier.md):
@@ -73,8 +73,8 @@ state. The C emitter lifts each such block to a never-inlined scalar helper,
 capturing scalar values and pointer/count pairs, never racks. It forms a
 run's addresses, writes its loops, tails and checks, and inlines its rack
 expressions, which native lowering and wasm selection compile as they compile
-a crunch. `rakec --interpret` runs `main` in Rake's executable semantics,
-evaluating rack expressions in the same reference semantics as crunches, and
+a scratch. `rakec --interpret` runs `main` in Rake's executable semantics,
+evaluating rack expressions in the same reference semantics as scratches, and
 `test/program_test.sh` compares it with the compiled program.
 
 The unreleased development compiler adds a native mixed destination for the
@@ -93,7 +93,8 @@ explicit slow code -> scalar C and C ABI declarations ────────�
                                                               register-kernel verifier
 ```
 
-This development path rejects native runs and packs. Slow callers can pass
+This development path supports the limited AVX2 stream traversal below.
+General native runs remain work in progress. Slow callers can pass
 uniform `f32` arguments and receive `f32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
 AMD64 or AAPCS64 C ABI. It cannot rewrite the opaque kernel assembly, which
@@ -145,6 +146,24 @@ work uses vector instructions wherever the selected profile implements the
 operation. A run may also contain the uniform address, loop and bounds work
 written in its source. It never replaces rack work with scalar lane loops.
 
+## Native traversal selection
+
+An AVX2 stream's loop, addresses, full-rack transfers and masked tail are
+selected by Rake. Its lane expression goes through the same SSA selector
+and no-spill allocator as a register kernel. The tail is lowered under its
+participation mask, so inactive operands cannot raise arithmetic exceptions.
+The complete stream is opaque assembly inside the native C unit. C supplies
+only slow orchestration and its ABI.
+
+The final traversal function's complete bytes must match a separately
+assembled selection. This includes its branches, address operands and
+embedded literals. Unresolved relocations fail verification, preventing
+unverified helpers or external constants from changing that graph. Guard
+pages and an independent C oracle check the memory and numerical semantics.
+This stage supports one to four `f32` read columns and an `f32` output.
+[Native AVX2 streams](spec/02_packs_and_run.md#native-avx2-streams) defines
+the accepted subset and caller obligations.
+
 ## Object verification
 
 `--verify-native` disassembles the object and checks each function against
@@ -154,7 +173,7 @@ its profile's list of instructions:
   whole register, no scalar arithmetic on rack lanes, cross-lane instructions
   only in reductions and scans, and exactly the fused multiply-adds that the
   compiler selected.
-- For a `wasm-simd128` crunch or rake: only locals, constants and register
+- For a `wasm-simd128` scratch or rake: only locals, constants and register
   instructions, with no calls, memory or branches.
 - For a `wasm-simd128` run: direct calls only to the helpers for its explicit
   slow blocks, verified by their object relocations, no C stack, only the vector
@@ -171,11 +190,10 @@ It owns register allocation and assembly on x86 and AArch64. For WebAssembly,
 clang encodes the selected virtual instructions and the runtime assigns
 physical registers. The system toolchain also owns object formats,
 relocations, linking and start-up. Debug information and exception unwinding
-aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile crunches
+aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile scratches
 and rakes only. The development compiler adds native mixed programs through
-the limited scalar C boundary above. Runs and packs still compile only on
-WebAssembly. The [planned x86-64 run
-boundary](spec/02_packs_and_run.md#planned-x86-64-boundary) is a design.
+the limited scalar C boundary above. General runs compile on WebAssembly;
+AVX2 implements the stream subset. Other native run profiles remain WIP.
 
 ## Planned GPU pipeline
 

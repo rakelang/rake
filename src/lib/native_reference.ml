@@ -100,7 +100,7 @@ let format_error { kind; loc } =
     | Unsupported_definition shape ->
         Printf.sprintf "unsupported semantic definition: %s" shape
     | Argument_count_mismatch { expected; actual } ->
-        Printf.sprintf "crunch expects %d arguments, got %d" expected actual
+        Printf.sprintf "scratch expects %d arguments, got %d" expected actual
   in
   Printf.sprintf "%s:%d:%d: %s" loc.file loc.line loc.col detail
 
@@ -396,10 +396,10 @@ let shuffle_racks loc racks indices =
 
 (* ─── Integer racks of every width, bit reinterpretation and literals ── *)
 
-(** The callable crunches and rakes, for inlined calls. *)
+(** The callable scratches and rakes, for inlined calls. *)
 let definitions : def list ref = ref []
 
-let eval_crunch_ref : (lanes:int -> def -> value list -> (value, error) result) ref =
+let eval_scratch_ref : (lanes:int -> def -> value list -> (value, error) result) ref =
   ref (fun ~lanes:_ (d : def) _ -> error d.loc (Unsupported_definition "inline call"))
 
 let eval_rake_ref : (lanes:int -> def -> value list -> (value, error) result) ref =
@@ -634,13 +634,13 @@ let rec eval_expr ~lanes env (expr : expr) =
             let all = Array.for_all Fun.id ms and any = Array.exists Fun.id ms in
             Ok (Int_scalar (Types.SBool, if (if operation = RAnd then all else any) then 1L else 0L))
         | value -> error expr.loc (Operand_kind_mismatch { operation = "mask reduction"; left = value_kind value; right = None }))
-    | ECall (name, arguments) when List.exists (fun (d : def) -> match d.v with DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions ->
-        let definition = List.find (fun (d : def) -> match d.v with DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions in
+    | ECall (name, arguments) when List.exists (fun (d : def) -> match d.v with DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions ->
+        let definition = List.find (fun (d : def) -> match d.v with DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions in
         let* values =
           List.fold_right (fun a acc -> let* rest = acc in let* v = eval_expr ~lanes env a in Ok (v :: rest)) arguments (Ok [])
         in
         (* A uniform passed to a rack parameter is broadcast at the call. *)
-        let parameters = match definition.v with DCrunch (_, ps, _, _) | DRake (_, ps, _, _, _, _, _) -> ps | _ -> [] in
+        let parameters = match definition.v with DScratch (_, ps, _, _) | DRake (_, ps, _, _, _, _, _) -> ps | _ -> [] in
         let values =
           List.map2
             (fun parameter value ->
@@ -656,7 +656,7 @@ let rec eval_expr ~lanes env (expr : expr) =
             parameters values
         in
         (match definition.v with
-         | DCrunch _ -> !eval_crunch_ref ~lanes definition values
+         | DScratch _ -> !eval_scratch_ref ~lanes definition values
          | _ -> !eval_rake_ref ~lanes definition values)
     | EFloat value -> Ok (splat lanes value)
     | EBool value -> Ok (Mask (Array.make lanes value))
@@ -1025,11 +1025,11 @@ let bind_parameter ~lanes env parameter argument loc =
            expected = Scalar;
            actual = value_kind argument;
          })
-  | PSpread _, _ -> error loc (Unsupported_definition "spread crunch parameter")
+  | PSpread _, _ -> error loc (Unsupported_definition "spread scratch parameter")
 
-let eval_crunch ~lanes definition arguments =
+let eval_scratch ~lanes definition arguments =
   match definition.v with
-  | DCrunch (_, parameters, result, body) ->
+  | DScratch (_, parameters, result, body) ->
       if List.length parameters <> List.length arguments then
         error definition.loc
           (Argument_count_mismatch {
@@ -1286,5 +1286,5 @@ let eval_rake ~lanes definition arguments =
   | kind -> error definition.loc (Unsupported_definition (Ast.show_def_kind kind))
 
 let () =
-  eval_crunch_ref := eval_crunch;
+  eval_scratch_ref := eval_scratch;
   eval_rake_ref := eval_rake

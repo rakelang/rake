@@ -6,10 +6,10 @@ record Point from "interop.h" {
   i32: x, y;
 }
 
-extern slow interop_sum(p: ptr i32, n: i32) -> i32 from "interop.h"
-extern slow interop_length(text: ptr u8) -> i32 from "interop.h"
+extern slow interop_sum(p: ptr const i32, n: i32) -> i32 from "interop.h"
+extern slow interop_length(text: ptr const u8) -> i32 from "interop.h"
 extern slow interop_point(p: ptr Point, x: i32, y: i32) from "interop.h"
-extern slow interop_bytes(p: ptr u8, n: i32) -> i32 from "interop.h"
+extern slow interop_bytes(p: ptr const u8, n: i32) -> i32 from "interop.h"
 extern slow interop_buffer() -> ptr i32 from "interop.h"
 
 embed blob from "interop.bin"

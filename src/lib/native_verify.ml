@@ -152,6 +152,84 @@ let decode_functions text =
     functions;
   functions
 
+(** An embedded native traversal has a compiler-selected control/memory
+    template as well as register instructions. Compare its complete ELF
+    function extent against the separately assembled selection, including
+    literal bytes. Require a relocation-free extent, so a helper or external
+    constant cannot silently change the verified instruction/data graph.
+    Pure register functions retain the independent instruction allow-lists. *)
+let fixed_x86_functions ~source ~functions ~expected object_bytes =
+  let malformed detail = invalid_arg detail in
+  let slice bytes offset count =
+    if offset < 0 || count < 0 || offset > String.length bytes - count then
+      malformed "truncated ELF extent";
+    String.sub bytes offset count in
+  let number bytes offset count =
+    ignore (slice bytes offset count);
+    let value = ref 0L in
+    for i = 0 to count - 1 do
+      value := Int64.logor !value (Int64.shift_left (Int64.of_int (Char.code bytes.[offset + i])) (i * 8))
+    done;
+    if !value < 0L || !value > Int64.of_int max_int then malformed "ELF extent exceeds host bounds";
+    Int64.to_int !value in
+  let extract bytes =
+    if slice bytes 0 6 <> "\x7fELF\x02\x01" || number bytes 16 2 <> 1 || number bytes 18 2 <> 62 then
+      malformed "requires a little-endian x86-64 relocatable ELF object";
+    let start = number bytes 40 8 and width = number bytes 58 2 and count = number bytes 60 2 in
+    if width <> 64 || count = 0 then malformed "unsupported ELF section table";
+    let section index =
+      if index < 0 || index >= count then malformed "invalid ELF section index";
+      start + index * width in
+    ignore (slice bytes start (width * count));
+    let field index offset n = number bytes (section index + offset) n in
+    let contents index = slice bytes (field index 24 8) (field index 32 8) in
+    let cstring strings offset =
+      if offset < 0 || offset >= String.length strings then malformed "invalid ELF symbol string";
+      let finish = try String.index_from strings offset '\000' with Not_found -> malformed "unterminated ELF symbol" in
+      String.sub strings offset (finish - offset) in
+    let answer = Hashtbl.create 8 in
+    for index = 0 to count - 1 do
+      if field index 4 4 = 2 then (
+        let symbols = contents index and strings = contents (field index 40 4) in
+        if field index 56 8 <> 24 || String.length symbols mod 24 <> 0 then malformed "invalid ELF symbol table";
+        for entry = 0 to String.length symbols / 24 - 1 do
+          let pos = entry * 24 in
+          let name = cstring strings (number symbols pos 4) in
+          if List.mem name functions then (
+            if Hashtbl.mem answer name then malformed "duplicate selected function symbol";
+            if Char.code symbols.[pos + 4] land 15 <> 2 then malformed "selected symbol is not a function";
+            let target = number symbols (pos + 6) 2 in
+            if field target 8 8 land 4 = 0 then malformed "selected function is not executable";
+            let offset = number symbols (pos + 8) 8 and size = number symbols (pos + 16) 8 in
+            if size = 0 then malformed "empty selected function extent";
+            let code = slice (contents target) offset size in
+            for relocation = 0 to count - 1 do
+              if List.mem (field relocation 4 4) [ 4; 9 ] && field relocation 44 4 = target then (
+                let entries = contents relocation and stride = field relocation 56 8 in
+                if stride < 8 || String.length entries mod stride <> 0 then malformed "invalid relocation table";
+                for slot = 0 to String.length entries / stride - 1 do
+                  let address = number entries (slot * stride) 8 in
+                  if address >= offset && address < offset + size then
+                    malformed "selected traversal contains an unresolved relocation"
+                done)
+            done;
+            Hashtbl.add answer name code)
+        done)
+    done;
+    answer in
+  try
+    let wanted = extract expected and actual = extract object_bytes in
+    let rec check = function
+      | [] -> Ok ()
+      | name :: rest ->
+          (match Hashtbl.find_opt wanted name, Hashtbl.find_opt actual name with
+          | Some a, Some b when a = b -> check rest
+          | Some _, Some _ -> error ~source ~function_name:name ~obligation:"exact traversal selection"
+              "final loop, memory, register or literal bytes differ from Rake's selection"
+          | _ -> error ~source ~function_name:name ~obligation:"selected traversal presence" "function extent is absent") in
+    check functions
+  with Invalid_argument detail -> error ~source ~obligation:"closed traversal artifact" detail
+
 let allowed_avx2 = function
   | "vbroadcastss" | "vxorps" | "vaddps" | "vsubps" | "vmulps"
   | "vdivps" | "vsqrtps" | "vfmadd213ps" | "vfmadd231ps" | "vcmpps"

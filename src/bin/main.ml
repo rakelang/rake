@@ -39,7 +39,7 @@ file with a C main entry point. External tools only assemble or compile Rake's t
 into an object file, which --verify-native then disassembles and checks.
 Native slow-only programs emit C and compile with the platform C compiler.
 Native programs may call register kernels through f32 C boundaries.
-Native runs and packs remain work in progress.
+Native AVX2 supports f32 stream traversals; general native runs remain WIP.
 
 |}
 
@@ -134,7 +134,7 @@ let is_whole_program (program : Rake.Ast.program) =
       List.exists
         (fun (d : Rake.Ast.def) ->
           match d.v with
-          | DSlow _ | DRun _ | DRecord _ | DState _ | DEmbed _ | DConst _ | DExtern _ -> true
+          | DSlow _ | DRun _ | DRecord _ | DUnion _ | DState _ | DEmbed _ | DConst _ | DExtern _ -> true
           | _ -> false)
         m.mod_defs)
     program
@@ -162,9 +162,9 @@ let whole_program_object filename c_source =
   | Error error -> fail ("native object assembly failed: " ^ Rake.Wasm_simd128_toolchain.format_error error)
 
 let verify_whole_program (checked : Rake.Tier_ir.program) facts object_bytes =
-  let crunches =
+  let scratches =
     List.filter_map
-      (fun (d : Rake.Ast.def) -> match d.v with DCrunch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> Some name | _ -> None)
+      (fun (d : Rake.Ast.def) -> match d.v with DScratch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> Some name | _ -> None)
       checked.vector_defs
   in
   let runs =
@@ -173,7 +173,7 @@ let verify_whole_program (checked : Rake.Tier_ir.program) facts object_bytes =
         (name, { Rake.Wasm_simd128_toolchain.loops; lane_operations; selected; slow_calls }) :: acc)
       facts []
   in
-  match Rake.Wasm_simd128_toolchain.verify_program ~crunches ~runs object_bytes with
+  match Rake.Wasm_simd128_toolchain.verify_program ~scratches ~runs object_bytes with
   | Ok () -> ()
   | Error error -> fail ("native object verification failed: " ^ Rake.Wasm_simd128_toolchain.format_error error)
 
@@ -330,8 +330,16 @@ let () =
                          ~source:filename ~include_dir:(Filename.dirname filename) c_source with
                   | Ok bytes -> bytes
                   | Error error -> fail (Rake.Native_toolchain.format_error error) in
-                Option.iter (fun allocated -> ignore (report_backend
-                  (Rake.Native_backend.verify_allocated_object ~source:filename ~config allocated bytes))) native_kernels;
+                Option.iter (fun selection ->
+                  Option.iter (fun allocated -> ignore (report_backend
+                    (Rake.Native_backend.verify_allocated_object ~source:filename ~config allocated bytes))) selection.Rake.Tier_c.registers;
+                  Option.iter (fun traversals ->
+                    let expected = match Rake.Native_toolchain.assemble ~profile:config.profile
+                      ~source:filename traversals.Rake.Native_traversal.assembly with
+                      | Ok bytes -> bytes | Error e -> fail (Rake.Native_toolchain.format_error e) in
+                    match Rake.Native_verify.fixed_x86_functions ~source:filename
+                      ~functions:traversals.functions ~expected bytes with
+                    | Ok () -> () | Error e -> fail (Rake.Native_verify.format_error e)) selection.traversals) native_kernels;
                 write_output bytes (default ".o")
             | Object -> write_output (whole_program_object filename c_source) (default ".o")
             | _ ->

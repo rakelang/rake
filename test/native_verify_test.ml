@@ -130,6 +130,41 @@ neon_scalar:
 |}
 
 let () =
+  (* A selected traversal extent includes control flow and embedded literals.
+     Independent mutations must fail even if their mnemonics look harmless. *)
+  let traversal = {|
+.intel_syntax noprefix
+.text
+.p2align 5
+.globl exact_stream
+.type exact_stream, @function
+exact_stream:
+    test rsi, rsi
+    je .Ldone
+    vmovups ymm0, YMMWORD PTR [rdi]
+    vsqrtps ymm0, ymm0
+    vmovups YMMWORD PTR [rdx], ymm0
+.Ldone:
+    ret
+    .long 0x3f800000
+.size exact_stream, .-exact_stream
+|} in
+  let expected = assemble ~source:"traversal-selection" traversal in
+  let check actual = Rake.Native_verify.fixed_x86_functions ~source:"traversal-selection"
+    ~functions:[ "exact_stream" ] ~expected actual in
+  expect_ok (check expected);
+  List.iter (fun (before, after) ->
+    let changed = Str.global_replace (Str.regexp_string before) after traversal in
+    expect_obligation "exact traversal selection"
+      (check (assemble ~source:"mutated-traversal" changed)))
+    [ "je .Ldone", "jne .Ldone";
+      "[rdi]", "[rdi + 4]";
+      "vsqrtps ymm0, ymm0", "vmulps ymm0, ymm0, ymm0";
+      "0x3f800000", "0x40000000" ];
+  let helper = Str.global_replace (Str.regexp_string "vsqrtps ymm0, ymm0")
+    "call opaque_helper" traversal in
+  expect_obligation "closed traversal artifact"
+    (check (assemble ~source:"opaque-traversal" helper));
   let valid = assemble ~source:"valid-verifier-fixture" valid in
   expect_ok
     (Rake.Native_verify.verify ~source:"valid-verifier-fixture"

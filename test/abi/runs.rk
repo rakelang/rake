@@ -1,37 +1,37 @@
 ~~ Runs exercised through their wasm32 C boundary by harness.c.
 
-stack Samples {
+pack Samples {
   f32: value;
   u8: quality;
 }
 
-stack Pair {
+pack Pair {
   f32: a, b;
 }
 
-stack Both {
+pack Both {
   f32: sum, difference;
 }
 
-stack Bytes {
+pack Bytes {
   u8: v;
 }
 
-run scale_values(input: pack Samples, <count: i64>, <scale: f32>) -> f32:
+run scale_values(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
   for chunk in input using f32s up to <count>:
     let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
     yield chunk.value * <scale> + quality
 
-run divide(input: pack Pair, <count: i64>) -> f32:
+run divide(input: stack Pair, <count: i64>) -> f32:
   for row in input using f32s up to <count>:
     yield row.a / row.b
 
-run both(input: pack Pair, out: mut pack Both, <count: i64>):
+run both(input: stack Pair, out: mut stack Both, <count: i64>):
   for row in input using f32s up to <count>:
     out.sum <- row.a + row.b
     out.difference <- row.a - row.b
 
-run total(input: pack Pair, totals: mut []f32, <count: i64>):
+run total(input: stack Pair, totals: mut []f32, <count: i64>):
   sums := <0.0>
   for row in input using f32s up to <count>:
     sums <- sums + row.a
@@ -41,6 +41,6 @@ run offset(x: []f32, out: mut []f32, shift: f32s, <n: i32>):
   for <i: i32> from <0> up to <n> by <4>:
     out[<i>] <- x[<i>] + shift
 
-run floor_bytes(input: pack Bytes, <count: i64>) -> u8:
+run floor_bytes(input: stack Bytes, <count: i64>) -> u8:
   for chunk in input using u8s up to <count>:
     yield max(chunk.v, 10)

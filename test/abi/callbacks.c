@@ -17,6 +17,16 @@ Accumulator callback_select(int32_t enabled)
     return enabled ? callback_from_c : 0;
 }
 
+Inspector callback_inspector(void)
+{
+    return rake_inspect;
+}
+
+const CallbackContext *callback_readonly(CallbackContext *context)
+{
+    return context;
+}
+
 /* Independently authored C prototypes, layouts and arithmetic check both
    directions of calls, retained pointers, mixed argument classes and void. */
 int32_t callback_abi_test(void)
@@ -33,5 +43,7 @@ int32_t callback_abi_test(void)
     if (rake_callback_round_trip(&context) != 35 || context.calls != 5) return 6;
     Accumulator saved = callback_select(1);
     if (!saved || callback_select(0) || saved(&context, 1, 2.0) != 24) return 7;
+    if (callback_inspector()(&context, 17) != 42) return 8;
+    if (rake_inspect_round_trip(&context) != 42 || context.calls != 6) return 9;
     return 0;
 }

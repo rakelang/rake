@@ -53,7 +53,7 @@ fi
 grep -Fq '%3 : rack<f32> = rack.broadcast %1' "${tmp}/scalar.native"
 grep -Eq 'vbroadcastss[[:space:]]+ymm[0-9]+,[[:space:]]*xmm1' "${tmp}/scalar.s"
 if objdump -d -M intel --no-show-raw-insn "${tmp}/scalar.o" | grep -Eq '\<(call|push|pop)\>'; then
-  echo "scalar-parameter crunch introduced a call or stack operation" >&2
+  echo "scalar-parameter scratch introduced a call or stack operation" >&2
   exit 1
 fi
 

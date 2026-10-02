@@ -6,7 +6,7 @@
     bound or assigned, and views and pointers alias the storage they name.
     Integer [+ - *], [/] and [%], checked conversions and checked indexing
     trap exactly where the emitted C traps. A run's rack expressions are
-    evaluated by {!Native_reference}, the semantics of crunches, so a rack
+    evaluated by {!Native_reference}, the semantics of scratches, so a rack
     operation means one thing in both. *)
 
 open Tier_ir
@@ -27,7 +27,7 @@ type value =
   | VPtr of pointer
   | VFunction of string
   | VNull
-  | VPack of (string * value) list
+  | VStack of (string * value) list
   | VRack of R.value
   | VUnit
 
@@ -46,7 +46,7 @@ type trace = {
 type machine = {
   program : program;
   profile : Target.profile;
-  globals : (string, value ref) Hashtbl.t;
+  globals : (string, value array) Hashtbl.t;
   externs : externs;
   trace : trace -> unit;
 }
@@ -59,6 +59,15 @@ let rec copy = function
   | VArr a -> VArr (Array.map copy a)
   | VRec (n, f) -> VRec (n, Array.map copy f)
   | v -> v
+
+(** Assignment changes a location's contents without changing its identity.
+    Arrays and records retain their field storage so existing pointers still
+    refer to the assigned object, as they do in the emitted C. *)
+let rec assign_storage_value store index source =
+  match store.(index), source with
+  | VArr target, VArr source | VRec (_, target), VRec (_, source) ->
+      Array.iteri (fun i value -> assign_storage_value target i value) source
+  | _ -> store.(index) <- source
 
 (* ─── Integers ──────────────────────────────────────────────────────── *)
 
@@ -160,7 +169,7 @@ let to_float target s v =
 
 (* ─── Expressions ───────────────────────────────────────────────────── *)
 
-type env = { machine : machine; vars : (string, value ref) Hashtbl.t }
+type env = { machine : machine; vars : (string, value array) Hashtbl.t }
 
 exception Return_value of value
 exception Break_loop
@@ -207,7 +216,7 @@ let rec eval env (e : expr) : value =
   | Float f -> float_value (scalar_of loc e.ty) f
   | Bool b -> VBool b
   | Str_lit s -> VStr s
-  | Var name | Global name -> !(lookup env loc name)
+  | Var name | Global name -> (lookup env loc name).(0)
   | Unary (Neg, a) -> (
       match ev a with
       | VInt (s, v) -> VInt (s, checked_arith loc Sub s 0L v)
@@ -282,7 +291,7 @@ let rec eval env (e : expr) : value =
       | Some f -> f values
       | None -> trap loc "extern %s has no implementation in this interpreter" name)
   | Function_ref name -> VFunction name
-  | Pointer_cast value -> ev value
+  | Pointer_cast value | Read_only_view value -> ev value
   | Indirect_call (callee, args) -> (
       match ev callee with
       | VFunction name ->
@@ -299,22 +308,30 @@ let rec eval env (e : expr) : value =
   | Record_lit (name, fields) ->
       let r = find_record env.machine.program name in
       VRec (name, Array.of_list (List.map (fun (f, _) -> copy (ev (List.assoc f fields))) r.rfields))
-  | Pack_lit (_, fields) -> VPack (List.map (fun (f, v) -> (f, ev v)) fields)
+  | Stack_lit (_, fields) -> VStack (List.map (fun (f, v) -> (f, ev v)) fields)
   | Array_lit items -> VArr (Array.of_list (List.map (fun i -> copy (ev i)) items))
   | Addr p -> (
       match p.k with
-      | Elem (base, index, _) -> (
-          match ev base with
-          | VArr a -> VPtr { store = a; index = Int64.to_int (as_int loc (ev index)) }
-          | VView v -> VPtr { store = v.store; index = v.start + Int64.to_int (as_int loc (ev index)) }
-          | VPtr p -> VPtr { p with index = p.index + Int64.to_int (as_int loc (ev index)) }
-          | _ -> trap loc "addr")
-      | _ ->
-          (* A pointer to a whole location: a one-element store holding it. *)
-          let get, set = place env p in
-          let store = [| get () |] in
-          ignore set;
-          VPtr { store; index = 0 })
+      | Elem (base, index, checked) ->
+          let pointer, count = match ev base with
+            | VArr a -> { store = a; index = 0 }, Array.length a
+            | VView v -> { store = v.store; index = v.start }, v.count
+            | VPtr p -> p, 0
+            | _ -> trap loc "addr"
+          in
+          let index = Int64.to_int (as_int loc (ev index)) in
+          if checked && (index < 0 || index >= count) then
+            trap loc "index %d outside %d elements" index count;
+          VPtr { pointer with index = pointer.index + index }
+      | Var name | Global name -> VPtr { store = lookup env loc name; index = 0 }
+      | Field (base, field) ->
+          let name, store = match ev base with
+            | VRec (name, fields) -> name, fields
+            | VPtr p -> (match p.store.(p.index) with VRec (name, fields) -> name, fields | _ -> trap loc "addr of a non-record field")
+            | _ -> trap loc "addr of a non-record field"
+          in
+          VPtr { store; index = field_index env name field }
+      | _ -> trap loc "addr of a non-location")
   | Length a -> (match ev a with VArr x -> VInt (SInt, Int64.of_int (Array.length x)) | VView v -> VInt (SInt, Int64.of_int v.count) | _ -> trap loc "count")
   | Slice (base, start, count) -> (
       let s = Int64.to_int (as_int loc (ev start)) and n = Int64.to_int (as_int loc (ev count)) in
@@ -341,7 +358,7 @@ and place env (e : expr) : (unit -> value) * (value -> unit) =
   match e.k with
   | Var name | Global name ->
       let cell = lookup env loc name in
-      ((fun () -> !cell), fun v -> cell := v)
+      ((fun () -> cell.(0)), fun v -> assign_storage_value cell 0 v)
   | Field (base, field) -> (
       let record =
         match eval env base with
@@ -352,7 +369,7 @@ and place env (e : expr) : (unit -> value) * (value -> unit) =
       in
       let name, fields = record in
       let i = field_index env name field in
-      ((fun () -> fields.(i)), fun v -> fields.(i) <- v))
+      ((fun () -> fields.(i)), fun v -> assign_storage_value fields i v))
   | Elem (base, index, checked) ->
       let i = Int64.to_int (as_int loc (eval env index)) in
       let store, at, count =
@@ -364,7 +381,7 @@ and place env (e : expr) : (unit -> value) * (value -> unit) =
       in
       if checked && (i < 0 || i >= count) then trap loc "index %d outside %d elements" i count;
       if at < 0 || at >= Array.length store then trap loc "unchecked index %d outside its storage: outside Rake's defined semantics" i;
-      ((fun () -> store.(at)), fun v -> store.(at) <- v)
+      ((fun () -> store.(at)), fun v -> assign_storage_value store at v)
   | _ -> trap loc "not a location"
 
 and convert loc kind target v =
@@ -416,7 +433,7 @@ and call env loc name args =
             | Var _ | Global _ | Field _ | Elem _ -> fst (place env a) ()
             | _ -> eval env a)
       in
-      Hashtbl.replace vars p.pname (ref v))
+      Hashtbl.replace vars p.pname [| v |])
     f.fparams args;
   ignore loc;
   let inner = { env with vars } in
@@ -429,8 +446,8 @@ and exec_block env stmts = List.iter (exec env) stmts
 
 and exec env (s : stmt) =
   match s.s with
-  | Decl (name, _, Some v, _) -> Hashtbl.replace env.vars name (ref (copy (eval env v)))
-  | Decl (name, ty, None, _) -> Hashtbl.replace env.vars name (ref (zero_of env ty))
+  | Decl (name, _, Some v, _) -> Hashtbl.replace env.vars name [| copy (eval env v) |]
+  | Decl (name, ty, None, _) -> Hashtbl.replace env.vars name [| zero_of env ty |]
   | Assign (target, v) ->
       let value = copy (eval env v) in
       (snd (place env target)) value
@@ -450,7 +467,7 @@ and exec env (s : stmt) =
       let i = ref start in
       try
         while less !i stop do
-          Hashtbl.replace env.vars name (ref (VInt (sc, !i)));
+          Hashtbl.replace env.vars name [| VInt (sc, !i) |];
           (try exec_block env body with Continue_loop -> ());
           (* As the emitted C: stop rather than step past the bound. *)
           if Int64.unsigned_compare (Int64.sub stop !i) step <= 0 && not (is_signed sc) then i := stop
@@ -469,16 +486,16 @@ and vector_call env loc name args =
   match List.find_opt (fun r -> r.run_name = name) env.machine.program.runs with
   | Some run -> run_call env loc run args
   | None ->
-      (* A crunch with uniform parameters. *)
+      (* A scratch with uniform parameters. *)
       let def =
-        List.find (fun (d : Ast.def) -> match d.v with DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false)
+        List.find (fun (d : Ast.def) -> match d.v with DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false)
           env.machine.program.vector_defs
       in
       R.definitions := env.machine.program.vector_defs;
       let values = List.map (function Arg_uniform a | Arg_memory a -> to_reference (eval env a)) args in
       let result =
         match def.v with
-        | DCrunch _ -> R.eval_crunch ~lanes:(f32_lanes env.machine) def values
+        | DScratch _ -> R.eval_scratch ~lanes:(f32_lanes env.machine) def values
         | _ -> R.eval_rake ~lanes:(f32_lanes env.machine) def values
       in
       (match result with
@@ -519,8 +536,8 @@ and run_call env loc run args =
     (fun i a ->
       let v = match a with Arg_uniform e | Arg_memory e -> eval env e in
       match List.nth_opt params i with
-      | Some (Run_pack (n, _, _) | Run_view (n, _, _) | Run_uniform (n, _) | Run_rack (n, _)) -> Hashtbl.replace vars n (ref v)
-      | None -> Hashtbl.replace vars "$result" (ref v))
+      | Some (Run_stack (n, _, _) | Run_view (n, _, _) | Run_uniform (n, _) | Run_rack (n, _)) -> Hashtbl.replace vars n [| v |]
+      | None -> Hashtbl.replace vars "$result" [| v |])
     args;
   let renv = { env with vars } in
   (* As the C boundary: each traversed column and the output hold the count. *)
@@ -532,7 +549,7 @@ and run_call env loc run args =
       (fun s ->
         match s.r with
         | R_traverse t ->
-            (match t.t_count.k with Var count -> (t.t_pack, count) :: List.map (fun o -> (o, count)) (outputs t.t_body) | _ -> [])
+            (match t.t_count.k with Var count -> (t.t_stack, count) :: List.map (fun o -> (o, count)) (outputs t.t_body) | _ -> [])
             @ traversals t.t_body
         | R_for (_, _, _, _, b) | R_block b -> traversals b
         | R_if (_, a, b) -> traversals a @ traversals b
@@ -540,10 +557,10 @@ and run_call env loc run args =
       stmts
   in
   List.iter
-    (fun (pack, count) ->
-      match (Hashtbl.find_opt vars pack, Hashtbl.find_opt vars count) with
-      | Some { contents = VPack columns }, Some { contents = VInt (_, n) } ->
-          let views = List.map snd columns @ (match Hashtbl.find_opt vars "$result" with Some r -> [ !r ] | None -> []) in
+    (fun (stack, count) ->
+      match (Hashtbl.find_opt vars stack, Hashtbl.find_opt vars count) with
+      | Some [| VStack columns |], Some [| VInt (_, n) |] ->
+          let views = List.map snd columns @ (match Hashtbl.find_opt vars "$result" with Some r -> [ r.(0) ] | None -> []) in
           List.iter (function VView v -> if n > Int64.of_int v.count then trap loc "run %s traverses %Ld records of %d" run.run_name n v.count | _ -> ()) views
       | _ -> ())
     (traversals run.run_body);
@@ -553,7 +570,7 @@ and run_call env loc run args =
 and reference_env renv =
   Hashtbl.fold
     (fun name cell acc ->
-      match !cell with
+      match cell.(0) with
       | VRack r -> (name, r) :: acc
       | VFloat (_, f) -> (name, R.F32_scalar f) :: acc
       | VInt (s, v) -> (name, R.Int_scalar (s, v)) :: acc
@@ -566,7 +583,7 @@ and exec_run renv loc stmts ~tail = List.iter (exec_rstmt renv ~tail) stmts |> f
 and exec_rstmt renv ~tail (s : rstmt) =
   let loc = s.rloc in
   let set name v =
-    Hashtbl.replace renv.vars name (ref v);
+    Hashtbl.replace renv.vars name [| v |];
     match v with
     | VRack trace_value ->
         renv.machine.trace
@@ -599,16 +616,16 @@ and exec_rstmt renv ~tail (s : rstmt) =
       set name (VRack (rack_of_elements element (Array.sub v.store (v.start + i) n)))
   | R_gather (name, element, view, indices, checked) ->
       let v = view_of view in
-      let idx = match !(lookup renv loc indices) with VRack r -> (match R.int_lanes r with Some (_, xs) -> xs | None -> [||]) | _ -> [||] in
+      let idx = match (lookup renv loc indices).(0) with VRack r -> (match R.int_lanes r with Some (_, xs) -> xs | None -> [||]) | _ -> [||] in
       (* In a traversal's tail only the active lanes are checked and read. *)
       let active = match tail with Some n -> n | None -> Array.length idx in
       if checked then Array.iteri (fun k i -> if k < active && (i < 0L || i >= Int64.of_int v.count) then trap loc "gather index %Ld outside %d elements" i v.count) idx;
       let zero = if is_float element then VFloat (element, 0.0) else VInt (element, 0L) in
       set name (VRack (rack_of_elements element (Array.mapi (fun k i -> if k < active then v.store.(v.start + Int64.to_int i) else zero) idx)))
-  | R_location (name, _, first) -> set name !(lookup renv loc first)
+  | R_location (name, _, first) -> set name (lookup renv loc first).(0)
   | R_set (name, value) -> (
-      let next = !(lookup renv loc value) in
-      match (tail, !(lookup renv loc name), next) with
+      let next = (lookup renv loc value).(0) in
+      match (tail, (lookup renv loc name).(0), next) with
       | Some active, VRack old, VRack fresh ->
           (* A tail updates only its active lanes. *)
           let blend o f =
@@ -620,11 +637,11 @@ and exec_rstmt renv ~tail (s : rstmt) =
                 | _ -> f)
           in
           let trace_value = blend old fresh in
-          (lookup renv loc name) := VRack trace_value;
+          (lookup renv loc name).(0) <- VRack trace_value;
           renv.machine.trace
             { trace_name = name; trace_loc = loc; trace_value; trace_active = tail }
       | _ ->
-          (lookup renv loc name) := next;
+          (lookup renv loc name).(0) <- next;
           (match next with
           | VRack trace_value ->
               renv.machine.trace
@@ -635,7 +652,7 @@ and exec_rstmt renv ~tail (s : rstmt) =
       let element = match view.ty with View (Sc e, _) -> e | _ -> SInt in
       let n = rack_lanes renv.machine element in
       if checked && (i < 0 || i + n > v.count) then trap loc "rack store [%d, %d) outside %d elements" i (i + n) v.count;
-      (match !(lookup renv loc value) with
+      (match (lookup renv loc value).(0) with
        | VRack r -> Array.iteri (fun k x -> v.store.(v.start + i + k) <- x) (elements_of_rack element r)
        | _ -> trap loc "store of a non-rack")
   | R_for (name, from, upto, by, body) ->
@@ -657,9 +674,9 @@ and exec_rstmt renv ~tail (s : rstmt) =
       (* A wasm32 traversal counts its records in 32 bits. *)
       if count > 0xFFFFFFFFL then trap loc "a traversal of %Ld records exceeds 2^32 - 1" count;
       if count > 0L then (
-        let pack = match !(lookup renv loc t.t_pack) with VPack columns -> columns | _ -> trap loc "a pack" in
+        let stack = match (lookup renv loc t.t_stack).(0) with VStack columns -> columns | _ -> trap loc "a stack" in
         let l = rack_lanes renv.machine t.t_domain in
-        let stack = find_stack renv.machine.program t.t_stack in
+        let pack = find_pack renv.machine.program t.t_pack in
         let i = ref 0 in
         while Int64.of_int !i < count do
           let active = min l (Int64.to_int count - !i) in
@@ -668,28 +685,28 @@ and exec_rstmt renv ~tail (s : rstmt) =
             (fun st ->
               match st.r with
               | R_chunk_load (name, element, field, stored) ->
-                  let column = match List.assoc_opt field pack with Some (VView v) -> v | _ -> trap loc "column %s" field in
+                  let column = match List.assoc_opt field stack with Some (VView v) -> v | _ -> trap loc "column %s" field in
                   let values =
                     Array.init l (fun k ->
                         if k < active then column.store.(column.start + !i + k)
                         else if is_float stored then VFloat (stored, 0.0) else VInt (stored, 0L))
                   in
                   let values = Array.map (function VInt (_, v) -> VInt (element, v) | VFloat (_, f) -> VFloat (element, f) | x -> x) values in
-                  ignore stack;
+                  ignore pack;
                   set name (VRack (rack_of_elements element values))
               | R_yield value | R_output (_, _, value) ->
                   let out, element =
                     match st.r with
                     | R_output (output, field, _) -> (
-                        match !(lookup renv loc output) with
-                        | VPack columns -> (match List.assoc_opt field columns with Some (VView v) ->
-                            (* The output pack may be another stack's: its column's own elements give the type. *)
+                        match (lookup renv loc output).(0) with
+                        | VStack columns -> (match List.assoc_opt field columns with Some (VView v) ->
+                            (* The output stack may be another pack's: its column's own elements give the type. *)
                             let element = if v.count > 0 then (match v.store.(v.start) with VFloat (s, _) | VInt (s, _) -> s | _ -> t.t_domain) else t.t_domain in
                             (v, element) | _ -> trap loc "output column")
-                        | _ -> trap loc "output pack")
-                    | _ -> ((match !(lookup renv loc "$result") with VView v -> v | _ -> trap loc "the output view"), t.t_domain)
+                        | _ -> trap loc "output stack")
+                    | _ -> ((match (lookup renv loc "$result").(0) with VView v -> v | _ -> trap loc "the output view"), t.t_domain)
                   in
-                  (match !(lookup renv loc value) with
+                  (match (lookup renv loc value).(0) with
                    | VRack r ->
                        let values = elements_of_rack element r in
                        for k = 0 to active - 1 do out.store.(out.start + !i + k) <- values.(k) done
@@ -708,17 +725,20 @@ and exec_rstmt renv ~tail (s : rstmt) =
 
 let machine ?(externs = Hashtbl.create 1) ?(trace = fun _ -> ()) ?(profile = Target.Wasm_simd128)
     (program : program) =
+  List.iter (fun record -> match record.rlayout with
+    | C_union _ -> trap record.rloc "C union %s requires compiled C layout; union storage is unavailable in the interpreter" record.rname
+    | Rake_struct | C_struct _ -> ()) program.records;
   let m = { program; profile; globals = Hashtbl.create 16; externs; trace } in
   let env = { machine = m; vars = Hashtbl.create 1 } in
-  List.iter (fun (name, _, value) -> Hashtbl.replace m.globals name (ref (eval env value))) program.consts;
+  List.iter (fun (name, _, value) -> Hashtbl.replace m.globals name [| eval env value |]) program.consts;
   List.iter
     (fun (name, contents) ->
       let store = Array.init (String.length contents) (fun i -> VInt (SUint8, Int64.of_int (Char.code contents.[i]))) in
-      Hashtbl.replace m.globals name (ref (VView { store; start = 0; count = Array.length store })))
+      Hashtbl.replace m.globals name [| VView { store; start = 0; count = Array.length store } |])
     program.embeds;
   List.iter
     (fun (name, ty, init) ->
-      Hashtbl.replace m.globals name (ref (match init with Some v -> copy (eval env v) | None -> zero_of env ty)))
+      Hashtbl.replace m.globals name [| match init with Some v -> copy (eval env v) | None -> zero_of env ty |])
     program.states;
   m
 
@@ -726,7 +746,7 @@ let machine ?(externs = Hashtbl.create 1) ?(trace = fun _ -> ()) ?(profile = Tar
 let call_function m name (args : value list) =
   let f = List.find (fun f -> f.fname = name) m.program.slows in
   let vars = Hashtbl.create 16 in
-  List.iter2 (fun p v -> Hashtbl.replace vars p.pname (ref v)) f.fparams args;
+  List.iter2 (fun p v -> Hashtbl.replace vars p.pname [| v |]) f.fparams args;
   let env = { machine = m; vars } in
   try
     exec_block env f.fbody;

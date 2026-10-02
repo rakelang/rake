@@ -3,7 +3,7 @@
     Infers and validates types for the tine/through/sweep model.
 
     Key rules:
-    - In rake/crunch functions, untyped params default to float rack
+    - In rake/scratch functions, untyped params default to float rack
     - Scalars (<x>) broadcast to rack when combined with rack values
     - Tine predicates produce lane masks
     - Through blocks execute under mask, result has type of final expr
@@ -16,7 +16,7 @@ open Types
 (** Type environment *)
 type env = {
   target: Capabilities.target;
-  types: (ident, t) Hashtbl.t;      (** Type definitions (stack, single) *)
+  types: (ident, t) Hashtbl.t;      (** Type definitions (pack, single) *)
   vars: (ident, t) Hashtbl.t;       (** Variable bindings *)
   tines: (ident, unit) Hashtbl.t;   (** Declared tines (for validation) *)
   funcs: (ident, t list * t) Hashtbl.t;  (** Function signatures *)
@@ -74,15 +74,15 @@ let rec typ_to_t env (ty: typ) : t =
   | TCompoundRack c -> CompoundRack (of_compound c)
   | TScalar p -> Scalar (of_prim p)
   | TCompoundScalar c -> CompoundScalar (of_compound c)
-  | TStack name -> (
-      match Hashtbl.find_opt env.types name with
-      | Some t -> t
-      | None -> type_errorf ty.loc "Unknown stack type: %s" name)
   | TPack name -> (
       match Hashtbl.find_opt env.types name with
-      | Some (Stack (n, fields)) -> Pack (n, fields)  (* Convert stack to pack *)
-      | Some t -> type_errorf ty.loc "Expected stack type for pack, got %s" (show_concise t)
-      | None -> type_errorf ty.loc "Unknown type for pack: %s" name)
+      | Some t -> t
+      | None -> type_errorf ty.loc "Unknown pack type: %s" name)
+  | TStack name -> (
+      match Hashtbl.find_opt env.types name with
+      | Some (Pack (n, fields)) -> Stack (n, fields)  (* Convert pack to stack *)
+      | Some t -> type_errorf ty.loc "Expected pack type for stack, got %s" (show_concise t)
+      | None -> type_errorf ty.loc "Unknown type for stack: %s" name)
   | TSingle name -> (
       match Hashtbl.find_opt env.types name with
       | Some t -> t
@@ -105,11 +105,11 @@ let run_result_to_t env ty =
 (** Register type definitions *)
 let register_type_def env (def: def) =
   match def.v with
-  | DStack (name, fields) ->
+  | DPack (name, fields) ->
       let field_types = List.map (fun f ->
         (f.field_name, typ_to_t env f.field_type)
       ) fields in
-      Hashtbl.add env.types name (Stack (name, field_types))
+      Hashtbl.add env.types name (Pack (name, field_types))
   | DSingle (name, fields) ->
       let field_types = List.map (fun f ->
         (f.field_name, typ_to_t env f.field_type)
@@ -134,13 +134,13 @@ let find_type env name =
     Returns list of (name, type) pairs. *)
 let expand_spread env type_name names loc =
   match find_type env type_name with
-  | Some (Stack (_, fields)) | Some (Single (_, fields)) ->
+  | Some (Pack (_, fields)) | Some (Single (_, fields)) ->
       if List.length names <> List.length fields then
         type_errorf loc "Type %s has %d fields, but %d names provided"
           type_name (List.length fields) (List.length names);
       List.map2 (fun name (_, field_type) -> (name, field_type)) names fields
   | Some _ ->
-      type_errorf loc "Type %s is not a stack or single (cannot spread)" type_name
+      type_errorf loc "Type %s is not a pack or single (cannot spread)" type_name
   | None ->
       type_errorf loc "Unknown type for spreading: %s" type_name
 
@@ -175,7 +175,7 @@ let run_needs_tier params (result : result_spec) body =
 (** Register function signatures *)
 let register_func_def env (def: def) =
   match def.v with
-  | DCrunch (name, params, result, _) ->
+  | DScratch (name, params, result, _) ->
       let param_types = List.concat_map (fun p ->
         param_types_of env p def.loc
       ) params in
@@ -252,7 +252,7 @@ let add_builtins env =
 (** Get field type from a struct type *)
 let get_field_type t field loc =
   match t with
-  | Stack (_, fields) | Single (_, fields) -> (
+  | Pack (_, fields) | Single (_, fields) -> (
       match List.assoc_opt field fields with
       | Some ft -> ft
       | None -> type_errorf loc "Unknown field: %s" field)
@@ -297,7 +297,7 @@ let compatible t1 t2 =
   | Rack s, Scalar s' | Scalar s', Rack s -> s = s'
   | Scalar s1, Scalar s2 -> s1 = s2
   | Mask, Mask -> true
-  | Stack (n1, _), Stack (n2, _) -> n1 = n2
+  | Pack (n1, _), Pack (n2, _) -> n1 = n2
   | Single (n1, _), Single (n2, _) -> n1 = n2
   | _ -> t1 = t2
 
@@ -333,14 +333,14 @@ let ensure_rack_result env loc = function
         (show_concise (Scalar stored)) (show_concise (Rack domain))
   | _ -> require_feature env loc Capabilities.Result_non_float_rack
 
-let ensure_supported_pack_fields env loc _pack_name fields =
+let ensure_supported_stack_fields env loc _stack_name fields =
   List.iter (fun (field_name, field_t) ->
     if not (is_float_rack field_t) then
       let _ = field_name in
-      require_feature env loc Capabilities.Pack_non_f32_field
+      require_feature env loc Capabilities.Stack_non_f32_field
   ) fields
 
-let ensure_supported_crunch_param env loc = function
+let ensure_supported_scratch_param env loc = function
   | PRack (_pname, None) as param ->
       require_feature env loc (Capabilities.feature_of_param param)
   | PRack (_pname, Some ty) ->
@@ -349,7 +349,7 @@ let ensure_supported_crunch_param env loc = function
       if not (is_float_rack t) then
         require_feature env ty.loc Capabilities.Value_non_f32
   | PScalar (_pname, annotation) ->
-      require_feature env loc Capabilities.Crunch_scalar_param;
+      require_feature env loc Capabilities.Scratch_scalar_param;
       (match annotation with
        | None -> ()
        | Some ty ->
@@ -397,7 +397,7 @@ let ensure_supported_run_param env loc = function
   | PRack (pname, Some ty) -> (
       require_feature env loc Capabilities.Param_rack;
       match typ_to_t env ty with
-      | Pack (_, fields) -> ensure_supported_pack_fields env ty.loc pname fields
+      | Stack (_, fields) -> ensure_supported_stack_fields env ty.loc pname fields
       | Rack SFloat -> ()
       | _ -> require_feature env ty.loc Capabilities.Value_non_f32)
   | PRack (_pname, None) -> require_feature env loc Capabilities.Param_rack
@@ -573,7 +573,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
       | StorageSlice (stored, domain) -> Rack (widened_scalar stored domain expr.loc)
       | actual ->
           type_errorf expr.loc
-            "widen expects a narrower stack column selected by an over domain, got %s"
+            "widen expects a narrower pack column selected by an over domain, got %s"
             (show_concise actual))
 
   | ECall ("widen", args) ->
@@ -711,8 +711,8 @@ let rec infer_expr env (expr: Ast.expr) : t =
       let t = infer_expr env e in
       get_field_type t field expr.loc
 
-  | ERecord (name, _) ->
-      type_errorf expr.loc "a %s literal is a slow-tier value; crunches and rakes compute on racks" name
+  | ERecord (name, _) | EStack (name, _) ->
+      type_errorf expr.loc "a %s literal is a slow-tier value; scratches and rakes compute on racks" name
 
   | EWith _ -> unavailable_invariant Capabilities.Expr_record_update
 
@@ -916,7 +916,7 @@ let rec fused_contract_rejection (expr: Ast.expr) : string option =
   | EScatter _ -> Some "scatter may write memory"
   | EGather _ -> Some "gather may read observable memory"
   | ECompress _ | EExpand _ -> Some "masked memory operation is not an inlineable expression shape"
-  | ERecord _ | EWith _ -> Some "record construction is not an inlineable expression shape"
+  | ERecord _ | EStack _ | EWith _ -> Some "aggregate construction is not an inlineable expression shape"
   | ETines _ -> Some "inline tine expression is not an inlineable expression shape"
   | ELambda _ -> Some "lambda is not an inlineable expression shape"
   | EFma (a, b, c) -> first_rejection [a; b; c]
@@ -1046,13 +1046,13 @@ and check_over_result env statement_loc over =
         "Over loop count must be scalar int/int64, got %s"
         (show_concise count_t));
   let chunk_t =
-    match Hashtbl.find_opt env.vars over.over_pack with
-    | Some (Pack (name, fields)) ->
+    match Hashtbl.find_opt env.vars over.over_stack with
+    | Some (Stack (name, fields)) ->
         let domain = of_prim over.over_domain in
-        Stack (name, List.map (traversal_field domain) fields)
+        Pack (name, List.map (traversal_field domain) fields)
     | Some t ->
-        type_errorf statement_loc "Expected pack type, got %s" (show_concise t)
-    | None -> type_errorf statement_loc "Undefined pack: %s" over.over_pack
+        type_errorf statement_loc "Expected stack type, got %s" (show_concise t)
+    | None -> type_errorf statement_loc "Undefined stack: %s" over.over_stack
   in
   let body_env = { env with vars = Hashtbl.copy env.vars } in
   Hashtbl.add body_env.vars over.over_chunk chunk_t;
@@ -1121,7 +1121,7 @@ let rec check_masked_expr env (expr: expr) =
       check_masked_expr env body
   | EInt _ | EFloat _ | EBool _ | EVar _ | EScalarVar _ | ELaneIndex
   | ELanes | EUnit -> ()
-  | ERecord (_, inits) ->
+  | ERecord (_, inits) | EStack (_, inits) ->
       List.iter (fun init -> check_masked_expr env init.init_value) inits
   | EWith (base, inits) ->
       check_masked_expr env base;
@@ -1344,12 +1344,12 @@ let add_params_to_env env params loc =
         ) expanded
   ) params
 
-(** Check crunch function definition *)
-let check_crunch env _name params _result body loc =
+(** Check scratch function definition *)
+let check_scratch env _name params _result body loc =
   let env' = copy_env env in
-  require_feature env' loc Capabilities.Crunch_implicit_result;
+  require_feature env' loc Capabilities.Scratch_implicit_result;
 
-  List.iter (ensure_supported_crunch_param env' loc) params;
+  List.iter (ensure_supported_scratch_param env' loc) params;
   (match _result.result_type with
    | Some ty ->
        require_feature env' ty.loc Capabilities.Result_annotation;
@@ -1367,7 +1367,7 @@ let check_crunch env _name params _result body loc =
   let actual_t = match Hashtbl.find_opt env'.vars _result.result_name with
     | Some t -> t
     | None ->
-        type_errorf loc "a crunch must end with the expression that supplies its result"
+        type_errorf loc "a scratch must end with the expression that supplies its result"
   in
   if actual_t <> Rack SFloat && actual_t <> Scalar SFloat then
     require_feature env' loc Capabilities.Result_non_float_rack;
@@ -1416,7 +1416,7 @@ let check_run env _name params result body loc =
     type_errorf loc "Run result '%s' type mismatch: expected %s, got %s"
       result.result_name (show_concise expected_t) (show_concise actual_t)
 
-(** C's reserved words. A crunch, rake or run is a C function with its own
+(** C's reserved words. A scratch, rake or run is a C function with its own
     name, so its name can't be one of these. *)
 let c_reserved_words =
   [ "auto"; "break"; "case"; "char"; "const"; "continue"; "default"; "do"; "double"; "else"; "enum";
@@ -1427,20 +1427,20 @@ let c_reserved_words =
 (** Check a definition *)
 let check_def env (def: def) =
   (match def.v with
-   | DCrunch (name, _, _, _) | DRake (name, _, _, _, _, _, _) | DRun (name, _, _, _)
+   | DScratch (name, _, _, _) | DRake (name, _, _, _, _, _, _) | DRun (name, _, _, _)
      when List.mem name c_reserved_words ->
        type_errorf def.loc "'%s' is a C keyword, and vector code is a C function of its own name: choose another" name
    | _ -> ());
   match def.v with
-  | DStack _ | DSingle _ | DType _ ->
+  | DPack _ | DSingle _ | DType _ ->
       ()  (* already registered *)
-  | DCrunch (name, params, result, body) ->
-      check_crunch env name params result body def.loc
+  | DScratch (name, params, result, body) ->
+      check_scratch env name params result body def.loc
   | DRake (name, params, result, setup, tines, throughs, sweep) ->
       check_rake env name params result setup tines throughs sweep def.loc
   | DRun (name, params, result, body) ->
       if not (run_needs_tier params result body) then check_run env name params result body def.loc
-  | DRecord _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
+  | DRecord _ | DUnion _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
       ()  (* the slow tier checks these (Tier) *)
 
 (** Check a module *)

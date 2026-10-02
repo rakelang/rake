@@ -1,0 +1,26 @@
+pack Paired {
+  f32: first, second;
+  u8: tag;
+}
+
+rake nonnegative_root(values: f32s) -> f32s:
+  tine #valid means values >= <0.0>
+  through #valid else <0.0> into rooted:
+    sqrt(values)
+  sweep:
+    | #valid => rooted
+    | _ => <0.0>
+
+run paired_roots(input: stack Paired, <count: i64>) -> f32:
+  for row in input using f32s up to <count>:
+    let first = nonnegative_root(row.first)
+    let second = nonnegative_root(row.second)
+    yield first + second
+
+slow main() -> i32:
+  let a: [9]f32 = [-4.0, 16.0, 25.0, -1.0, 0.0, 4.0, 9.0, 36.0, 49.0]
+  let b: [9]f32 = [9.0, -4.0, 0.0, 1.0, 16.0, 9.0, 4.0, 0.0, 16.0]
+  let tags: [9]u8 = [0; 9]
+  result: [9]f32 := [0.0; 9]
+  paired_roots(stack Paired { first: a, second: b, tag: tags }, <9>, result)
+  return i32(result[0] + result[8])

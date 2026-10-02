@@ -7,7 +7,7 @@ stack Students = {
 
 cohort = pack[1000] Students;
 
-crunch mark_tests Students -> grades:
+scratch mark_tests Students -> grades:
   | ascii_E <| 45 ~~ Magic number from ASCII table.
   | normalized <| (score - 40) \ 20 ~~ i.e. 0,20,40,60,80,100 -> 0,0,1,2,3,4
   | grades <| normalized - ascii_E

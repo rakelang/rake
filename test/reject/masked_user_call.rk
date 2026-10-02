@@ -1,4 +1,4 @@
-crunch helper(x: f32s) -> f32s:
+scratch helper(x: f32s) -> f32s:
   sqrt(x)
 
 rake masked_call(x: f32s) -> f32s:

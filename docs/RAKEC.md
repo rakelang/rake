@@ -36,7 +36,8 @@ supports native slow orchestration with register kernels. Their `--emit-asm`
 output is `.c`, with opaque Rake-selected assembly, and their `--emit-obj`
 output is a platform C object with verified kernels. `--verify-native` checks
 those kernels too. Native slow-only units have no vector function to verify,
-so they use `--emit-obj`. Native runs and packs remain work in progress. A
+so they use `--emit-obj`. AVX2 additionally supports the limited
+[native stream traversal](spec/02_packs_and_run.md#native-avx2-streams). Other native runs remain work in progress. A
 native kernel called from slow code currently takes uniform `f32` parameters
 and returns `f32`.
 
@@ -94,7 +95,7 @@ kernels remain opaque GNU assembly in that C unit, so the C compiler cannot
 replace their selected instructions.
 
 The emitted C reads two macros. `RAKE_WASM_LINKAGE` replaces `static inline`
-on each crunch and rake, and `RAKE_FRAME_BYTES` sets the size of a whole
+on each scratch and rake, and `RAKE_FRAME_BYTES` sets the size of a whole
 program's frame stack, 4 MiB by default, as [the slow
 tier](spec/08_slow_tier.md#the-c-unit) describes.
 

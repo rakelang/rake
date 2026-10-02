@@ -86,13 +86,14 @@ scatter, compression, expansion and single-record layouts are planned.
 
 ## Data layout is explicit
 
-A `stack` declares columns of structure-of-arrays data, and a traversal visits
-a `pack` of them a rack at a time. Conversions between layouts and memory
+A `pack` describes one record. A `stack` collects those records in
+structure-of-arrays storage, and a traversal visits its columns a rack at a
+time. Conversions between layouts and memory
 operations are written in the source or set by a documented calling
 convention. A traversal's tail never reads or writes past the count, and its
 inactive lanes raise no exception and have no effect.
 
-Today: runs, packs and traversals compile on `wasm-simd128`, with the
+Today: runs, stacks and traversals compile on `wasm-simd128`, with the
 boundary in [packs and runs](spec/02_packs_and_run.md).
 
 ## Scalar code stays scalar

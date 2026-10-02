@@ -12,11 +12,11 @@ let let_statement line name value =
 let fused_statement line name value =
   stmt line (SFused { fused_name = name; fused_type = None; fused_expr = value })
 
-let crunch ?(line = 1) name parameters result_name body =
-  node (DCrunch (name, parameters, { result_name; result_type = None }, body)) (loc line)
+let scratch ?(line = 1) name parameters result_name body =
+  node (DScratch (name, parameters, { result_name; result_type = None }, body)) (loc line)
 
 let valid =
-  crunch "kernel" [ PRack ("a", None); PRack ("b", None); PRack ("c", None) ] "result"
+  scratch "kernel" [ PRack ("a", None); PRack ("b", None); PRack ("c", None) ] "result"
     [ fused_statement 2 "sum" (expr 2 (EBinop (var 2 "a", Add, var 2 "b")));
       fused_statement 3 "root" (expr 3 (ECall ("sqrt", [ var 3 "sum" ])));
       let_statement 4 "difference" (expr 4 (EBinop (var 4 "root", Sub, var 4 "c")));
@@ -88,7 +88,7 @@ let () =
   let scalar_float = node (TScalar PFloat) (loc 37) in
   let reduction =
     node
-      (DCrunch
+      (DScratch
          ( "reduction",
            [ PRack ("a", None) ],
            { result_name = "result"; result_type = Some scalar_float },
@@ -104,18 +104,18 @@ let () =
   | Ok _ -> failwith "f32 reduction did not lower to scalar native IR"
   | Error error -> failwith (Native_lower.format_error error));
   let unsupported_expr =
-    crunch "unsupported" [ PRack ("a", None) ] "result"
+    scratch "unsupported" [ PRack ("a", None) ] "result"
       [ let_statement 39 "result" (expr 39 (EReduce (RAnd, var 39 "a"))) ]
   in
   expect_error 39 "logical mask reductions are not implemented" unsupported_expr;
   let unsupported_statement =
-    crunch "mutation" [ PRack ("a", None) ] "a" [ stmt 41 (SAssign ("a", var 41 "a")) ]
+    scratch "mutation" [ PRack ("a", None) ] "a" [ stmt 41 (SAssign ("a", var 41 "a")) ]
   in
   expect_error 41 "assignment is not supported" unsupported_statement;
-  let unsupported_definition = node (DStack ("Things", [])) (loc 51) in
-  expect_error 51 "stack definitions are not supported" unsupported_definition;
+  let unsupported_definition = node (DPack ("Things", [])) (loc 51) in
+  expect_error 51 "pack definitions are not supported" unsupported_definition;
   let duplicate_parameter =
-    crunch ~line:61 "duplicate" [ PRack ("a", None); PRack ("a", None) ] "a" []
+    scratch ~line:61 "duplicate" [ PRack ("a", None); PRack ("a", None) ] "a" []
   in
   expect_error 61 "already bound" duplicate_parameter;
   print_endline "native lowering tests passed"

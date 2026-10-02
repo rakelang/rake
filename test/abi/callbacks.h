@@ -11,6 +11,7 @@ typedef struct CallbackContext {
 
 typedef int64_t (*Accumulator)(void *, int64_t, double);
 typedef void (*Observer)(void *, int32_t);
+typedef int64_t (*Inspector)(const void *, int32_t);
 
 typedef struct CallbackPacket {
     uint8_t     tag;
@@ -21,6 +22,8 @@ typedef struct CallbackPacket {
 
 CallbackPacket callback_packet_make(void *, Accumulator, Observer);
 Accumulator callback_select(int32_t);
+Inspector callback_inspector(void);
+const CallbackContext *callback_readonly(CallbackContext *);
 int64_t callback_from_c(void *, int64_t, double);
 
 int64_t rake_callback(void *, int64_t, double);
@@ -28,6 +31,8 @@ void rake_observe(void *, int32_t);
 int64_t rake_callback_use(CallbackPacket *);
 CallbackPacket rake_callback_packet(CallbackContext *);
 int64_t rake_callback_round_trip(CallbackContext *);
+int64_t rake_inspect(const void *, int32_t);
+int64_t rake_inspect_round_trip(CallbackContext *);
 int32_t callback_abi_test(void);
 
 #endif

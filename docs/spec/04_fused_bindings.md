@@ -13,7 +13,7 @@ follow the calculation down the page:
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
-crunch advance(positions: f32s, velocities: f32s) -> f32s:
+scratch advance(positions: f32s, velocities: f32s) -> f32s:
   | scaled: f32s <| velocities * <0.5>
   | moved: f32s  <| positions + scaled
   moved
@@ -44,7 +44,7 @@ bit_and bit_or bit_xor bit_andnot shift_bits_left shift_bits_right shift_bits_ri
 relaxed_madd relaxed_nmadd relaxed_min relaxed_max
 ```
 
-It can't contain a call to a crunch, rake or other function, a reduction, a
+It can't contain a call to a scratch, rake or other function, a reduction, a
 scan, `extract`, `insert`, `bitmask`, indexing or another memory access, a
 conversion such as `bitcast`, or a record or array. A function's effects
 aren't inferred yet, so a user-defined call can't enter a fused region even
@@ -52,7 +52,7 @@ when it is pure. A rejection gives the binding and the reason:
 
 <!-- rake-check: reject "Fused binding contract for 'total' rejected: reduction is not an inlineable expression shape" -->
 ```rake
-crunch spread(values: f32s) -> f32:
+scratch spread(values: f32s) -> f32:
   | total: f32 <| sum(values)
   total
 ```

@@ -1,8 +1,8 @@
-stack Pair {
+pack Pair {
   f32: a, b;
 }
 
-run add(input: pack Pair, <count: i64>) -> f32:
+run add(input: stack Pair, <count: i64>) -> f32:
   for row in input using f32s up to <count>:
     yield row.a + row.b
 
@@ -10,5 +10,5 @@ slow main() -> i32:
   a: [4]f32 := [1.0, 2.0, 3.0, 4.0]
   b: [4]f32 := [1.0, 2.0, 3.0, 4.0]
   out: [8]f32 := [0.0; 8]
-  add(Pair { a: a, b: b }, <6>, out)
+  add(stack Pair { a: a, b: b }, <6>, out)
   return i32(out[0])

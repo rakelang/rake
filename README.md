@@ -21,7 +21,7 @@ Release: 0.6.0-beta.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
-crunch advance(positions: f32s, velocities: f32s) -> f32s:
+scratch advance(positions: f32s, velocities: f32s) -> f32s:
   | scaled <| velocities * <0.5>
   | moved  <| positions + scaled
   moved
@@ -47,20 +47,22 @@ multiply-add.
 
 | Profile | Rack | What compiles |
 | --- | --- | --- |
-| `x86-sse2` | one 128-bit XMM register, 4 `f32` lanes | `f32s` crunches and rakes, as assembly |
-| `x86-avx2` | one 256-bit YMM register, 8 `f32` lanes | `f32s` crunches and rakes, as assembly |
-| `x86-avx512` | one 512-bit ZMM register, 16 `f32` lanes | `f32s` crunches and rakes, as assembly |
-| `aarch64-neon` | one 128-bit vector register, 4 `f32` lanes | `f32s` crunches and rakes, as assembly |
-| `wasm-simd128` | one `v128`, 4 `f32` lanes | crunches and rakes over float and integer racks, runs over memory, and whole programs with scalar `slow` code, as C |
+| `x86-sse2` | one 128-bit XMM register, 4 `f32` lanes | `f32s` scratches and rakes, as assembly |
+| `x86-avx2` | one 256-bit YMM register, 8 `f32` lanes | `f32s` scratches and rakes, as assembly |
+| `x86-avx512` | one 512-bit ZMM register, 16 `f32` lanes | `f32s` scratches and rakes, as assembly |
+| `aarch64-neon` | one 128-bit vector register, 4 `f32` lanes | `f32s` scratches and rakes, as assembly |
+| `wasm-simd128` | one `v128`, 4 `f32` lanes | scratches and rakes over float and integer racks, runs over memory, and whole programs with scalar `slow` code, as C |
 | `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
 The scalar fallback remains WIP (work in progress), and the compiler rejects
-code for it. Native runs and packs are also WIP. The unreleased development
+code for it. General native runs are also WIP. The unreleased development
 compiler compiles slow orchestration with register kernels as native C and
 objects. It embeds Rake's selected assembly, checks the kernels in the final
 object, and supports uniform `f32` parameters and `f32` results at the boundary
 from slow code. Other native scalar kernel boundaries remain WIP. Platform C
-imports and exports, typed C callbacks and process arguments are supported too. These
+imports and exports, header-backed unions, typed C callbacks and process
+arguments are supported too. AVX2 also supports read-only stacks with
+immutable `f32s` stream traversals and masked tails. These
 development additions are absent from the 0.6.0-beta source tag. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one
@@ -71,12 +73,12 @@ rack, and a scalar becomes a rack only where it is marked:
 
 <!-- rake-check: run 33 -->
 ```rake
-stack Samples {
+pack Samples {
   f32: value;
   u8: quality;
 }
 
-run weigh(input: pack Samples, <count: i64>, <scale: f32>) -> f32:
+run weigh(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
   for chunk in input using f32s up to <count>:
     let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
     yield chunk.value * <scale> + quality
@@ -93,7 +95,7 @@ slow main() -> i32:
   values: [8]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
   qualities: [8]u8 := [0, 1, 0, 1, 0, 1, 0, 1]
   weighed: [8]f32 := [0.0; 8]
-  weigh(Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
+  weigh(stack Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
   sums: [8]f32 := [0.0; 8]
   running_sum(weighed, sums, <8>)
   calls <- calls + 1
@@ -115,7 +117,7 @@ nix develop --command dune exec rakec -- --verify-native --target wasm-simd128 -
 `--interpret` runs `main` in Rake's executable semantics. `--emit-asm` writes
 assembly, or C for a whole program. `--verify-native` builds an object,
 disassembles it and checks its vector functions against the profile's rules. A
-crunch or rake contains only register work from the profile's instruction
+scratch or rake contains only register work from the profile's instruction
 list, with no calls and no stack. On x86 and AArch64 each rack is one whole
 physical register, and the object has exactly the fused multiply-adds the
 compiler selected. On WebAssembly, Rake keeps to the virtual machine's

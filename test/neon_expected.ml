@@ -18,9 +18,9 @@ let find_definition predicate description program =
   | Some definition -> definition
   | None -> fail ("missing definition " ^ description)
 
-let find_crunch name =
+let find_scratch name =
   find_definition
-    (function DCrunch (candidate, _, _, _) -> String.equal candidate name | _ -> false)
+    (function DScratch (candidate, _, _, _) -> String.equal candidate name | _ -> false)
     name
 
 let find_rake name =
@@ -34,7 +34,7 @@ let rack_result = function
       fail ("expected rack result, got " ^ string_of_value_kind (value_kind value))
   | Error error -> fail (format_error error)
 
-let evaluate definition arguments = eval_crunch ~lanes:4 definition arguments |> rack_result
+let evaluate definition arguments = eval_scratch ~lanes:4 definition arguments |> rack_result
 let evaluate_rake definition arguments = eval_rake ~lanes:4 definition arguments |> rack_result
 let print_bits value = Printf.printf "%08lx\n" (Int32.bits_of_float value)
 let print values = Array.iter print_bits values
@@ -42,25 +42,25 @@ let print values = Array.iter print_bits values
 let () =
   match Array.to_list Sys.argv with
   | [ _; add_source; select_source; scalar_source; fma_source; predication_source ] ->
-      find_crunch "lowering_add" (parse_file add_source)
+      find_scratch "lowering_add" (parse_file add_source)
       |> fun definition ->
       evaluate definition
         [ rack [| -8.0; -3.5; -0.0; 1024.0 |];
           rack [| 3.0; 1.5; 0.0; 0.5 |] ]
       |> print;
-      find_crunch "choose_positive" (parse_file select_source)
+      find_scratch "choose_positive" (parse_file select_source)
       |> fun definition ->
       evaluate definition
         [ rack [| -8.0; 3.5; -0.0; 1024.0 |];
           rack [| 9.0; 9.0; 9.0; 9.0 |] ]
       |> print;
-      find_crunch "scale_and_add" (parse_file scalar_source)
+      find_scratch "scale_and_add" (parse_file scalar_source)
       |> fun definition ->
       evaluate definition
         [ rack [| -8.0; -3.5; -0.0; 1024.0 |]; scalar 0.5;
           rack [| 3.0; 1.5; 0.0; 0.5 |] ]
       |> print;
-      find_crunch "fused_madd" (parse_file fma_source)
+      find_scratch "fused_madd" (parse_file fma_source)
       |> fun definition ->
       evaluate definition
         [ rack [| 1.0000001192092896; -3.5; 16.0; -0.0 |];

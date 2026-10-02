@@ -31,8 +31,8 @@ let result_of_type ty = {
   result_type = Some ty;
 }
 
-(* A crunch's final expression supplies its result. *)
-let crunch_body statements =
+(* A scratch's final expression supplies its result. *)
+let scratch_body statements =
   match List.rev statements with
   | { v = SExpr value; loc } :: preceding ->
       List.rev preceding @ [ { v = SLet { bind_name = canonical_result_name; bind_type = None; bind_expr = value }; loc } ]
@@ -81,10 +81,10 @@ let slow_body statements =
 %token BOOL
 %token F32 F64 I32 I8 I16 I64 U32 U8 U16 U64
 %token F32S F64S I32S I8S I16S I64S U32S U8S U16S U64S BOOLS
-%token MASK STACK PACK
+%token MASK PACK STACK
 
 (* Tokens: Functions *)
-%token CRUNCH RAKE RUN
+%token SCRATCH RAKE RUN
 
 (* Tokens: Tines and control *)
 %token <string> TINE_REF
@@ -128,7 +128,7 @@ let slow_body statements =
 %token <string> STRING_LIT
 
 (* Tokens: the slow tier and general control flow *)
-%token SLOW EXTERN RECORD STATE EMBED CONST IF THEN WHILE BREAK CONTINUE
+%token SLOW EXTERN RECORD UNION STATE EMBED CONST IF THEN WHILE BREAK CONTINUE
 %token FROM BY REPEAT UNCHECKED PTR MUT WRAP BITCAST
 
 %start <Ast.program> program
@@ -145,9 +145,10 @@ program:
     }
 
 definition:
-  | d = stack_def NEWLINE { d }
+  | d = pack_def NEWLINE { d }
   | d = record_def NEWLINE { d }
-  | d = crunch_def { d }
+  | d = union_def NEWLINE { d }
+  | d = scratch_def { d }
   | d = rake_def { d }
   | d = run_def { d }
   | d = slow_def { d }
@@ -156,10 +157,10 @@ definition:
   | d = embed_def NEWLINE { d }
   | d = const_def NEWLINE { d }
 
-(* stack Particle { f32: position, velocity; u8: age; } *)
-stack_def:
-  | STACK name = TYPE_IDENT LBRACE groups = nonempty_list(field_group) RBRACE {
-      mk_node (DStack (name, List.concat groups)) $startpos $endpos
+(* pack Particle { f32: position, velocity; u8: age; } *)
+pack_def:
+  | PACK name = TYPE_IDENT LBRACE groups = nonempty_list(field_group) RBRACE {
+      mk_node (DPack (name, List.concat groups)) $startpos $endpos
     }
 
 field_group:
@@ -173,30 +174,51 @@ storage_type:
 
 (* record Tile { i32: x, y; [4]Edge: edges; }, or record Tile from "helper.h" { ... } *)
 record_def:
-  | RECORD name = TYPE_IDENT header = option(preceded(FROM, STRING_LIT))
-    LBRACE groups = nonempty_list(record_group) RBRACE {
+  | RECORD name = aggregate_ident header = option(preceded(FROM, STRING_LIT))
+    LBRACE groups = list(record_group) RBRACE {
+      if header = None && groups = [] then
+        raise (Static_syntax (mk_loc $startpos $endpos, "an empty record requires a C header"));
       mk_node (DRecord (name, header, List.concat groups)) $startpos $endpos
     }
 
 record_group:
-  | t = typ COLON names = separated_nonempty_list(COMMA, IDENT) SEMICOLON {
+  | t = typ COLON names = separated_nonempty_list(COMMA, field_ident) SEMICOLON {
       List.map (fun name -> { field_name = name; field_type = t }) names
     }
+
+union_def:
+  | UNION name = aggregate_ident FROM header = STRING_LIT
+    LBRACE groups = nonempty_list(record_group) RBRACE {
+      mk_node (DUnion (name, header, List.concat groups)) $startpos $endpos
+    }
+
+(* C APIs commonly use primitive spellings as member identifiers. These
+   tokens remain types everywhere except a member declaration or selection. *)
+field_ident:
+  | name = IDENT { name }
+  | BOOL { "bool" }
+  | F32 { "f32" } | F64 { "f64" }
+  | I8 { "i8" } | I16 { "i16" } | I32 { "i32" } | I64 { "i64" }
+  | U8 { "u8" } | U16 { "u16" } | U32 { "u32" } | U64 { "u64" }
+
+aggregate_ident:
+  | name = TYPE_IDENT { name }
+  | name = IDENT { name }
 
 block:
   | COLON NEWLINE INDENT ss = nonempty_list(stmt) DEDENT { ss }
 
-(* crunch name(parameters) -> result-type: body ending in an expression *)
-crunch_def:
-  | CRUNCH name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+(* scratch name(parameters) -> result-type: body ending in an expression *)
+scratch_def:
+  | SCRATCH name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     ARROW result_type = typ body = block {
       let result = result_of_type result_type in
-      mk_node (DCrunch (name, List.concat ps, result, crunch_body body))
+      mk_node (DScratch (name, List.concat ps, result, scratch_body body))
         $startpos $endpos
     }
 
-crunch_param:
-  (* Typed rack, pack, view, record or pointer parameter. *)
+scratch_param:
+  (* Typed rack, stack, view, record or pointer parameter. *)
   | name = IDENT COLON t = typ { [PRack (name, Some t)] }
   (* Canonical typed scalar: <name: type> *)
   | LT name = IDENT COLON t = typ GT { [PScalar (name, Some t)] }
@@ -204,7 +226,7 @@ crunch_param:
 (* Rake definitions add source-ordered tines, guarded through regions,
    and a total priority sweep to the typed parameter/result form. *)
 rake_def:
-  | RAKE name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+  | RAKE name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     ARROW result_type = typ COLON NEWLINE INDENT
     setup = list(rake_setup_stmt)
     ts = nonempty_list(canonical_tine_decl)
@@ -221,27 +243,27 @@ rake_setup_stmt:
   | LET b = binding NEWLINE { mk_node (SLet b) $startpos $endpos }
 
 (* run name(params) -> stored-type: a traversal yielding the output stream;
-   run name(params): a general body writing its mutable views and packs. *)
+   run name(params): a general body writing its mutable views and stacks. *)
 run_def:
-  | RUN name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+  | RUN name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     ARROW result_type = typ body = block {
       mk_node (DRun (name, List.concat ps, result_of_type result_type, body))
         $startpos $endpos
     }
-  | RUN name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN body = block {
+  | RUN name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN body = block {
       mk_node (DRun (name, List.concat ps, { result_name = canonical_result_name; result_type = None }, body))
         $startpos $endpos
     }
 
 (* slow name(params) -> T: scalar orchestration code *)
 slow_def:
-  | SLOW name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+  | SLOW name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     result = option(preceded(ARROW, typ)) body = block {
       mk_node (DSlow (name, List.concat ps, result, body)) $startpos $endpos
     }
 
 extern_def:
-  | EXTERN SLOW name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
+  | EXTERN SLOW name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     result = option(preceded(ARROW, typ)) FROM header = STRING_LIT {
       mk_node (DExtern (name, List.concat ps, result, header)) $startpos $endpos
     }
@@ -268,18 +290,19 @@ const_def:
 typ:
   | t = rack_prim_type { mk_node (TRack t) $startpos $endpos }
   | t = prim_type { mk_node (TScalar t) $startpos $endpos }
-  | STACK name = TYPE_IDENT { mk_node (TStack name) $startpos $endpos }
   | PACK name = TYPE_IDENT { mk_node (TPack name) $startpos $endpos }
+  | STACK name = TYPE_IDENT { mk_node (TStack name) $startpos $endpos }
   | MASK { mk_node TMask $startpos $endpos }
   | MUT t = typ { mk_node (TMut t) $startpos $endpos }
-  | PTR t = typ { mk_node (TPtr t) $startpos $endpos }
+  | PTR t = typ { mk_node (TPtr (t, Read_write)) $startpos $endpos }
+  | PTR CONST t = typ { mk_node (TPtr (t, Read_only)) $startpos $endpos }
   | SLOW LPAREN args = separated_list(COMMA, typ) RPAREN ARROW result = typ {
       mk_node (TFun (args, result)) $startpos $endpos
     }
   | LPAREN RPAREN { mk_node TUnit $startpos $endpos }
   | LBRACKET n = INT_LIT RBRACKET t = typ { mk_node (TArray (Int64.to_int n, t)) $startpos $endpos }
   | LBRACKET RBRACKET t = typ { mk_node (TView t) $startpos $endpos }
-  | name = TYPE_IDENT { mk_node (TNamed name) $startpos $endpos }
+  | name = aggregate_ident { mk_node (TNamed name) $startpos $endpos }
 
 prim_type:
   | F32 { PFloat }
@@ -369,14 +392,14 @@ pred_atom:
   | f = SCALAR_FLOAT_LIT {
       mk_node (EBroadcast (mk_node (EFloat f) $startpos $endpos)) $startpos $endpos
     }
-  | e = pred_atom DOT name = IDENT { mk_node (EField (e, name)) $startpos $endpos }
+  | e = pred_atom DOT name = field_ident { mk_node (EField (e, name)) $startpos $endpos }
   | LT e = broadcast_inner GT { mk_node (EBroadcast e) $startpos $endpos }
   | LPAREN e = pred_expr RPAREN { e }
 
 (* A uniform scalar marked at its use: <name>, <record.field>, <view[index]>. *)
 broadcast_inner:
   | name = IDENT { mk_node (EVar name) $startpos $endpos }
-  | e = broadcast_inner DOT name = IDENT { mk_node (EField (e, name)) $startpos $endpos }
+  | e = broadcast_inner DOT name = field_ident { mk_node (EField (e, name)) $startpos $endpos }
   | e = broadcast_inner LBRACKET i = expr RBRACKET { mk_node (EIndex (e, i, false)) $startpos $endpos }
   | e = broadcast_inner LBRACKET UNCHECKED i = expr RBRACKET { mk_node (EIndex (e, i, true)) $startpos $endpos }
   | n = INT_LIT { mk_node (EInt n) $startpos $endpos }
@@ -474,11 +497,11 @@ simple_stmt:
 compound_stmt:
   | IF c = expr body = block rest = else_part { mk_node (SIf (c, body, rest)) $startpos $endpos }
   | WHILE c = expr body = block { mk_node (SWhile (c, body)) $startpos $endpos }
-  (* for chunk in pack using f32s up to <count>: ... yield value *)
-  | FOR chunk = IDENT IN pack = IDENT USING domain = rack_prim_type
+  (* for chunk in stack using f32s up to <count>: ... yield value *)
+  | FOR chunk = IDENT IN stack = IDENT USING domain = rack_prim_type
     UP TO count = simple_expr body = block {
       mk_node (SOver {
-        over_pack = pack;
+        over_stack = stack;
         over_domain = domain;
         over_count = count;
         over_chunk = chunk;
@@ -564,7 +587,7 @@ expr_unary:
   | e = expr_postfix { e }
 
 expr_postfix:
-  | e = expr_postfix DOT name = IDENT { mk_node (EField (e, name)) $startpos $endpos }
+  | e = expr_postfix DOT name = field_ident { mk_node (EField (e, name)) $startpos $endpos }
   | base = expr_postfix LBRACKET idx = expr RBRACKET {
       mk_node (EIndex (base, idx, false)) $startpos $endpos
     }
@@ -613,8 +636,11 @@ expr_primary:
   | WRAP LPAREN t = typ COMMA e = expr RPAREN { mk_node (EConvert (Convert_wrap, t, e)) $startpos $endpos }
   | BITCAST LPAREN t = typ COMMA e = expr RPAREN { mk_node (EConvert (Convert_bitcast, t, e)) $startpos $endpos }
 
-  | name = TYPE_IDENT LBRACE inits = separated_list(COMMA, field_init) RBRACE {
+  | name = aggregate_ident LBRACE inits = separated_list(COMMA, field_init) RBRACE {
       mk_node (ERecord (name, inits)) $startpos $endpos
+    }
+  | STACK name = TYPE_IDENT LBRACE inits = separated_list(COMMA, field_init) RBRACE {
+      mk_node (EStack (name, inits)) $startpos $endpos
     }
   | LBRACKET es = separated_nonempty_list(COMMA, expr) RBRACKET {
       mk_node (EArray es) $startpos $endpos
@@ -661,7 +687,7 @@ expr_primary:
   | LPAREN e = expr RPAREN { e }
 
 field_init:
-  | name = IDENT COLON e = expr { { init_field = name; init_value = e } }
+  | name = field_ident COLON e = expr { { init_field = name; init_value = e } }
 
 slow_contents:
   | { [] }

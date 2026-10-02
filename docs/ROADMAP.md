@@ -1,24 +1,27 @@
 # Roadmap
 
 Rake's vector contract now has SSE2, AVX2, AVX-512F, NEON and WebAssembly
-implementations. Native runs and packs, a scalar fallback and operation parity
+implementations. General native runs, a scalar fallback and operation parity
 remain work in progress. This roadmap states what we intend to build next.
 [The changelog](../CHANGELOG.md) records work once it has landed, while
 [the goals](GOALS.md) define the requirements for every change.
 
 ## Capabilities and coverage
 
-### Compile runs, packs and whole programs for physical targets
+### Compile runs, stacks and whole programs for physical targets
 
 The development compiler after 0.6.0-beta compiles slow orchestration and
 register kernels into one native object. Its C unit embeds Rake-selected
 assembly, and the final object's kernels pass the existing instruction
 verifier. Slow callers can use uniform `f32` parameters and `f32` results.
 Imported C structs use their header's layout, and public slow functions have
-the platform C ABI. Native runs, packs and the remaining scalar kernel
-boundaries are still work in progress.
+the platform C ABI. AVX2 stream traversals now process read-only `f32`
+columns with full racks and masked tails, with final-byte verification and
+independent C/guard-page checks. General native runs, the other physical
+traversal profiles and the remaining scalar kernel boundaries are still
+work in progress.
 
-We will extend `run`, packs and whole programs from `wasm-simd128` to
+We will extend `run`, stacks and whole programs from `wasm-simd128` to
 SSE2, AVX2, AVX-512 and NEON. That work includes native traversal, full-rack
 loads and stores, masked tails with benign operands, stable C boundaries and
 runtime tests over empty, short, exact and tail counts. The object verifier
@@ -26,9 +29,11 @@ will confirm vector memory operations and reject scalar cleanup loops.
 
 The development compiler also accepts typed `argc`/`argv` entry, adapting the
 runtime's C pointer array without incompatible pointer aliasing. The C interface
-supports typed function pointers and noncapturing callbacks. Unions remain
-work in progress. We will check layouts, alignment, field offsets and
-imported/exported calls against independently compiled C headers on x86-64
+supports typed function pointers, noncapturing callbacks and header-backed C
+unions. Rake-owned union layouts and interpreted union storage remain work in
+progress. Pointer types now retain C's read-only pointee qualifiers,
+including in callback signatures. We will check layouts, alignment, field
+offsets and imported/exported calls against independently compiled C headers on x86-64
 and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
 that permission will never apply to rack work outside the block.
 
@@ -40,7 +45,7 @@ uniform address, bounds and loop work.
 
 ### Add and validate target profiles
 
-SSE2 and AVX-512F now compile `f32s` crunches and rakes, alongside AVX2 and
+SSE2 and AVX-512F now compile `f32s` scratches and rakes, alongside AVX2 and
 NEON. We will add the explicit scalar fallback and complete CPU operation and
 program coverage before beginning GPU targets. Each physical profile must
 have instruction selection, register allocation, a calling convention,
@@ -99,7 +104,7 @@ tests will compare the emitted result with the verified optimised graph.
 
 ### Implement the unavailable language capabilities
 
-We will work down the capability catalogue, which currently reports 89 checked
+We will work down the capability catalogue, which currently reports 90 checked
 and 34 unavailable capabilities. The outstanding language areas
 include tuple types, closures, lambdas, pipelines, type aliases, spread
 parameters, record updates, inline tines, outer products and several masked
@@ -108,6 +113,9 @@ operations.
 A capability becomes supported only when one compiler revision contains its
 syntax and semantics, source-located diagnostics, interpreter behaviour,
 compiled implementation, object-verifier rules, tests and documentation.
+External C storage is checked through its independent compiled ABI oracle.
+The interpreter explicitly rejects storage whose platform layout it cannot
+represent, including C unions.
 
 ## Grammar and syntax
 
@@ -143,7 +151,7 @@ uniforms such as `<-1.0>`.
 ### Review layout and delimiters against real programs
 
 We will test the current combination of indentation-sensitive bodies and
-braces for stacks and records against larger programs, formatter design and
+braces for packs and records against larger programs, formatter design and
 editor recovery. We will retain the hybrid only if it remains the clearest
 single rule set. Any syntax change will replace the old form across the
 compiler, grammar, examples and documentation in one release.
@@ -159,7 +167,7 @@ source locations rather than maintaining a second understanding of Rake.
 ### Add a canonical formatter
 
 We will build a formatter that produces one stable layout for declarations,
-indentation-sensitive bodies, records, stacks, fused bindings, tines and
+indentation-sensitive bodies, records, packs, fused bindings, tines and
 sweeps. Formatting will be idempotent and checked against every example in the
 documentation.
 

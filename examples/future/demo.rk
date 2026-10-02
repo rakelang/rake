@@ -2,11 +2,11 @@
 ~~ User-defined calls and native pack traversal are not yet production
 ~~ capabilities.
 
-stack Ray {
+pack Ray {
   f32: ox, oy, oz, dx, dy, dz;
 }
 
-crunch dot(
+scratch dot(
   ax: f32s,
   ay: f32s,
   az: f32s,
@@ -52,7 +52,7 @@ rake intersect_flat(
     | _      => <-1.0>
 
 run render_all(
-  rays: pack Ray,
+  rays: stack Ray,
   <count: i64>,
   <sphere_cx: f32>,
   <sphere_cy: f32>,

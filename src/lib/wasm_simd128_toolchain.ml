@@ -154,7 +154,7 @@ let verify ~functions object_bytes =
 
 let extra_flags () = Option.value (Sys.getenv_opt "RAKE_WASM_CFLAGS") ~default:""
 
-(** Compile a whole program's C, with crunches given external linkage so
+(** Compile a whole program's C, with scratches given external linkage so
     each is present to verify, and the source's directory on the include
     path for its extern headers. *)
 let assemble_program ~include_dir c_source =
@@ -261,7 +261,7 @@ let equivalent selected name =
   || (name = "v128.store" && any_of [ "v128.store" ])
   || (List.mem name [ "v128.not"; "v128.andnot"; "v128.and"; "v128.or" ] && any_of [ "v128.bitselect"; "v128.and"; "v128.or"; "v128.andnot"; "v128.not"; "v128.xor" ])
 
-let verify_program ~crunches ~runs object_bytes =
+let verify_program ~scratches ~runs object_bytes =
   let object_path = Filename.temp_file "rake-wasm-verify-" ".o" in
   Out_channel.with_open_bin object_path (fun channel -> output_string channel object_bytes);
   Fun.protect
@@ -284,7 +284,7 @@ let verify_program ~crunches ~runs object_bytes =
             | Some forbidden ->
                 Error { message = Printf.sprintf "function %s contains %s, outside the wasm-simd128 register-only allow-list" name forbidden }
             | None -> Ok ())
-          (Ok ()) crunches
+          (Ok ()) scratches
       in
       List.fold_left
         (fun result (name, facts) ->

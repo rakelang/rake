@@ -1,27 +1,27 @@
 ~~ The vector tier inside runs, hashed: every result must agree between the
 ~~ interpreter and WebAssembly.
 
-stack Signal {
+pack Signal {
   f32: x;
 }
 
-stack Picks {
+pack Picks {
   i32: index;
 }
 
-stack Left {
+pack Left {
   f32: x;
 }
 
-stack Right {
+pack Right {
   f32: w;
 }
 
-stack Totals {
+pack Totals {
   f32: total;
 }
 
-crunch scaled(v: f32s, <k: f32>) -> f32s:
+scratch scaled(v: f32s, <k: f32>) -> f32s:
   v * <k> + 1.0
 
 rake guarded_root(values: f32s) -> f32s:
@@ -89,19 +89,19 @@ run long_repeat(x: []f32, out: mut []f32):
   out[<0>] <- total
 
 ~~ A rake inlined in a traversal: in the tail, its lanes are also the tail's.
-run roots(input: pack Signal, <count: i64>) -> f32:
+run roots(input: stack Signal, <count: i64>) -> f32:
   for chunk in input using f32s up to <count>:
     yield guarded_root(chunk.x - 2.0)
 
 ~~ A gather in a traversal: the tail's inactive lanes hold index 0 - 1 = -1,
 ~~ which is neither checked nor read.
-run picked(input: pack Picks, table: []f32, <count: i64>) -> f32:
+run picked(input: stack Picks, table: []f32, <count: i64>) -> f32:
   for chunk in input using i32s up to <count>:
     yield table[chunk.index - 1] * 2.0
 
 ~~ A nested traversal: for each chunk of left, the lane-wise sum over right's
 ~~ chunks of x * w. Both have tails, and the inner one runs in the outer's.
-run crossed(left: pack Left, right: pack Right, out: mut pack Totals, <nl: i64>, <nr: i64>):
+run crossed(left: stack Left, right: stack Right, out: mut stack Totals, <nl: i64>, <nr: i64>):
   for a in left using f32s up to <nl>:
     let x = a.x
     acc := <0.0>
@@ -109,8 +109,8 @@ run crossed(left: pack Left, right: pack Right, out: mut pack Totals, <nl: i64>,
       acc <- acc + x * b.w
     out.total <- acc
 
-~~ A uniform != in a crunch is ordered too: NaN != NaN is false.
-crunch pick(v: f32s, w: f32s, <a: f32>, <b: f32>) -> f32s:
+~~ A uniform != in a scratch is ordered too: NaN != NaN is false.
+scratch pick(v: f32s, w: f32s, <a: f32>, <b: f32>) -> f32s:
   if <a> != <b> then v else w
 
 run nan_pick(x: []f32, out: mut []f32, <q: f32>):
@@ -149,15 +149,15 @@ slow main() -> i32:
   long_repeat(x, out_r)
   signal: [11]f32 := [0.0, 1.0, 2.0, 3.0, 4.0, 9.0, 16.0, -4.0, 2.5, 6.0, 102.0]
   rooted: [11]f32 := [0.0; 11]
-  roots(Signal { x: signal }, <11>, rooted)
+  roots(stack Signal { x: signal }, <11>, rooted)
   picks: [6]i32 := [3, 1, 6, 2, 5, 4]
   values: [6]f32 := [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
   chosen: [6]f32 := [0.0; 6]
-  picked(Picks { index: picks }, values, <6>, chosen)
+  picked(stack Picks { index: picks }, values, <6>, chosen)
   lx: [6]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
   rw: [7]f32 := [0.5, 0.25, 2.0, 1.0, 3.0, 0.125, 4.0]
   totals: [6]f32 := [0.0; 6]
-  crossed(Left { x: lx }, Right { w: rw }, Totals { total: totals }, <6>, <7>)
+  crossed(stack Left { x: lx }, stack Right { w: rw }, stack Totals { total: totals }, <6>, <7>)
   let quiet = 0.0 / 0.0
   picks_out: [8]f32 := [0.0; 8]
   nan_pick(x, picks_out, <quiet>)

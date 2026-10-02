@@ -14,10 +14,11 @@ primitive.float	checked	frontend-only	capability:primitive.float	-	-	-	-	-	-
 primitive.int	checked	frontend-only	capability:primitive.int	-	-	-	-	-	-
 primitive.int64	checked	frontend-only	capability:primitive.int64	-	-	-	-	-	-
 primitive.other	checked	frontend-only	fixture:test/frontend/mixed_storage_widen.rk	-	-	-	-	-	-
-definition.stack	checked	frontend-only	capability:definition.stack	-	-	-	-	-	-
+definition.pack	checked	frontend-only	capability:definition.pack	-	-	-	-	-	-
+definition.union	checked	verified-slice	fixture:test/abi/unions.rk	abi:test/abi/unions.rk	fixture:test/abi/unions.rk	abi:test/abi/unions.rk	wasm-verify:test/abi/unions.rk	wasm-verify:test/abi/unions.rk	abi:test/abi/unions.rk
 definition.single	unavailable	unavailable	capability:definition.single	-	-	-	-	-	-
 definition.type-alias	unavailable	unavailable	capability:definition.type-alias	-	-	-	-	-	-
-definition.crunch	checked	frontend-only	capability:definition.crunch	-	-	-	-	-	-
+definition.scratch	checked	frontend-only	capability:definition.scratch	-	-	-	-	-	-
 definition.rake	checked	verified-slice	fixture:test/native/predication.rk	runtime:predication	fixture:test/native/predication.rk	dune:x86_simd_isel_test	dune:x86_simd_regalloc_test	verify:predication	runtime:predication
 definition.run	checked	verified-slice	fixture:test/abi/runs.rk	abi:test/abi/runs.rk	fixture:test/abi/runs.rk	dune:wasm_simd128_test	wasm-verify:test/abi/runs.rk	wasm-verify:test/abi/runs.rk	abi:test/abi/runs.rk
 parameter.rack	checked	frontend-only	capability:parameter.rack	-	-	-	-	-	-
@@ -84,12 +85,12 @@ masked.modulo	unavailable	unavailable	capability:masked.modulo	-	-	-	-	-	-
 masked.mutation	unavailable	unavailable	capability:masked.mutation	-	-	-	-	-	-
 masked.loop	unavailable	unavailable	capability:masked.loop	-	-	-	-	-	-
 masked.cross-lane	unavailable	unavailable	capability:masked.cross-lane	-	-	-	-	-	-
-crunch.scalar-parameter	checked	verified	fixture:test/native/scalar_parameter.rk	runtime:scalar-broadcast	fixture:test/native/scalar_parameter.rk	dune:x86_simd_isel_test	dune:x86_simd_regalloc_test	verify:scalar-broadcast	runtime:scalar-broadcast
+scratch.scalar-parameter	checked	verified	fixture:test/native/scalar_parameter.rk	runtime:scalar-broadcast	fixture:test/native/scalar_parameter.rk	dune:x86_simd_isel_test	dune:x86_simd_regalloc_test	verify:scalar-broadcast	runtime:scalar-broadcast
 rake.spread-parameter	unavailable	unavailable	capability:rake.spread-parameter	-	-	-	-	-	-
 run.spread-parameter	unavailable	unavailable	capability:run.spread-parameter	-	-	-	-	-	-
-crunch.implicit-result	checked	frontend-only	fixture:test/native/add.rk	-	-	-	-	-	-
+scratch.implicit-result	checked	frontend-only	fixture:test/native/add.rk	-	-	-	-	-	-
 value.non-f32	checked	frontend-only	fixture:test/frontend/mixed_storage_widen.rk	-	-	-	-	-	-
-pack.non-f32-field	checked	frontend-only	fixture:test/frontend/mixed_storage_widen.rk	-	-	-	-	-	-
+stack.non-f32-field	checked	frontend-only	fixture:test/frontend/mixed_storage_widen.rk	-	-	-	-	-	-
 result.non-float-rack	checked	frontend-only	fixture:test/frontend/byte_domain.rk	-	-	-	-	-	-
 operator.integer-rack-comparison	checked	verified-slice	fixture:test/program/vector_tier.rk	program:test/program/vector_tier.rk	fixture:test/program/vector_tier.rk	dune:wasm_simd128_test	wasm-verify:test/program/vector_tier.rk	wasm-verify:test/program/vector_tier.rk	program:test/program/vector_tier.rk
 expression.bitmask	checked	verified-slice	fixture:test/program/vector_tier.rk	program:test/program/vector_tier.rk	fixture:test/program/vector_tier.rk	dune:wasm_simd128_test	wasm-verify:test/program/vector_tier.rk	wasm-verify:test/program/vector_tier.rk	program:test/program/vector_tier.rk
@@ -121,4 +122,4 @@ type.array	checked	verified-slice	fixture:test/program/slow_tier.rk	program:test
 type.mutable	checked	verified-slice	fixture:test/program/slow_tier.rk	program:test/program/slow_tier.rk	fixture:test/program/slow_tier.rk	dune:wasm_simd128_test	wasm-verify:test/program/slow_tier.rk	wasm-verify:test/program/slow_tier.rk	program:test/program/slow_tier.rk
 type.pointer	checked	verified-slice	fixture:test/abi/interop.rk	abi:test/abi/interop.rk	fixture:test/abi/interop.rk	dune:wasm_simd128_test	wasm-verify:test/abi/interop.rk	wasm-verify:test/abi/interop.rk	abi:test/abi/interop.rk
 type.record	checked	verified-slice	fixture:test/program/slow_tier.rk	program:test/program/slow_tier.rk	fixture:test/program/slow_tier.rk	dune:wasm_simd128_test	wasm-verify:test/program/slow_tier.rk	wasm-verify:test/program/slow_tier.rk	program:test/program/slow_tier.rk
-type.view	checked	verified-slice	fixture:test/program/pack_and_dense.rk	program:test/program/pack_and_dense.rk	fixture:test/program/pack_and_dense.rk	dune:wasm_simd128_test	wasm-verify:test/program/pack_and_dense.rk	wasm-verify:test/program/pack_and_dense.rk	program:test/program/pack_and_dense.rk
+type.view	checked	verified-slice	fixture:test/program/stack_and_dense.rk	program:test/program/stack_and_dense.rk	fixture:test/program/stack_and_dense.rk	dune:wasm_simd128_test	wasm-verify:test/program/stack_and_dense.rk	wasm-verify:test/program/stack_and_dense.rk	program:test/program/stack_and_dense.rk

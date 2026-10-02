@@ -26,7 +26,7 @@ layout(push_constant) uniform PushConstants {
     uint num_rays;
 };
 
-// Dot product (equivalent to Rake crunch)
+// Dot product (equivalent to Rake scratch)
 float dot3(vec3 a, vec3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }

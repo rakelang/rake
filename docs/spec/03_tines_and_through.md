@@ -32,7 +32,7 @@ slow main() -> i32:
 
 A rake's body has four parts in this order: `let` bindings, at least one
 tine, at least one through block, and the sweep. Its racks are `f32s`. Rakes
-compile on `x86-avx2`, `aarch64-neon` and `wasm-simd128`, and a crunch, rake
+compile on `x86-avx2`, `aarch64-neon` and `wasm-simd128`, and a scratch, rake
 or run can call one.
 
 ## Tines

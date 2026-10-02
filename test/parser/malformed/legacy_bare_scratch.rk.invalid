@@ -1,0 +1,2 @@
+scratch legacy_add left right -> result:
+  let result = left + right

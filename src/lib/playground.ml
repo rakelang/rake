@@ -39,7 +39,7 @@ let is_whole_program (program : Ast.program) =
       List.exists
         (fun (definition : Ast.def) ->
           match definition.v with
-          | DSlow _ | DRun _ | DRecord _ | DState _ | DEmbed _ | DConst _
+          | DSlow _ | DRun _ | DRecord _ | DUnion _ | DState _ | DEmbed _ | DConst _
           | DExtern _ ->
               true
           | _ -> false)

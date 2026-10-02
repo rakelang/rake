@@ -34,7 +34,7 @@ let () = List.iter (fun (k, v) -> Hashtbl.add keywords k v) [
   ("stack", STACK); ("pack", PACK);
 
   (* Functions *)
-  ("crunch", CRUNCH); ("rake", RAKE); ("run", RUN);
+  ("scratch", SCRATCH); ("rake", RAKE); ("run", RUN);
 
   (* Tines and control *)
   ("tine", TINE); ("means", MEANS);
@@ -60,7 +60,7 @@ let () = List.iter (fun (k, v) -> Hashtbl.add keywords k v) [
   ("not", NOT); ("and", AND); ("or", OR);
 
   (* The slow scalar tier and general control flow *)
-  ("slow", SLOW); ("extern", EXTERN); ("record", RECORD); ("state", STATE);
+  ("slow", SLOW); ("extern", EXTERN); ("record", RECORD); ("union", UNION); ("state", STATE);
   ("embed", EMBED); ("const", CONST); ("if", IF); ("then", THEN);
   ("while", WHILE); ("break", BREAK); ("continue", CONTINUE);
   ("from", FROM); ("by", BY); ("repeat", REPEAT); ("unchecked", UNCHECKED);
@@ -225,7 +225,7 @@ let show_token = function
   | I16S -> "I16S" | I64S -> "I64S" | U32S -> "U32S" | U8S -> "U8S"
   | U16S -> "U16S" | U64S -> "U64S" | BOOLS -> "BOOLS"
   | MASK -> "MASK" | STACK -> "STACK" | PACK -> "PACK"
-  | CRUNCH -> "CRUNCH" | RAKE -> "RAKE" | RUN -> "RUN"
+  | SCRATCH -> "SCRATCH" | RAKE -> "RAKE" | RUN -> "RUN"
   | TINE_REF s -> Printf.sprintf "TINE_REF(%s)" s
   | TINE -> "TINE" | MEANS -> "MEANS"
   | THROUGH -> "THROUGH" | SWEEP -> "SWEEP" | ELSE -> "ELSE" | INTO -> "INTO"
@@ -258,7 +258,8 @@ let show_token = function
   | EOF -> "EOF"
   | NEWLINE -> "NEWLINE" | INDENT -> "INDENT" | DEDENT -> "DEDENT"
   | STRING_LIT s -> Printf.sprintf "STRING_LIT(%S)" s
-  | SLOW -> "SLOW" | EXTERN -> "EXTERN" | RECORD -> "RECORD" | STATE -> "STATE"
+  | SLOW -> "SLOW" | EXTERN -> "EXTERN" | RECORD -> "RECORD" | UNION -> "UNION"
+  | STATE -> "STATE"
   | EMBED -> "EMBED" | CONST -> "CONST" | IF -> "IF" | THEN -> "THEN"
   | WHILE -> "WHILE" | BREAK -> "BREAK" | CONTINUE -> "CONTINUE"
   | FROM -> "FROM" | BY -> "BY" | REPEAT -> "REPEAT" | UNCHECKED -> "UNCHECKED"

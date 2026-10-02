@@ -20,7 +20,7 @@ particles, written in Rake, strict C and Rust. Its sharpest case is a sine of
 every lane. None of the builds has a vector sine. The C and Rust builds
 compile anyway and call the scalar `sinf` once per value, under the
 harness's strict flags. The Rake build stops at native lowering with
-`call to 'sin' is not supported by native crunch lowering`. Other toolchains
+`call to 'sin' is not supported by native scratch lowering`. Other toolchains
 or flags may make other choices, and the harness records the ones it used.
 
 ## Rake and ISPC
@@ -60,11 +60,11 @@ export void advance_x(
 and in Rake:
 
 ```rake
-stack Particles {
+pack Particles {
   f32: position_x, velocity_x;
 }
 
-run advance_x(particles: pack Particles, <count: i64>, <dt: f32>) -> f32:
+run advance_x(particles: stack Particles, <count: i64>, <dt: f32>) -> f32:
   for particle in particles using f32s up to <count>:
     yield particle.position_x + particle.velocity_x * <dt>
 ```
@@ -79,7 +79,7 @@ Its vector code favours pure expressions and bindings that are defined once.
 | --- | --- | --- |
 | Model | imperative C-family SPMD, with loops, assignments, pointers, functions and ordinary control flow | expression-oriented vector data flow, with marked uniforms, fused bindings, tines, through blocks and sweeps |
 | Parallel unit | a gang of program instances, which may be wider than one CPU vector | a rack: one physical CPU vector register or one WebAssembly `v128`. A proposed GPU rack spans a specified warp or subgroup |
-| Columns | `soa<n>` makes an `n`-wide structure of arrays and supports layout conversion | `stack` declares columns, `pack` supplies them with a count, and the profile chooses the width |
+| Columns | `soa<n>` makes an `n`-wide structure of arrays and supports layout conversion | `pack` describes a record, `stack` borrows its columns, and the profile chooses the rack width |
 | Divergence | `if`, loops and calls become uniform or varying from their operands | tines name masks, through blocks compute under them, and a sweep picks each lane's result |
 | Machine rules | gang semantics are preserved, and LLVM selects instructions and allocates registers | the compiler also rejects split racks, scalar lane loops, spills and helper calls wherever the profile forbids them |
 | Back end | LLVM for CPUs, and documented Intel Xe GPU targets | Rake's own instruction selection and allocation for SSE2, AVX2, AVX-512F and NEON, and C intrinsics for WebAssembly |

@@ -29,8 +29,8 @@ and t =
   | Scalar of scalar                   (** single scalar value *)
   | StorageSlice of scalar * scalar    (** stored element, traversal rack domain *)
   | CompoundScalar of compound         (** single compound value *)
-  | Stack of ident * field list        (** SoA struct type *)
-  | Pack of ident * field list         (** collection of stacks *)
+  | Pack of ident * field list        (** SoA struct type *)
+  | Stack of ident * field list         (** collection of packs *)
   | Single of ident * field list       (** all-scalar struct *)
   | Mask                               (** boolean vector (tine result) *)
   | Fun of t list * t                  (** function type *)
@@ -134,8 +134,8 @@ let rec show_concise = function
   | StorageSlice (stored, domain) ->
       show_concise (Scalar stored) ^ " storage viewed by " ^ show_concise (Rack domain)
   | CompoundScalar c -> show_compound c
-  | Stack (name, _) -> name ^ " stack"
   | Pack (name, _) -> name ^ " pack"
+  | Stack (name, _) -> name ^ " stack"
   | Single (name, _) -> name ^ " single"
   | Mask -> "mask"
   | Fun (args, ret) ->
