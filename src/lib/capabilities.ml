@@ -76,7 +76,7 @@ let all = [
   unavailable Type_single "type.single" "type" "single references";
   unavailable Type_compound_rack "type.compound-rack" "type" "compound racks";
   unavailable Type_compound_scalar "type.compound-scalar" "type" "compound scalars";
-  unavailable Type_function "type.function" "type" "function types";
+  supported Type_function "type.function" "type" "typed C function pointers in slow code";
   unavailable Type_tuple "type.tuple" "type" "tuple types";
   unavailable Type_unit "type.unit" "type" "unit type";
   supported Primitive_float "primitive.float" "type" "32-bit float";

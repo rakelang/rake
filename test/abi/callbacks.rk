@@ -1,0 +1,44 @@
+record CallbackContext from "callbacks.h" {
+    i32: bias;
+    f64: factor;
+    u64: calls;
+}
+
+record CallbackPacket from "callbacks.h" {
+    u8: tag;
+    slow(ptr (), i64, f64) -> i64: accumulate;
+    slow(ptr (), i32) -> (): observe;
+    ptr (): context;
+}
+
+extern slow callback_packet_make(context: ptr (), accumulate: slow(ptr (), i64, f64) -> i64, observe: slow(ptr (), i32) -> ()) -> CallbackPacket from "callbacks.h"
+extern slow callback_select(enabled: i32) -> slow(ptr (), i64, f64) -> i64 from "callbacks.h"
+extern slow callback_abi_test() -> i32 from "callbacks.h"
+
+slow rake_callback(opaque: ptr (), value: i64, weight: f64) -> i64:
+    let context = bitcast(ptr CallbackContext, opaque)
+    context.calls <- context.calls + 1
+    return value + i64(context.bias) + i64(weight * context.factor)
+
+slow rake_observe(opaque: ptr (), increment: i32):
+    let context = bitcast(ptr CallbackContext, opaque)
+    context.bias <- context.bias + increment
+    context.calls <- context.calls + 1
+
+slow rake_callback_use(packet: ptr CallbackPacket) -> i64:
+    let accumulate = packet.accumulate
+    let observe = packet.observe
+    let result = accumulate(packet.context, 41, 3.5)
+    observe(packet.context, 3)
+    return result
+
+slow rake_callback_packet(context: ptr CallbackContext) -> CallbackPacket:
+    return callback_packet_make(bitcast(ptr (), context), addr(rake_callback), addr(rake_observe))
+
+slow rake_callback_round_trip(context: ptr CallbackContext) -> i64:
+    let select_callback = addr(callback_select)
+    let accumulate = select_callback(1)
+    return accumulate(bitcast(ptr (), context), 10, 3.0)
+
+slow main() -> i32:
+    return callback_abi_test()

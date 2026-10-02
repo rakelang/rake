@@ -7,7 +7,7 @@ type.pack	checked	frontend-only	capability:type.pack	-	-	-	-	-	-
 type.single	unavailable	unavailable	capability:type.single	-	-	-	-	-	-
 type.compound-rack	unavailable	unavailable	capability:type.compound-rack	-	-	-	-	-	-
 type.compound-scalar	unavailable	unavailable	capability:type.compound-scalar	-	-	-	-	-	-
-type.function	unavailable	unavailable	capability:type.function	-	-	-	-	-	-
+type.function	checked	verified-slice	fixture:test/abi/callbacks.rk	abi:test/abi/callbacks.rk	fixture:test/program/callbacks.rk	program:test/program/callbacks.rk	wasm-verify:test/abi/callbacks.rk	wasm-verify:test/abi/callbacks.rk	abi:test/abi/callbacks.rk
 type.tuple	unavailable	unavailable	capability:type.tuple	-	-	-	-	-	-
 type.unit	unavailable	unavailable	capability:type.unit	-	-	-	-	-	-
 primitive.float	checked	frontend-only	capability:primitive.float	-	-	-	-	-	-

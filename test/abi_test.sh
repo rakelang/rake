@@ -25,6 +25,14 @@ test "${result}" = 0 || { echo "interop: check ${result} failed" >&2; exit 1; }
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/runs.o" "${test_dir}/abi/runs.rk"
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/interop.o" "${test_dir}/abi/interop.rk"
 
+# Typed function pointers cross the independent C header in both directions.
+"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/callbacks.c" "${test_dir}/abi/callbacks.rk"
+clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdlib \
+  -Wl,--no-entry -Wl,--export=__main_void -I"${test_dir}/abi" \
+  -o "${tmp}/callbacks.wasm" "${tmp}/callbacks.c" "${test_dir}/abi/callbacks.c"
+test "$(wasmtime run --invoke __main_void "${tmp}/callbacks.wasm" 2>/dev/null)" = 0
+"${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/callbacks.o" "${test_dir}/abi/callbacks.rk"
+
 # Process arguments use WASI's real command startup, including argv[argc].
 : "${RAKE_WASI_LIBC:?process startup checks need WASI libc from the development shell}"
 : "${RAKE_WASI_LIBC_DEV:?process startup checks need WASI headers from the development shell}"

@@ -92,6 +92,14 @@ let rec ty_of ctx (t : Ast.typ) =
       if not (Hashtbl.mem ctx.stacks name) then fail t.loc "unknown stack '%s'" name;
       Pack (name, false)
   | TPtr inner -> Ptr (pointee ctx inner)
+  | TFun (args, result) ->
+      let abi_type (t : Ast.typ) =
+        match ty_of ctx t with
+        | (Sc _ | Ptr _ | Function_pointer _ | Record _) as ty -> ty
+        | ty -> fail t.loc "a C function pointer takes scalars, pointers or structs, got %s" (string_of_ty ty)
+      in
+      let result = match result.v with TUnit -> Void | _ -> abi_type result in
+      Function_pointer (List.map abi_type args, result)
   | TNamed name ->
       if Hashtbl.mem ctx.records name then Record name
       else if Hashtbl.mem ctx.stacks name then
@@ -99,16 +107,17 @@ let rec ty_of ctx (t : Ast.typ) =
       else fail t.loc "unknown record '%s'" name
   | TMut _ -> fail t.loc "mut marks a writable parameter: mut []T, mut pack S, or a mut record or array"
   | TStack _ -> fail t.loc "a stack is a column schema: write pack S"
-  | TCompoundRack _ | TCompoundScalar _ | TSingle _ | TFun _ | TTuple _ | TUnit ->
+  | TCompoundRack _ | TCompoundScalar _ | TSingle _ | TTuple _ | TUnit ->
       fail t.loc "this type has no published contract"
 
 and storable ctx (t : Ast.typ) =
   match ty_of ctx t with
-  | (Sc _ | Array _ | Record _ | Ptr _) as ty -> ty
+  | (Sc _ | Array _ | Record _ | Ptr _ | Function_pointer _) as ty -> ty
   | ty -> fail t.loc "%s can't be stored in memory" (string_of_ty ty)
 
 and pointee ctx (t : Ast.typ) =
   match t.v with
+  | TUnit -> Void
   | TNamed name when Hashtbl.mem ctx.records name -> Record name
   | _ -> ty_of ctx t
 
@@ -120,6 +129,8 @@ let rec equal_ty a b =
   | Array (n, x), Array (m, y) -> n = m && equal_ty x y
   | View (x, w), View (y, v) -> w = v && equal_ty x y
   | Ptr x, Ptr y -> equal_ty x y
+  | Function_pointer (xs, x), Function_pointer (ys, y) ->
+      List.length xs = List.length ys && List.for_all2 equal_ty xs ys && equal_ty x y
   | Record x, Record y -> x = y
   | Pack (x, w), Pack (y, v) -> x = y && w = v
   | Str, Str | Void, Void -> true
@@ -307,6 +318,11 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
       require c.loc (Sc SBool) c.ty "an if condition";
       let a, b = same_type env ?expected a b in
       mk (Cond (c, a, b)) a.ty loc
+  | EConvert (Ast.Convert_bitcast, target, value) when (match target.v with TPtr _ -> true | _ -> false) ->
+      let target = ty_of env.ctx target and value = check_uniform env value in
+      (match (target, value.ty) with
+       | Ptr Void, Ptr _ | Ptr _, Ptr Void -> mk (Pointer_cast value) target loc
+       | _ -> fail loc "a pointer bitcast erases or restores a data pointer through ptr ()")
   | EConvert (kind, target, value) -> (
       let target_s =
         match ty_of env.ctx target with Sc s -> s | ty -> fail loc "conversion targets a scalar type, got %s" (string_of_ty ty)
@@ -373,6 +389,7 @@ and element env loc base index unchecked =
   match base.ty with
   | Array (_, element) | View (element, _) -> mk (Elem (base, index, not unchecked)) element loc
   | Ptr element ->
+      if element = Void then fail loc "ptr () has no element type; restore its typed pointer before indexing";
       if not unchecked then fail loc "a pointer carries no bounds; write p[unchecked i]";
       mk (Elem (base, index, false)) element loc
   | ty -> fail loc "%s can't be indexed" (string_of_ty ty)
@@ -517,8 +534,20 @@ and call env ?expected loc name args =
       let p = arg p and count = arg ~expected:(Sc SInt) count in
       require count.loc (Sc SInt) count.ty "a view's count";
       match p.ty with
+      | Ptr Void -> fail loc "ptr () has no element type; restore its typed pointer before forming a view"
       | Ptr element -> mk (Ptr_view (p, count)) (View (element, true)) loc
       | ty -> fail loc "unchecked_view takes a pointer, got %s" (string_of_ty ty))
+  | "addr", [ { Ast.v = EVar name; _ } ]
+    when env.mode = Slow_mode && not (SM.mem name env.vars || Hashtbl.mem env.ctx.globals name || Hashtbl.mem env.ctx.consts name)
+      && (Hashtbl.mem env.ctx.slows name || Hashtbl.mem env.ctx.externs name) ->
+      if name = "main" then fail loc "main is the process entry, not a callback";
+      let params, result = match Hashtbl.find_opt env.ctx.slows name with
+        | Some signature -> signature
+        | None -> let ext = Hashtbl.find env.ctx.externs name in ext.eparams, ext.eresult
+      in
+      if List.exists (fun p -> p.pass <> By_value || (match p.pty with View _ -> true | _ -> false)) params then
+        fail loc "callback %s needs explicit C parameters; replace borrowed aggregates with ptr T" name;
+      mk (Function_ref name) (Function_pointer (List.map (fun p -> p.pty) params, result)) loc
   | "addr", [ place ] ->
       let place = arg place in
       (match place.k with
@@ -527,9 +556,19 @@ and call env ?expected loc name args =
       mk (Addr place) (Ptr place.ty) loc
   | "is_null", [ p ] ->
       let p = arg p in
-      (match p.ty with Ptr _ -> () | ty -> fail loc "is_null takes a pointer, got %s" (string_of_ty ty));
+      (match p.ty with Ptr _ | Function_pointer _ -> () | ty -> fail loc "is_null takes a pointer, got %s" (string_of_ty ty));
       mk (Is_null p) (Sc SBool) loc
   | _ when env.mode = Vector_mode -> fail loc "vector code can't call '%s' as a uniform scalar function" name
+  | _ when SM.mem name env.vars || Hashtbl.mem env.ctx.globals name ->
+      let callee = check_uniform env { Ast.v = EVar name; loc } in
+      (match callee.ty with
+       | Function_pointer (params, result) ->
+           if List.length params <> List.length args then fail loc "%s takes %d arguments, got %d" name (List.length params) (List.length args);
+           let args = List.map2 (fun ty (a : Ast.expr) ->
+             let value = check_uniform env ~expected:ty a in
+             require a.loc ty value.ty ("callback argument to " ^ name); value) params args in
+           mk (Indirect_call (callee, args)) result loc
+       | ty -> fail loc "%s has type %s, not a function pointer" name (string_of_ty ty))
   | _ -> (
       match Hashtbl.find_opt env.ctx.slows name with
       | Some (params, result) ->
@@ -768,7 +807,7 @@ let slow_params ctx loc (params : Ast.param list) =
           | _ -> (
               match ty_of ctx t with
               | (Array _ | Record _) as ty -> { pname = name; pty = ty; pass = Borrow }
-              | (Sc _ | View _ | Ptr _) as ty -> { pname = name; pty = ty; pass = By_value }
+              | (Sc _ | View _ | Ptr _ | Function_pointer _) as ty -> { pname = name; pty = ty; pass = By_value }
               | ty -> fail loc "slow code can't take %s %s" (string_of_ty ty) name))
       | PScalar (name, _) -> fail loc "every slow value is scalar: write %s: T" name
       | _ -> fail loc "slow parameters are written name: T")
@@ -1434,7 +1473,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
               (function
                 | Ast.PRack (pname, Some t) -> (
                     match ty_of ctx t with
-                    | (Sc _ | Ptr _ | Record _) as ty -> { pname; pty = ty; pass = By_value }
+                    | (Sc _ | Ptr _ | Function_pointer _ | Record _) as ty -> { pname; pty = ty; pass = By_value }
                     | ty -> fail d.loc "extern %s can't take %s: C has scalars, pointers and structs" name (string_of_ty ty))
                 | _ -> fail d.loc "extern parameters are written name: T")
               params
@@ -1467,7 +1506,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
       match d.v with
       | DState (name, t, init) ->
           let ty = ty_of ctx t in
-          (match ty with Sc _ | Array _ | Record _ | Ptr _ -> () | _ -> fail d.loc "module state holds scalars, arrays, records and pointers");
+          (match ty with Sc _ | Array _ | Record _ | Ptr _ | Function_pointer _ -> () | _ -> fail d.loc "module state holds scalars, arrays, records and pointers");
           let init =
             Option.map
               (fun value ->

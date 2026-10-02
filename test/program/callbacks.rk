@@ -1,0 +1,39 @@
+record Context {
+    i32: total;
+}
+
+record Hooks {
+    slow(ptr (), i32) -> i32: add;
+    slow(ptr (), i32) -> (): observe;
+}
+
+state empty: slow(ptr (), i32) -> i32
+
+slow accumulate(opaque: ptr (), increment: i32) -> i32:
+    let context = bitcast(ptr Context, opaque)
+    context.total <- context.total + increment
+    return context.total
+
+slow observe(opaque: ptr (), increment: i32):
+    let context = bitcast(ptr Context, opaque)
+    context.total <- context.total + increment
+
+slow select_hook(enabled: bool) -> slow(ptr (), i32) -> i32:
+    if enabled:
+        return addr(accumulate)
+    return empty
+
+slow apply(hook: slow(ptr (), i32) -> i32, context: ptr (), value: i32) -> i32:
+    return hook(context, value)
+
+slow main() -> i32:
+    context: Context := Context { total: 4 }
+    let hooks = Hooks { add: addr(accumulate), observe: addr(observe) }
+    let add = hooks.add
+    let notify = hooks.observe
+    let opaque = bitcast(ptr (), addr(context))
+    if is_null(select_hook(false)):
+        notify(opaque, 3)
+    let first = apply(add, opaque, 5)
+    let selected = select_hook(true)
+    return first + selected(opaque, 7)

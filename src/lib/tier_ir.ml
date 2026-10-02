@@ -16,6 +16,7 @@ type ty =
   | Array of int * ty  (** memory: N elements *)
   | View of ty * bool  (** element, writable *)
   | Ptr of ty
+  | Function_pointer of ty list * ty
   | Record of string
   | Pack of string * bool  (** a stack's columns, writable *)
   | Str
@@ -30,11 +31,13 @@ let rec string_of_ty = function
   | View (t, false) -> "[]" ^ string_of_ty t
   | View (t, true) -> "mut []" ^ string_of_ty t
   | Ptr t -> "ptr " ^ string_of_ty t
+  | Function_pointer (args, result) ->
+      "slow(" ^ String.concat ", " (List.map string_of_ty args) ^ ") -> " ^ string_of_ty result
   | Record name -> name
   | Pack (name, false) -> "pack " ^ name
   | Pack (name, true) -> "mut pack " ^ name
   | Str -> "string"
-  | Void -> "nothing"
+  | Void -> "()"
 
 let is_integer = function
   | Types.SInt | SInt8 | SInt16 | SInt64 | SUint | SUint8 | SUint16 | SUint64 -> true
@@ -93,6 +96,9 @@ and kind =
   | Count_bits of count_kind * expr
   | Call of string * expr list  (** a slow function; aggregates are borrowed *)
   | Extern_call of string * expr list
+  | Function_ref of string
+  | Indirect_call of expr * expr list
+  | Pointer_cast of expr  (** erase or restore a data pointer through ptr () *)
   | Vector_call of string * vector_arg list  (** a run, or a crunch with uniform parameters *)
   | Field of expr * string
   | Elem of expr * expr * bool  (** element of an array, view or pointer; checked *)
@@ -251,6 +257,9 @@ let rec string_of_expr (e : expr) =
   | Compare (_, a, b) -> Printf.sprintf "(%s cmp %s)" (s a) (s b)
   | Logic (c, a, b) -> Printf.sprintf "(%s %s %s)" (s a) (if c then "and" else "or") (s b)
   | Math (f, args) | Call (f, args) | Extern_call (f, args) -> Printf.sprintf "%s(%s)" f (String.concat ", " (List.map s args))
+  | Function_ref f -> "addr(" ^ f ^ ")"
+  | Indirect_call (f, args) -> Printf.sprintf "%s(%s)" (s f) (String.concat ", " (List.map s args))
+  | Pointer_cast a -> Printf.sprintf "bitcast(%s, %s)" (string_of_ty e.ty) (s a)
   | Count_bits (_, a) -> "count_bits(" ^ s a ^ ")"
   | Vector_call (f, _) -> f ^ "(...)"
   | Field (a, f) -> s a ^ "." ^ f

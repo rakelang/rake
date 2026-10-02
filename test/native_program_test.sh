@@ -50,6 +50,16 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   "${cc}" -O2 "${link_flags[@]}" "${test_dir}/abi/native_slow.c" "${tmp}/interop.o" -pthread -o "${tmp}/interop"
   "${runner[@]}" "${tmp}/interop"
 
+  "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/callbacks.o" "${test_dir}/abi/callbacks.rk"
+  "${cc}" -O2 -Wall -Wextra -Werror "${link_flags[@]}" "${test_dir}/abi/callbacks.c" "${tmp}/callbacks.o" -o "${tmp}/callbacks"
+  "${runner[@]}" "${tmp}/callbacks"
+  expected="$("${rakec}" --interpret "${test_dir}/program/callbacks.rk")"
+  test "${expected}" = 31
+  "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/local-callbacks.o" "${test_dir}/program/callbacks.rk"
+  "${cc}" -O2 "${link_flags[@]}" "${tmp}/local-callbacks.o" -o "${tmp}/local-callbacks"
+  actual=0; "${runner[@]}" "${tmp}/local-callbacks" || actual=$?
+  test "${actual}" = "${expected}"
+
   # Verification applies to the embedded kernels in the final mixed object.
   "${rakec}" --verify-native --target "${profile}" -o "${tmp}/mixed.o" "${test_dir}/abi/native_mixed.rk"
   "${cc}" -O2 "${link_flags[@]}" "${tmp}/mixed.o" -o "${tmp}/mixed"
@@ -92,7 +102,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
 done
 
 # These cases must retain their interpreter traps in the native C lowering.
-for name in add_overflow convert_range divide_zero float_convert index_bounds slice_bounds; do
+for name in add_overflow convert_range divide_zero float_convert index_bounds slice_bounds null_callback; do
   source="${test_dir}/program/trap/${name}.rk"
   if "${rakec}" --interpret "${source}" >"${tmp}/trap.log" 2>&1; then
     echo "${name}: interpreter did not trap" >&2; exit 1

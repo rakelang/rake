@@ -156,7 +156,8 @@ block refer only to scalar loops inside that block.
 
 Crunches, rakes and fused regions remain pure vector kernels and reject slow
 blocks. Put scalar orchestration in the run that calls them. Blocks and whole
-programs containing vector work currently compile for WebAssembly only.
+programs with memory runs currently compile for WebAssembly only. The
+development compiler also supports native slow functions and register kernels.
 
 ## Definitions
 
@@ -176,7 +177,8 @@ in any order and recurse.
 
 A record declared with a header is a C struct whose layout C owns: the unit
 includes the header, and each declared scalar, pointer or scalar-array field
-gets a `_Static_assert` that its C size matches. Other records have Rake's
+gets a `_Static_assert` that its C size matches. Function-pointer fields are
+also checked in the development compiler. Other records have Rake's
 layout. A record can't contain itself, directly or through other records.
 
 `state` is module state: a C static that holds its value for the life of the
@@ -186,7 +188,8 @@ static. `const` binds a compile-time value computed from literals. Vector code
 may use an integer or float constant as a literal.
 
 `extern slow` declares a C function from a header. Its parameters are
-scalars, pointers and records passed by value.
+scalars, pointers and records passed by value. The development compiler also
+accepts typed function pointers.
 
 ## Types
 
@@ -196,6 +199,8 @@ scalars, pointers and records passed by value.
 | `[N]T` | an array of `N >= 1` elements held by value |
 | `[]T` | a view: a borrowed run of elements with an `i32` count |
 | `ptr T` | a C pointer, for extern interoperation |
+| `ptr ()` | an opaque C `void *`, available in the development compiler |
+| `slow(T, ...) -> U` | a typed C function pointer, available in the development compiler |
 | `Name` | a record |
 | `mut T` | in a parameter list: a view, pack, array or record the callee writes |
 
@@ -276,6 +281,59 @@ A pointer is always indexed `p[unchecked i]`, because it carries no bounds.
 the interpreter, so every target agrees bit for bit. Float `min` and `max` of
 a NaN give a NaN. Of two zeros, `min` gives negative zero if either is, and
 `max` positive zero if either is.
+
+## Function pointers and callbacks
+
+The development compiler after 0.6.0-beta supports C function pointers in
+slow code. Write `slow(i32) -> i32` for a pointer to a function taking an
+`i32` and returning an `i32`. Write `-> ()` for a callback returning C
+`void`. Function-pointer arguments and results use the platform C ABI.
+They may be scalars, data pointers, other function pointers or C structs
+passed by value.
+
+`addr(function)` takes the address of a slow function or an imported C
+function. A callback carries no captured variables, so pass its context
+explicitly. For an opaque C context, `ptr ()` corresponds to `void *`.
+`bitcast(ptr (), pointer)` erases a data pointer's type, and
+`bitcast(ptr Context, opaque)` restores it. The context must still be alive
+and have the restored type and alignment when it is accessed.
+
+<!-- rake-check: run 12 -->
+```rake
+record Context {
+  i32: total;
+}
+
+slow add(opaque: ptr (), value: i32) -> i32:
+  let context = bitcast(ptr Context, opaque)
+  context.total <- context.total + value
+  return context.total
+
+slow apply(callback: slow(ptr (), i32) -> i32, context: ptr ()) -> i32:
+  return callback(context, 8)
+
+slow main() -> i32:
+  context: Context := Context { total: 4 }
+  return apply(addr(add), bitcast(ptr (), addr(context)))
+```
+
+Function pointers can be stored in records, arrays and module state, returned
+from functions and passed between C and Rake. Call a binding as
+`callback(arguments)`. For a record field, bind it first with
+`let callback = hooks.callback`. A zero-initialised function pointer is
+null. `is_null(callback)` checks it, and calling it traps.
+
+A slow callback with a record or array parameter must use an explicit
+`ptr T` parameter. Ordinary slow aggregate parameters borrow through Rake's
+own convention. `addr(main)` is rejected because the process entry has a
+compiler-owned startup adapter. Function pointers cannot be converted to
+data pointers, and this stage adds no closures or lambdas.
+
+The C emitter uses typed function-pointer declarations and calls directly
+through them. It delegates the slow ABI to the platform compiler, including
+WebAssembly's indirect-call table. The interpreter invokes local callbacks
+by their function identity. Imported C callbacks need the same external
+implementation as a direct C call.
 
 ## Calling vector code
 
@@ -361,22 +419,24 @@ rejecting a program that breaks it.
 
 ## The C unit
 
-On WebAssembly, each slow function is a `static` C function. A parameterless
-entry is `int main(void)`; a process entry uses the adapter described above.
+Ordinary slow functions have external C linkage in the development compiler,
+including on WebAssembly, so independently compiled C can call them. Extracted
+block helpers remain internal. A parameterless entry is `int main(void)`,
+and a process entry uses the adapter described above.
 Records, arrays and views are structs. State and embedded data are statics.
 Checked arithmetic, conversions, indexing and slices are small inline helpers
 that call `__builtin_trap`. Each run is an external, never-inlined `void`
 function.
 
-On the development compiler's native path, ordinary slow functions
-instead have external linkage and use the platform C ABI. Scalar and pointer
+On the development compiler's native path, slow functions use the platform
+C ABI. Scalar and pointer
 arguments pass by value, array and record arguments are borrowed pointers,
 and record results return by value. Header-backed records retain their C
 layout, including native pointer widths and padding. Rake emits checked
 scalar C; the platform compiler owns its register allocation and calling
 convention. This does not delegate vector kernel compilation to C.
 
-Unions, callbacks and function pointers remain work in progress. Native slow frames are
+Unions remain work in progress. Native slow frames are
 thread-local, while module state remains process-wide and needs the caller's
 normal synchronization when several threads use it.
 

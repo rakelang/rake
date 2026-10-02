@@ -273,6 +273,10 @@ typ:
   | MASK { mk_node TMask $startpos $endpos }
   | MUT t = typ { mk_node (TMut t) $startpos $endpos }
   | PTR t = typ { mk_node (TPtr t) $startpos $endpos }
+  | SLOW LPAREN args = separated_list(COMMA, typ) RPAREN ARROW result = typ {
+      mk_node (TFun (args, result)) $startpos $endpos
+    }
+  | LPAREN RPAREN { mk_node TUnit $startpos $endpos }
   | LBRACKET n = INT_LIT RBRACKET t = typ { mk_node (TArray (Int64.to_int n, t)) $startpos $endpos }
   | LBRACKET RBRACKET t = typ { mk_node (TView t) $startpos $endpos }
   | name = TYPE_IDENT { mk_node (TNamed name) $startpos $endpos }

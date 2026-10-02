@@ -10,7 +10,7 @@ each, with the category its directory implies:
 | `reject` | `test/reject/` | the checker rejects it with the recorded diagnostic substring |
 | `program` | `test/program/` | `main` gives the same result in `rakec --interpret` and as WebAssembly built from the emitted C |
 | `trap` | `test/program/trap/` | traps in both |
-| `abi` | `test/abi/` | a C harness calls its runs and checks the results |
+| `abi` | `test/abi/` | independently compiled C checks layouts and calls across the C boundary |
 | `future` | `examples/future/` | a design sketch, not compiled |
 
 To add a case, put one `.rk` file in its directory and one row in
@@ -52,6 +52,13 @@ and ABI agreement. Mixed-program fixtures check the final object's kernels,
 signed-zero transfer through the scalar C boundary, and x86 reductions against
 both the selected-profile interpreter and hand-derived lane counts. Native
 memory runs remain work in progress.
+
+The callback fixture uses independently authored C prototypes and padded
+structs. C retains and invokes Rake function pointers, and Rake invokes
+pointers returned by C, including callbacks with opaque contexts, mixed
+integer/float arguments and void results. It runs on every physical profile
+and WebAssembly. The local callback fixture also agrees with the interpreter,
+including the trap on an indirect call through a null pointer.
 
 The argument fixture runs through actual process startup and compares its
 byte-level result with independent C and the interpreter. It covers no extra

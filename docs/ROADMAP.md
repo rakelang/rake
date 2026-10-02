@@ -26,7 +26,8 @@ will confirm vector memory operations and reject scalar cleanup loops.
 
 The development compiler also accepts typed `argc`/`argv` entry, adapting the
 runtime's C pointer array without incompatible pointer aliasing. The C interface
-still needs unions, function pointers and callbacks. We will check layouts,
+supports typed function pointers and noncapturing callbacks. Unions remain
+work in progress. We will check layouts,
 alignment, field offsets and
 imported/exported calls against independently compiled C headers on x86-64
 and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
@@ -79,9 +80,9 @@ tests will compare the emitted result with the verified optimised graph.
 
 ### Implement the unavailable language capabilities
 
-We will work down the capability catalogue, which currently reports 88 checked
-and 35 unavailable capabilities. The outstanding language areas
-include tuple and function types, lambdas, pipelines, type aliases, spread
+We will work down the capability catalogue, which currently reports 89 checked
+and 34 unavailable capabilities. The outstanding language areas
+include tuple types, closures, lambdas, pipelines, type aliases, spread
 parameters, record updates, inline tines, outer products and several masked
 operations.
 

@@ -1,0 +1,4 @@
+state callback: slow(i32) -> i32
+
+slow main() -> i32:
+    return callback(1)

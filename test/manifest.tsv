@@ -75,3 +75,6 @@ test/reject/run_while.rk	reject	wasm-simd128	4	frontend	reject	vector code loops
 test/reject/run_nested_yield.rk	reject	wasm-simd128	4	frontend	reject	a nested traversal can't yield or store
 test/program/trap/output_count.rk	trap	wasm-simd128	4	program	trap	-
 test/program/slow_blocks.rk	program	wasm-simd128	4	program	differential	-
+test/program/callbacks.rk	program	wasm-simd128	4	program	differential	-
+test/program/trap/null_callback.rk	trap	wasm-simd128	4	program	trap	-
+test/abi/callbacks.rk	abi	wasm-simd128	4	program	c-interop	-

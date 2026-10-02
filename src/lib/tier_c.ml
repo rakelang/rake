@@ -119,7 +119,11 @@ let rec tag = function
   | Array (n, t) -> Printf.sprintf "a%d_%s" n (tag t)
   | View (t, _) -> "v_" ^ tag t
   | Ptr t -> "p_" ^ tag t
+  | Function_pointer (args, result) ->
+      let part ty = let text = tag ty in Printf.sprintf "%d_%s" (String.length text) text in
+      "fn_" ^ String.concat "_" (List.map part args) ^ "_ret_" ^ part result
   | Record name -> "r" ^ name
+  | Void -> "void"
   | ty -> invalid_arg ("tag " ^ string_of_ty ty)
 
 let rec ctype u ty =
@@ -141,6 +145,14 @@ let rec ctype u ty =
         Buffer.add_string u.types (Printf.sprintf "typedef struct { %s *data; int32_t count; } %s;\n" element name));
       name
   | Ptr t -> ctype u t ^ " *"
+  | Function_pointer (args, result) ->
+      let name = "rake_" ^ tag ty in
+      if not (Hashtbl.mem u.defined name) then (
+        let result = ctype u result and args = List.map (ctype u) args in
+        Hashtbl.replace u.defined name ();
+        Buffer.add_string u.types (Printf.sprintf "typedef %s (*%s)(%s);\n" result name
+          (if args = [] then "void" else String.concat ", " args)));
+      name
   | Record name -> record_c u name
   | Pack (stack, false) -> pack_type u stack false
   | Pack (stack, true) -> pack_type u stack true
@@ -365,6 +377,23 @@ let rec expr u scope (e : expr) : string =
           args
       in
       Printf.sprintf "%s(%s)" name (String.concat ", " args)
+  | Function_ref name ->
+      if List.exists (fun f -> f.fname = name) u.program.slows then "(&" ^ slow_symbol u name ^ ")"
+      else "(&" ^ name ^ ")"
+  | Pointer_cast value -> Printf.sprintf "((%s)(%s))" (ctype u e.ty) (go value)
+  | Indirect_call (callee, args) ->
+      let result, params = match callee.ty with Function_pointer (params, result) -> result, params | _ -> assert false in
+      let name = "rake_invoke_" ^ tag callee.ty in
+      let callback_type = ctype u callee.ty and result_type = ctype u result in
+      complete u result;
+      List.iter (complete u) params;
+      let declarations = List.mapi (fun i ty -> Printf.sprintf "%s a%d" (ctype u ty) i) params in
+      let arguments = List.mapi (fun i _ -> Printf.sprintf "a%d" i) params in
+      helper u name (Printf.sprintf
+        "static inline %s %s(%s callback%s)\n{\n    if (!callback) __builtin_trap();\n    %scallback(%s);\n}\n"
+        result_type name callback_type (if declarations = [] then "" else ", " ^ String.concat ", " declarations)
+        (if result = Void then "" else "return ") (String.concat ", " arguments));
+      Printf.sprintf "%s(%s)" name (String.concat ", " (go callee :: List.map go args))
   | Vector_call (name, args) ->
       (* A crunch with uniform parameters, reached through its boundary. *)
       let args = List.map (function Arg_uniform a -> go a | Arg_memory a -> go a) args in
@@ -844,8 +873,8 @@ let rec same_expr (a : expr) (b : expr) =
 let rec mentions name (e : expr) =
   match e.k with
   | Var n -> n = name
-  | Int _ | Float _ | Bool _ | Str_lit _ | Global _ -> false
-  | Unary (_, a) | Convert (_, _, a) | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> mentions name a
+  | Int _ | Float _ | Bool _ | Str_lit _ | Global _ | Function_ref _ -> false
+  | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> mentions name a
   | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) -> mentions name a || mentions name b
   | Cond (a, b, c) | Slice (a, b, c) -> mentions name a || mentions name b || mentions name c
   | _ -> true
@@ -1075,7 +1104,7 @@ and loop u rs scope indent var from upto by body =
   let accesses = ref [] and bound = ref [] in
   let rec has_memory (e : expr) =
     match e.k with
-    | Elem _ | Call _ | Extern_call _ | Vector_call _ -> true
+    | Elem _ | Call _ | Extern_call _ | Indirect_call _ | Vector_call _ -> true
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) -> has_memory a || has_memory b
     | Unary (_, a) | Convert (_, _, a) -> has_memory a
     | Cond (a, b, c) -> has_memory a || has_memory b || has_memory c
@@ -1163,8 +1192,8 @@ and loop u rs scope indent var from upto by body =
     match e.k with
     | Elem _ when Node_table.mem exempt (Obj.repr e) -> false
     | Var n -> n = name
-    | Int _ | Float _ | Bool _ | Str_lit _ | Global _ -> false
-    | Unary (_, a) | Convert (_, _, a) | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> expr_uses name a
+    | Int _ | Float _ | Bool _ | Str_lit _ | Global _ | Function_ref _ -> false
+    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Math (_, [ a ]) | Count_bits (_, a) | Field (a, _) | Length a | Addr a | Is_null a -> expr_uses name a
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) -> expr_uses name a || expr_uses name b
     | Cond (a, b, c) | Slice (a, b, c) -> expr_uses name a || expr_uses name b || expr_uses name c
     | _ -> true
@@ -1461,7 +1490,7 @@ let rec approximate_size u = function
       match List.find_opt (fun r -> r.rname = name) u.program.records with
       | Some { rheader = None; rfields; _ } -> List.fold_left (fun acc (_, t) -> acc + max 4 (approximate_size u t)) 0 rfields
       | _ -> 0)
-  | Ptr _ -> (match u.execution_target with WebAssembly -> 4 | Native_program _ -> 8)
+  | Ptr _ | Function_pointer _ -> (match u.execution_target with WebAssembly -> 4 | Native_program _ -> 8)
   | View _ -> (match u.execution_target with WebAssembly -> 8 | Native_program _ -> 16)
   | _ -> 0
 
@@ -1505,7 +1534,7 @@ let slow_function u (f : slow_func) =
   let signature =
     if f.fname = "main" && entry_parameters f.fparams = Some No_arguments then "int main(void)"
     else
-      let linkage = match u.execution_target with Native_program _ when not f.fblock && f.fname <> "main" -> "" | _ -> "static " in
+      let linkage = if f.fblock || f.fname = "main" then "static " else "" in
       Printf.sprintf "%s%s%s %s(%s)" linkage (if f.fblock then "__attribute__((noinline)) " else "")
         (ctype u f.fresult) (slow_symbol u f.fname)
         (if params = [] then "void" else String.concat ", " params)
@@ -1516,10 +1545,11 @@ let slow_function u (f : slow_func) =
   let rec framed_expr (e : expr) =
     match e.k with
     | Block (body, value) -> framed_decls body @ Option.fold ~none:[] ~some:framed_expr value
-    | Unary (_, a) | Convert (_, _, a) | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> framed_expr a
+    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> framed_expr a
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> framed_expr a @ framed_expr b
     | Cond (a, b, c) | Slice (a, b, c) -> framed_expr a @ framed_expr b @ framed_expr c
     | Call (_, args) | Extern_call (_, args) | Math (_, args) | Array_lit args -> List.concat_map framed_expr args
+    | Indirect_call (callee, args) -> List.concat_map framed_expr (callee :: args)
     | Vector_call (_, args) -> List.concat_map (function Arg_uniform e | Arg_memory e -> framed_expr e) args
     | Record_lit (_, fields) | Pack_lit (_, fields) -> List.concat_map (fun (_, e) -> framed_expr e) fields
     | _ -> []
@@ -1629,10 +1659,11 @@ let boundaries u =
     | Vector_call (name, args) ->
         if not (List.exists (fun r -> r.run_name = name) u.program.runs) then Hashtbl.replace called name ();
         List.iter (function Arg_uniform a | Arg_memory a -> walk_expr a) args
-    | Unary (_, a) | Convert (_, _, a) | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> walk_expr a
+    | Unary (_, a) | Convert (_, _, a) | Pointer_cast a | Field (a, _) | Length a | Addr a | Is_null a | Count_bits (_, a) -> walk_expr a
     | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> walk_expr a; walk_expr b
     | Cond (a, b, c) | Slice (a, b, c) -> walk_expr a; walk_expr b; walk_expr c
     | Call (_, args) | Extern_call (_, args) | Math (_, args) | Array_lit args -> List.iter walk_expr args
+    | Indirect_call (callee, args) -> List.iter walk_expr (callee :: args)
     | Record_lit (_, fields) | Pack_lit (_, fields) -> List.iter (fun (_, v) -> walk_expr v) fields
     | Block (body, value) -> List.iter walk body; Option.iter walk_expr value
     | _ -> ()
@@ -1710,8 +1741,8 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
             List.filter_map
               (fun (field, ty) ->
                 match ty with
-                | Sc _ | Ptr _ ->
-                    let size = match ty with Sc s -> string_of_int (bytes s) | _ -> "sizeof(void *)" in
+                | Sc _ | Ptr _ | Function_pointer _ ->
+                    let size = match ty with Sc s -> string_of_int (bytes s) | _ -> "sizeof(" ^ ctype u ty ^ ")" in
                     Some (Printf.sprintf "_Static_assert(sizeof(((%s *)0)->%s) == %s, \"%s.%s is declared %s in Rake\");\n" r.rname field size r.rname field (string_of_ty ty))
                 | Array (n, Sc s) ->
                     Some (Printf.sprintf "_Static_assert(sizeof(((%s *)0)->%s) == %d, \"%s.%s is declared %s in Rake\");\n" r.rname field (n * bytes s) r.rname field (string_of_ty ty))

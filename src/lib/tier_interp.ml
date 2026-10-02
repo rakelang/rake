@@ -25,6 +25,7 @@ type value =
   | VRec of string * value array  (** fields in declaration order *)
   | VView of view
   | VPtr of pointer
+  | VFunction of string
   | VNull
   | VPack of (string * value) list
   | VRack of R.value
@@ -193,7 +194,7 @@ let zero_of env =
     | Sc s -> VInt (s, 0L)
     | Array (n, t) -> VArr (Array.init n (fun _ -> zero t))
     | Record name -> VRec (name, Array.of_list (List.map (fun (_, t) -> zero t) (find_record env.machine.program name).rfields))
-    | Ptr _ -> VNull
+    | Ptr _ | Function_pointer _ -> VNull
     | _ -> VUnit
   in
   zero
@@ -280,6 +281,17 @@ let rec eval env (e : expr) : value =
       match Hashtbl.find_opt env.machine.externs name with
       | Some f -> f values
       | None -> trap loc "extern %s has no implementation in this interpreter" name)
+  | Function_ref name -> VFunction name
+  | Pointer_cast value -> ev value
+  | Indirect_call (callee, args) -> (
+      match ev callee with
+      | VFunction name ->
+          if List.exists (fun f -> f.fname = name) env.machine.program.slows then call env loc name args
+          else (match Hashtbl.find_opt env.machine.externs name with
+            | Some f -> f (List.map ev args)
+            | None -> trap loc "extern %s has no implementation in this interpreter" name)
+      | VNull -> trap loc "call through a null function pointer"
+      | _ -> trap loc "call through a non-function")
   | Vector_call (name, args) -> vector_call env loc name args
   | Field _ | Elem _ -> fst (place env e) ()
   | Convert (kind, target, a) -> convert loc kind target (ev a)

@@ -88,8 +88,7 @@ let rec typ_to_t env (ty: typ) : t =
       | Some t -> t
       | None -> type_errorf ty.loc "Unknown single type: %s" name)
   | TMask -> Mask
-  | TFun (args, ret) ->
-      Fun (List.map (typ_to_t env) args, typ_to_t env ret)
+  | TFun _ -> type_errorf ty.loc "C function pointers belong to slow definitions"
   | TTuple ts -> Tuple (List.map (typ_to_t env) ts)
   | TUnit -> Unit
   | TArray _ | TView _ | TPtr _ | TMut _ | TNamed _ ->

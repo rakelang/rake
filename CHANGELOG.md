@@ -7,6 +7,11 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Slow code supports typed C function pointers, noncapturing callbacks and
+  opaque `ptr ()` contexts. `addr(function)` forms a callback, and data
+  pointers can be erased or restored through `bitcast(ptr T, pointer)`.
+  Native and WebAssembly calls use the platform C ABI, with null indirect
+  calls trapping. Unions remain work in progress.
 - A process entry may take `argc: i32, argv: ptr ptr u8`. Native C and WASI
   startup pass the count, zero-terminated byte strings and trailing null
   pointer through a compiler-owned typed adapter. The interpreter accepts
