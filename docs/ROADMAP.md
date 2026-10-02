@@ -1,73 +1,165 @@
 # Roadmap
 
-The compiler covers part of what [the goals](GOALS.md) promise. This page
-lists the rest, grouped by the work it needs. [The changelog](../CHANGELOG.md)
-records what each release added.
+Rake 0.4.0-beta establishes the language's vector contract and proves it on
+three target profiles. This roadmap states what we intend to build next.
+[The changelog](../CHANGELOG.md) records work once it has landed, while
+[the goals](GOALS.md) describe the principles that each change must preserve.
 
-## Runs on x86 and AArch64
+## Capabilities and coverage
 
-Runs, packs and whole programs compile on `wasm-simd128` only. On `x86-avx2`
-and `aarch64-neon` they need traversal in the native IR, full-rack loops with
-native loads and stores, tails with masked memory and benign operands, the
-[planned x86-64 boundary](spec/02_packs_and_run.md#planned-x86-64-boundary)
-and its AArch64 counterpart, and tests that call them from C over empty, short,
-exact and tail counts and check the object for vector memory operations and no
-scalar cleanup loop.
+### Compile runs, packs and whole programs for physical targets
 
-## Operations on every profile
+We will extend `run`, packs and whole programs from `wasm-simd128` to
+`x86-avx2` and `aarch64-neon`. That work includes native traversal, full-rack
+loads and stores, masked tails with benign operands, stable C boundaries and
+runtime tests over empty, short, exact and tail counts. The object verifier
+will confirm vector memory operations and reject scalar cleanup loops.
 
-[Racks and targets](spec/01_racks_targets_and_abi.md) lists what each profile
-compiles. The gaps:
+WebAssembly will continue to honour the virtual machine's abstraction. Rake
+selects vector instructions, but leaves physical register allocation to the
+WebAssembly runtime. Its promise is the same on every target: code outside a
+`slow` block uses vector instructions throughout or compilation fails.
 
-- On `x86-avx2` and `aarch64-neon`:
-  - `min`, `max`, `abs`, `floor`, `ceil`, `trunc` and `nearest`,
-  - `exp`, `log`, `log2` and `tanh`,
-  - conditionals on a uniform,
-  - `all`, `any`, `bitmask`, `extract`, `insert` and shuffles,
-  - integer racks, and
-  - gather.
-- On `aarch64-neon`: reductions and scans.
-- On every profile:
-  - `lanes` and `@`,
-  - moving whole lanes: `shift_left`, `shift_right`, `rotate_left`,
-    `rotate_right` and `zip_low`,
-  - `sin`, `cos`, `tan`, `pow` and `atan2`, and float `%`,
-  - `f64s`, `i8s`, `u16s` and `bools` racks,
-  - comparisons, `min` and `max` of `u32s` and `u64s`, and `min` and `max`
-    of `i64s`,
-  - integer reductions,
-  - widening `i16s` lanes into 32-bit lanes, and narrow columns into 64-bit lanes,
-  - scalar arithmetic in a crunch, as on reductions' results,
-  - scatter, on a profile with a scatter instruction, and
-  - compression and expansion, as [memory
-    operations](spec/07_memory_operations.md) design them.
+### Add and validate target profiles
 
-An operation may lower to several vector instructions when the profile's
-published sequence allows it. It may never lower to scalar lanes, helper
-calls, split racks or memory temporaries.
+We will implement `x86-sse2`, `x86-avx512`, a scalar fallback and, after the
+CPU profiles are complete, GPU targets. Each physical profile will own its
+instruction selection, register allocation, calling convention, object
+verification and differential runtime tests.
 
-## Fused rewrites
+We will validate relaxed WebAssembly SIMD on the competition runtime before
+considering it a default. Until then it remains explicitly opt-in.
 
-The optimiser substitutes fused names and forms fused multiply-adds. The
-language also allows reassociation, factoring, distribution, sharing of
-common subexpressions and strength reduction inside a fused region, chosen by
-each profile's operation costs. Each rewrite needs tests whose expected bits
-come from the verified optimised graph.
+### Complete AVX2 and NEON operation coverage
 
-## More profiles
+We will bring the physical profiles up to the language's published operation
+set. The next work covers substantial maths, integer racks, shuffles, lane
+extraction and insertion, reductions and scans, uniform conditionals and
+gather. AVX2 and NEON will gain an operation only when their compiled result
+matches the interpreter and their object verifier proves the selected vector
+sequence.
 
-`x86-avx512` and `x86-sse2` each need their own selection, register
-allocation, assembly, calling convention, object verification and runtime
-tests. AVX-512 should use its mask registers for through blocks, masked memory
-and tails. SSE2 must reject any operation whose only form would split a rack,
-call a helper or spill. The planned `scalar` profile would run Rake without
-the one-register guarantee.
+### Complete cross-profile operation coverage
 
-## Forms that parse but don't compile
+We will fill the gaps shared by every profile. These include lane movement,
+transcendental functions, float remainder, `f64s`, the remaining integer and
+boolean rack types, unsigned comparisons and extrema, integer reductions,
+widening conversions, scalar arithmetic over rack results, scatter,
+compression and expansion.
 
-Tuples, lambdas, expression pipelines and single-record layouts have AST forms
-but no source syntax or semantics yet. Each needs a language decision before it
-can become source.
+An operation may lower to several vector instructions when a profile publishes
+that sequence. It may not lower to scalar lanes, helper calls, split racks or
+memory temporaries outside `slow` code.
+
+### Expand fused optimisation
+
+We will extend the optimiser beyond substitution and fused multiply-add
+formation. Planned rewrites include reassociation, factoring, distribution,
+common-subexpression sharing and strength reduction within a fused region.
+Each profile will choose among legal rewrites using its operation costs, and
+tests will compare the emitted result with the verified optimised graph.
+
+### Implement the unavailable language capabilities
+
+We will work down the capability catalogue from its 0.4.0-beta baseline of 86
+checked and 36 unavailable capabilities. The outstanding language areas
+include tuple and function types, lambdas, pipelines, type aliases, spread
+parameters, record updates, inline tines, outer products and several masked
+operations.
+
+A capability becomes supported only when one compiler revision contains its
+syntax and semantics, source-located diagnostics, interpreter behaviour,
+compiled implementation, object-verifier rules, tests and documentation.
+
+## Grammar and syntax
+
+### Resolve internal forms that have no language meaning
+
+We will either give every internal AST form source syntax and defined semantics
+or remove it. Parser and capability reports will then describe only constructs
+that the language can accept or deliberately rejects as planned work.
+
+### Design modules and separate compilation
+
+We will design one coherent system for modules, imports, namespaces, packages
+and separate compilation. The design must preserve Rake's explicit target
+contract and produce stable boundaries that native and WebAssembly callers can
+inspect. We will not add isolated import syntax before that system is defined
+end to end.
+
+### Teach the vector notation at the point of use
+
+We will keep the tutorial, diagnostics and reference examples aligned so that
+`<uniform>`, `#tine`, fused `| name <| value` bindings, `through` and `sweep`
+are introduced when a learner first needs them. Compiler messages will name
+the same concepts as the documentation and point to the relevant lesson.
+
+### Remove the negative-uniform ambiguity
+
+We will choose and validate a spelling for negative uniforms that cannot be
+mistaken for an assignment arrow when a programming font enables ligatures.
+The compiler, grammar, formatter, highlighter and documentation will change
+together. Until then the website will continue to disable ligatures inside
+uniforms such as `<-1.0>`.
+
+### Review layout and delimiters against real programs
+
+We will test the current combination of indentation-sensitive bodies and
+braces for stacks and records against larger programs, formatter design and
+editor recovery. We will retain the hybrid only if it remains the clearest
+single rule set. Any syntax change will replace the old form across the
+compiler, grammar, examples and documentation in one release.
+
+## Tooling
+
+### Build a language server
+
+We will provide a language server with live diagnostics, completion, hover,
+rename and semantic navigation. It will use the compiler's parser, types and
+source locations rather than maintaining a second understanding of Rake.
+
+### Add a canonical formatter
+
+We will build a formatter that produces one stable layout for declarations,
+indentation-sensitive bodies, records, stacks, fused bindings, tines and
+sweeps. Formatting will be idempotent and checked against every example in the
+documentation.
+
+### Package editor integrations
+
+We will release editor extensions that combine Tree-sitter highlighting, the
+formatter and the language server. The first supported editors will be chosen
+by actual use, and each package will carry a versioned compatibility statement
+for the compiler and grammar.
+
+### Add source-level debugging and profiling
+
+We will map compiled instructions and runtime costs back to Rake source. The
+debugger will expose uniforms, racks, masks and slow-code state without
+pretending that WebAssembly virtual registers are physical registers. The
+profiler will distinguish vector work, slow work, loads, stores and rejected
+scalarisation opportunities.
+
+### Ship binary toolchain bundles
+
+We will publish reproducible `rakec` bundles for the supported host platforms,
+with checksums, version information and the matching grammar and documentation.
+Users will not need an OCaml or Nix development environment to compile Rake.
+
+### Grow the playground into a project environment
+
+We will extend the tutorial and single-file compiler with persistent projects,
+shareable links, multiple files and explicit compiler-version selection. The
+interactive lessons will remain reproducible examples rather than becoming a
+separate dialect of the language.
+
+### Publish and verify every Tree-sitter package
+
+We will publish the generated Tree-sitter bindings to the relevant package
+registries and test installation from those registries. SwiftPM will run in an
+official Swift environment with Foundation available, alongside the npm,
+Python, Rust and Go package checks. Generated bindings, comments, queries and
+version metadata will continue to come from the same current grammar revision.
 
 ## Release gates
 
@@ -79,8 +171,8 @@ has all of these:
 - the interpreter covers ordinary, boundary and exceptional inputs,
 - the compiled code matches the interpreter,
 - the object verifier checks the profile's rules for it, and
-- `rakec --print-capabilities`, the tests, the changelog and the
-  documentation agree.
+- `rakec --print-capabilities`, the tests, the changelog and the documentation
+  agree.
 
-A published benchmark records its source, compiler version, profile,
-command, input size, machine and baseline.
+A published benchmark records its source, compiler version, profile, command,
+input size, machine and baseline.
