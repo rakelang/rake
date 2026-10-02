@@ -209,10 +209,7 @@ let cross_lane_function_names = function
         allocated
   | Neon _ | Wasm _ -> []
 
-let emit_verified_object ~source ~config program =
-  let* allocated = compile ~config program in
-  let* assembly = emit_allocated ~source allocated in
-  let* object_bytes = assemble ~source ~config assembly in
+let verify_allocated_object ~source ~(config : Target.config) allocated object_bytes =
   let functions = function_names allocated in
   match allocated with
   | Wasm _ -> (
@@ -228,4 +225,10 @@ let emit_verified_object ~source ~config program =
     with
     | Ok () -> Ok object_bytes
     | Error error ->
-        Error { stage = Verify; message = Native_verify.format_error error }
+      Error { stage = Verify; message = Native_verify.format_error error }
+
+let emit_verified_object ~source ~config program =
+  let* allocated = compile ~config program in
+  let* assembly = emit_allocated ~source allocated in
+  let* object_bytes = assemble ~source ~config assembly in
+  verify_allocated_object ~source ~config allocated object_bytes

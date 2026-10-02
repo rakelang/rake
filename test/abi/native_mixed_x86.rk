@@ -1,0 +1,5 @@
+crunch native_sum(<value: f32>, <factor: f32>) -> f32:
+  sum(<value> * <factor> + <1.0>)
+
+slow main() -> i32:
+  return i32(native_sum(<2.0>, <3.0>))

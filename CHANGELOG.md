@@ -14,7 +14,14 @@ only when the compiler implements it and the tests cover it.
 - Native slow-only programs emit platform C and compile to x86-64 or
   AArch64 objects. Their public slow functions use the platform C ABI,
   with header-backed struct imports, pointer parameters and struct returns.
-  Native mixed vector/slow units and runs remain work in progress.
+  Native runs and packs remain work in progress.
+- Native mixed programs embed Rake-selected register assembly in their C
+  unit. Slow callers use uniform `f32` parameters and `f32` results, and
+  both object modes check the kernels in the final compiled object. Other
+  scalar kernel boundaries remain work in progress.
+- The interpreter accepts an explicit target profile for reference `f32`
+  rack widths. The browser emits native mixed C and interprets it at that
+  profile's width; it does not execute native machine code.
 - Native slow frames are thread-local; independent host threads can call
   exported functions with large recursive locals. Module state stays shared.
 - Pointer fields in C struct declarations are checked against

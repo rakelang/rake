@@ -141,7 +141,7 @@ let select_function (func : N.func) =
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
-    | None | Some (N.Rack N.F32) | Some N.Mask -> ()
+    | None | Some (N.Rack N.F32) | Some (N.Scalar N.F32) | Some N.Mask -> ()
     | Some typ ->
         fail func.name
           ("unsupported result type " ^ N.string_of_typ typ

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Semantic correctness: the existing interpreter supplies scalar-program
-# answers. External agreement: independently compiled C supplies struct/ABI
-# layout and calls the Rake object in both directions, on x86 and AArch64.
+# Semantic correctness: the selected-profile interpreter supplies scalar and
+# mixed-program answers. External agreement: independent C checks layout and
+# ABI calls; hand-derived lane counts check native reductions.
 set -euo pipefail
 ulimit -c 0
 test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +50,29 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   "${cc}" -O2 "${link_flags[@]}" "${test_dir}/abi/native_slow.c" "${tmp}/interop.o" -pthread -o "${tmp}/interop"
   "${runner[@]}" "${tmp}/interop"
 
+  # Verification applies to the embedded kernels in the final mixed object.
+  "${rakec}" --verify-native --target "${profile}" -o "${tmp}/mixed.o" "${test_dir}/abi/native_mixed.rk"
+  "${cc}" -O2 "${link_flags[@]}" "${tmp}/mixed.o" -o "${tmp}/mixed"
+  expected="$("${rakec}" --interpret --target "${profile}" "${test_dir}/abi/native_mixed.rk")"
+  actual=0; "${runner[@]}" "${tmp}/mixed" || actual=$?
+  test "${actual}" = "${expected}" && test "${actual}" = 3 || {
+    echo "${profile} mixed C boundary: compiled ${actual}, interpreter ${expected}, expected 3" >&2; exit 1;
+  }
+  if [[ "${profile}" != aarch64-neon ]]; then
+    "${rakec}" --verify-native --target "${profile}" -o "${tmp}/mixed.o" "${test_dir}/abi/native_mixed_x86.rk"
+    "${cc}" -O2 "${link_flags[@]}" "${tmp}/mixed.o" -o "${tmp}/mixed"
+    expected="$("${rakec}" --interpret --target "${profile}" "${test_dir}/abi/native_mixed_x86.rk")"
+    case "${profile}" in
+      x86-sse2) oracle=28 ;;
+      x86-avx2) oracle=56 ;;
+      x86-avx512) oracle=112 ;;
+    esac
+    actual=0; "${runner[@]}" "${tmp}/mixed" || actual=$?
+    test "${actual}" = "${expected}" && test "${actual}" = "${oracle}" || {
+      echo "${profile} mixed reduction: compiled ${actual}, interpreter ${expected}, expected ${oracle}" >&2; exit 1;
+    }
+  fi
+
   "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/arguments.o" "${argument_source}"
   "${cc}" -O2 "${link_flags[@]}" "${tmp}/arguments.o" -o "${tmp}/arguments"
   "${cc}" -O2 "${link_flags[@]}" "${test_dir}/abi/process_arguments.c" -o "${tmp}/argument-oracle"
@@ -83,4 +106,4 @@ for name in add_overflow convert_range divide_zero float_convert index_bounds sl
     echo "${name}: expected SIGILL trap, got status ${trap_status}" >&2; exit 1;
   }
 done
-echo "native slow-program semantic and C ABI checks passed"
+echo "native scalar/mixed-program semantic and C ABI checks passed"

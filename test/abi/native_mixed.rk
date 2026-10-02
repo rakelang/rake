@@ -1,0 +1,15 @@
+~~ The C compiler lowers orchestration; these kernels remain Rake-owned assembly.
+crunch native_identity(<value: f32>) -> f32:
+  <value>
+
+crunch native_scale(values: f32s, <factor: f32>, offsets: f32s) -> f32s:
+  | scaled <| values * <factor>
+  | shifted <| scaled + offsets
+  shifted
+
+slow main() -> i32:
+  let original: f32 = -0.0
+  let carried = native_identity(<original>)
+  if bitcast(u32, carried) != bitcast(u32, original):
+    return 1
+  return i32(native_identity(<3.5>))

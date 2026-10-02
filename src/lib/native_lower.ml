@@ -695,6 +695,8 @@ and lower_scalar state (expr : expr) typ =
       Ok (emit state expr.loc Ir.source typ (Ir.Const literal))
   | (EFloat value | EBroadcast { v = EFloat value; _ }), Ir.Scalar Ir.F32 ->
       Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Float32_bits (Int32.bits_of_float value))))
+  | (EInt value | EBroadcast { v = EInt value; _ }), Ir.Scalar Ir.F32 ->
+      Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Float32_bits (Int32.bits_of_float (Int64.to_float value)))))
   | _ -> errorf expr.loc "a uniform %s is written <name> or a literal" (Ir.string_of_typ typ)
 
 (** Whether an expression is a uniform condition: comparisons of uniform
@@ -774,7 +776,16 @@ and lower_if state provenance loc condition if_true if_false =
           (Ir.Select { condition = fst mask; if_true = fst if_true; if_false = fst if_false }))
 
 let lower_binding state provenance loc name annotation expression =
-  let* value = lower_expr state provenance expression in
+  (* A scalar result retains its uniform value; rack use still broadcasts.
+     Reductions and calls produce their own scalar IR through lower_expr. *)
+  let* value = match annotation, expression.v with
+    | Some ({ v = TScalar _; _ } as annotation),
+      (EScalarVar _ | EVar _ | EFloat _ | EInt _
+       | EBroadcast { v = EScalarVar _ | EFloat _ | EInt _; _ }) ->
+        let* typ = ir_typ_of_annotation annotation in
+        lower_scalar state expression typ
+    | _ -> lower_expr state provenance expression
+  in
   let* () = check_annotation annotation (snd value) in
   let* () = bind state loc name value in
   Ok value
@@ -902,6 +913,12 @@ let add_parameter state function_loc index = function
       Ok parameter
   | PSpread _ -> error function_loc "spread crunch parameters are not supported by native lowering"
 
+let result_annotation result body =
+  List.map (fun (statement : stmt) -> match statement.v with
+    | SLet binding when binding.bind_name = result.result_name ->
+        { statement with v = SLet { binding with bind_type = result.result_type } }
+    | _ -> statement) body
+
 let lower_crunch definition_loc name parameters result body =
   let state =
     {
@@ -936,7 +953,7 @@ let lower_crunch definition_loc name parameters result body =
         let* active_fused = lower_statement state active_fused statement in
         lower_body active_fused rest
   in
-  let* () = lower_body None body in
+  let* () = lower_body None (result_annotation result body) in
   let* return_value = find_binding state definition_loc result.result_name in
   let* () =
     match result.result_type with
@@ -1268,7 +1285,7 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
       match callee.v with
       | DCrunch (_, parameters, result, body) ->
           let* () = bind_parameters parameters in
-          let* () = lower_statements_in state ~through body in
+          let* () = lower_statements_in state ~through (result_annotation result body) in
           let* value = find_binding state loc result.result_name in
           let* () = check_annotation result.result_type (snd value) in
           Ok value

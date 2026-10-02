@@ -19,7 +19,7 @@ rakec --verify-native --target wasm-simd128 program.rk  # write a verified progr
 | none | parses and type-checks the file, and prints a confirmation |
 | `--interpret` | runs `slow main` in Rake's executable semantics and prints its result, or the trap |
 | `--emit-native-ir` | the typed native IR after optimisation, and a whole program's tier IR |
-| `--emit-asm` | GNU assembly for native kernels; C for wasm programs and native slow-only programs |
+| `--emit-asm` | GNU assembly for native kernels; C for whole programs |
 | `--emit-obj` | an object file, assembled or compiled from that output |
 | `--verify-native` | the object, after disassembling and checking it |
 | `--emit-tokens`, `--emit-ast` | the tokens or the syntax tree, for debugging the front end |
@@ -32,11 +32,13 @@ with `.s`, `.c` or `.o` unless `-o path` gives another. `-o` isn't allowed
 with the check, token and syntax-tree modes. A whole program, one with slow
 code, runs, records, state, embedded files, constants or externs, compiles for
 the wasm profiles in 0.6.0-beta. The unreleased development compiler also
-supports slow-only native programs. Their `--emit-asm` output is `.c` and
-their `--emit-obj` output is a platform C object. `--verify-native` applies
-to vector kernels and WebAssembly programs, not native slow-only units:
-these have no vector function whose instruction contract could be checked.
-Native mixed vector/slow programs and runs remain work in progress.
+supports native slow orchestration with register kernels. Their `--emit-asm`
+output is `.c`, with opaque Rake-selected assembly, and their `--emit-obj`
+output is a platform C object with verified kernels. `--verify-native` checks
+those kernels too. Native slow-only units have no vector function to verify,
+so they use `--emit-obj`. Native runs and packs remain work in progress. A
+native kernel called from slow code currently takes uniform `f32` parameters
+and returns `f32`.
 
 ## Options
 
@@ -53,6 +55,11 @@ through `slow main(argc: i32, argv: ptr ptr u8) -> i32`. The input path is
 `argv[0]` in the interpreter. Native and WASI executables receive their
 runtime's program string instead. Without parameters, `main` ignores the
 process arguments.
+
+Without an explicit target, `--interpret` uses WebAssembly's four `f32` lanes.
+`--target` selects the reference rack width, so an AVX2 float reduction uses
+eight lanes and an AVX-512 reduction uses sixteen. This interprets the source;
+it does not execute the generated machine code.
 
 [Primitives, operations, and targets](spec/01_primitives_operations_and_targets.md#profiles) explains how
 `native` chooses a profile and what `--width` checks, and [packs and
@@ -76,13 +83,15 @@ compilation. The development shell supplies their include path through
 sysroot flags and link the emitted object with WASI libc and its command
 startup object.
 
-The development compiler's native slow C path uses `gcc` on x86 and
+The development compiler's native C path uses `gcc` on x86 and
 `aarch64-unknown-linux-gnu-gcc` on AArch64. `RAKE_NATIVE_CC` can select a
 different executable with the same GCC-compatible command-line interface.
 The compiler writes GNU C11, disables floating-point contraction and fast
 math, and compiles with warnings treated as errors. Its source directory is
 on the include path. Link the emitted object with the platform linker and
-its required C libraries, including `libm` for scalar maths.
+its required C libraries, including `libm` for scalar maths. Native register
+kernels remain opaque GNU assembly in that C unit, so the C compiler cannot
+replace their selected instructions.
 
 The emitted C reads two macros. `RAKE_WASM_LINKAGE` replaces `static inline`
 on each crunch and rake, and `RAKE_FRAME_BYTES` sets the size of a whole

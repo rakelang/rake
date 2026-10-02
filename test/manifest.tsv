@@ -62,6 +62,8 @@ test/program/frames.rk	program	wasm-simd128	4	program	differential	-
 test/abi/interop.rk	abi	wasm-simd128	4	program	c-interop	-
 test/abi/native_slow.rk	abi	x86-sse2	4	program	native-c-interop	-
 test/abi/process_arguments.rk	abi	x86-sse2	4	program	native-c-interop	-
+test/abi/native_mixed.rk	abi	x86-sse2	4	program	native-c-interop	-
+test/abi/native_mixed_x86.rk	abi	x86-sse2	4	program	native-c-interop	-
 test/reject/slow_rack_parameter.rk	reject	wasm-simd128	4	frontend	reject	slow code can't take f32s values
 test/reject/slow_unmarked_uniform.rk	reject	wasm-simd128	4	frontend	reject	a scalar passed to vector code becomes a rack there: mark it <...> at the call
 test/reject/slow_marked_scalar.rk	reject	wasm-simd128	4	frontend	reject	marks a uniform scalar for vector code; every slow value is scalar

@@ -77,13 +77,31 @@ a crunch. `rakec --interpret` runs `main` in Rake's executable semantics,
 evaluating rack expressions in the same reference semantics as crunches, and
 `test/program_test.sh` compares it with the compiled program.
 
-The unreleased development compiler adds a second destination for the same
-tier IR: a native slow-only C unit. It rejects runs and vector definitions
-before emission, so no rack work enters a general-purpose C compiler.
+The unreleased development compiler adds a native mixed destination for the
+same tier IR:
+
+```text
+register kernels -> Rake selection and allocation -> opaque GNU assembly ─┐
+explicit slow code -> scalar C and C ABI declarations ────────────────────┤
+                                                                        v
+                                                              one native C unit
+                                                                        |
+                                                              platform C compiler
+                                                                        |
+                                                               one native object
+                                                                        |
+                                                              register-kernel verifier
+```
+
+This development path rejects native runs and packs. Slow callers can pass
+uniform `f32` arguments and receive `f32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
-AMD64 or AAPCS64 C ABI. `test/native_slow_program_test.sh` compares scalar
-results with the interpreter and exercises header-backed struct layout and
-imports/exports with independent C on x86 and under AArch64 QEMU.
+AMD64 or AAPCS64 C ABI. It cannot rewrite the opaque kernel assembly, which
+the final-object verifier checks using Rake's selected instruction contract.
+`test/native_program_test.sh` compares scalar and mixed results with the
+selected-profile interpreter. Independent C checks header-backed struct
+layout and imports/exports on x86 and under AArch64 QEMU; known lane counts
+also check the x86 reduction fixtures.
 
 A process entry with parameters gets a compiler-owned adapter for
 `int main(int argc, char **argv)`. The adapter copies the pointer array into
@@ -153,7 +171,8 @@ It owns register allocation and assembly on x86 and AArch64. For WebAssembly,
 clang encodes the selected virtual instructions and the runtime assigns
 physical registers. The system toolchain also owns object formats,
 relocations, linking and start-up. Debug information and exception unwinding
-aren't produced. The x86 and AArch64 backends compile crunches and rakes only.
-Runs and mixed whole programs compile on `wasm-simd128`; native slow-only
-programs use the unreleased C boundary described above. The [planned x86-64 run
+aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile crunches
+and rakes only. The development compiler adds native mixed programs through
+the limited scalar C boundary above. Runs and packs still compile only on
+WebAssembly. The [planned x86-64 run
 boundary](spec/02_packs_and_run.md#planned-x86-64-boundary) is a design.

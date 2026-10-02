@@ -1,11 +1,12 @@
 (** Shell-free encoding boundaries for Rake-owned native backends.
 
-    This module owns assembly and explicit slow C -> relocatable objects.
+    This module encodes assembly and explicit slow C as relocatable objects.
+    A mixed C unit embeds Rake-selected assembly without C optimisation.
     Instruction selection, register allocation, linking, and execution belong
     elsewhere.  GNU as is the encoding boundary: it does not select,
     allocate, schedule, or otherwise optimise instructions. *)
 
-type stage = Assemble | Compile_slow
+type stage = Assemble | Compile_program
 
 type error = {
   source : string;
@@ -13,7 +14,7 @@ type error = {
   detail : string;
 }
 
-let stage_name = function Assemble -> "native assembly" | Compile_slow -> "native slow C compilation"
+let stage_name = function Assemble -> "native assembly" | Compile_program -> "native whole-program compilation"
 
 let format_error error =
   Printf.sprintf "%s: %s failed: %s" error.source
@@ -98,21 +99,21 @@ let assemble ?(profile = Target.X86_avx2) ~source assembly_text =
         | Error _ as error -> error
       with Sys_error detail -> Error { source; stage = Assemble; detail })
 
-(** Only explicit slow code enters this C boundary. Vector functions and runs
-    must use Rake's instruction-selection and object-verification pipelines. *)
-let compile_slow_program ~profile ~source ~include_dir c_source =
+(** Only explicit slow code enters C lowering. Register kernels embedded as
+    opaque assembly retain Rake's selection and object-verification pipeline. *)
+let compile_program ~profile ~source ~include_dir c_source =
   let default_compiler, profile_flags =
     match profile with
     | Target.X86_sse2 -> ("gcc", [ "-march=x86-64"; "-msse2"; "-mno-avx" ])
     | Target.X86_avx2 -> ("gcc", [ "-march=x86-64"; "-mavx2"; "-mfma" ])
     | Target.X86_avx512 -> ("gcc", [ "-march=x86-64"; "-mavx512f" ])
     | Target.Aarch64_neon -> ("aarch64-unknown-linux-gnu-gcc", [ "-march=armv8-a" ])
-    | _ -> invalid_arg "native slow C requires a physical SIMD profile"
+    | _ -> invalid_arg "native C emission requires a physical SIMD profile"
   in
   let program = Option.value (Sys.getenv_opt "RAKE_NATIVE_CC") ~default:default_compiler in
-  let c_path = Filename.temp_file "rake-native-slow-" ".c" in
-  let object_ = Filename.temp_file "rake-native-slow-" ".o" in
-  let log = Filename.temp_file "rake-native-slow-" ".log" in
+  let c_path = Filename.temp_file "rake-native-program-" ".c" in
+  let object_ = Filename.temp_file "rake-native-program-" ".o" in
+  let log = Filename.temp_file "rake-native-program-" ".log" in
   Fun.protect
     ~finally:(fun () ->
       List.iter (fun path -> try Sys.remove path with Sys_error _ -> ()) [ c_path; object_; log ])
@@ -124,7 +125,7 @@ let compile_slow_program ~profile ~source ~include_dir c_source =
           @ [ "-std=gnu11"; "-O2"; "-ffp-contract=off"; "-fno-fast-math"; "-Werror";
               "-I"; include_dir; "-c"; c_path; "-o"; object_ ]
         in
-        match run_encoder ~stage:Compile_slow ~program ~arguments ~source ~log with
+        match run_encoder ~stage:Compile_program ~program ~arguments ~source ~log with
         | Ok () -> Ok (read_file object_)
         | Error _ as error -> error
-      with Sys_error detail -> Error { source; stage = Compile_slow; detail })
+      with Sys_error detail -> Error { source; stage = Compile_program; detail })

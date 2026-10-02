@@ -10,11 +10,13 @@ remain work in progress. This roadmap states what we intend to build next.
 
 ### Compile runs, packs and whole programs for physical targets
 
-The development compiler after 0.6.0-beta now compiles slow-only programs
-to native objects through its C emitter. Imported C structs use their header's
-layout, and public slow functions have the platform C ABI. This is an
-unreleased first stage: native runs and mixed vector/slow programs are still
-work in progress.
+The development compiler after 0.6.0-beta compiles slow orchestration and
+register kernels into one native object. Its C unit embeds Rake-selected
+assembly, and the final object's kernels pass the existing instruction
+verifier. Slow callers can use uniform `f32` parameters and `f32` results.
+Imported C structs use their header's layout, and public slow functions have
+the platform C ABI. Native runs, packs and the remaining scalar kernel
+boundaries are still work in progress.
 
 We will extend `run`, packs and whole programs from `wasm-simd128` to
 SSE2, AVX2, AVX-512 and NEON. That work includes native traversal, full-rack

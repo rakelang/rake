@@ -35,17 +35,21 @@ tabs under it:
 | --- | --- |
 | Result | what `main` returned, or the trap that stopped it, with its line |
 | Lanes | each rack the program computed as a row with one decimal value per lane, and each mask as a row of filled and empty cells |
-| Code | what the compiler made for the chosen target: C with one WebAssembly intrinsic for each instruction on `wasm-simd128`, and assembly on SSE2, AVX2, AVX-512 and NEON |
+| Code | the selected target's output: C with WebAssembly intrinsics, native kernel assembly, or native mixed C with opaque kernel assembly |
 | Messages | the compiler's errors, each also underlined in the editor at its line and column |
 
 Stepping through a program in the Lanes tab shows one instruction acting on
 all the lanes at once, the idea the whole tutorial builds on.
 
 The target menu offers WebAssembly, SSE2, AVX2, AVX-512 and NEON. The browser
-emitter supports whole programs on `wasm-simd128` only, so a lesson with runs
-or slow code disables the other profiles and says why. Every result and lane
-trace comes from Rake's interpreter. The browser displays the selected
-target's C or assembly; it does not execute that generated machine code.
+development compiler supports native slow orchestration with uniform `f32`
+kernel calls too. Lessons start on WebAssembly when they contain a whole
+program. Memory runs still require WebAssembly; choosing a physical target
+for one gives the compiler's work-in-progress diagnostic. Every result and
+lane trace comes from Rake's interpreter, using the selected profile's `f32`
+rack width. The browser displays C or assembly without executing that
+generated machine code. Native object verification still requires `rakec`
+and the platform toolchain outside the browser.
 
 ## How it works
 

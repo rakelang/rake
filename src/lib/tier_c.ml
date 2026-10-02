@@ -1,6 +1,9 @@
-(** One C translation unit for WebAssembly programs and native slow-only programs.
+(** One C translation unit for WebAssembly and native programs.
 
-    Crunches and rakes keep their verified emission ({!Wasm_simd128_c}).
+    Native crunches and rakes are opaque Rake-selected assembly, checked in
+    the final object. Slow callers use scalar f32 C boundaries. Native runs
+    remain unavailable. WebAssembly kernels keep their verified emission
+    ({!Wasm_simd128_c}).
     A run becomes an external, never-inlined C function whose body is Rake's
     loops, loads and stores; its pure rack expressions become always-inline
     functions lowered through the crunch pipeline, so each rack operation is
@@ -23,7 +26,7 @@ open Tier_ir
 
 type addressing = Barrier | Plain
 
-type execution_target = WebAssembly | Native_slow of Target.profile
+type execution_target = WebAssembly | Native_program of Target.profile
 
 exception Emission_error of Ast.loc * string
 
@@ -1458,8 +1461,8 @@ let rec approximate_size u = function
       match List.find_opt (fun r -> r.rname = name) u.program.records with
       | Some { rheader = None; rfields; _ } -> List.fold_left (fun acc (_, t) -> acc + max 4 (approximate_size u t)) 0 rfields
       | _ -> 0)
-  | Ptr _ -> (match u.execution_target with WebAssembly -> 4 | Native_slow _ -> 8)
-  | View _ -> (match u.execution_target with WebAssembly -> 8 | Native_slow _ -> 16)
+  | Ptr _ -> (match u.execution_target with WebAssembly -> 4 | Native_program _ -> 8)
+  | View _ -> (match u.execution_target with WebAssembly -> 8 | Native_program _ -> 16)
   | _ -> 0
 
 let frame_threshold = 256
@@ -1467,7 +1470,7 @@ let frame_threshold = 256
 (** Rake's frame stack: a static region in linear memory from which each slow
     function holding large aggregates takes one frame, released on return. *)
 let frame_helpers u =
-  let storage = match u.execution_target with WebAssembly -> "static" | Native_slow _ -> "static _Thread_local" in
+  let storage = match u.execution_target with WebAssembly -> "static" | Native_program _ -> "static _Thread_local" in
   helper u "rake_frame"
     (Printf.sprintf "#ifndef RAKE_FRAME_BYTES\n#define RAKE_FRAME_BYTES (4u << 20)\n#endif\n\
      %s uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\n\
@@ -1502,7 +1505,7 @@ let slow_function u (f : slow_func) =
   let signature =
     if f.fname = "main" && entry_parameters f.fparams = Some No_arguments then "int main(void)"
     else
-      let linkage = match u.execution_target with Native_slow _ when not f.fblock && f.fname <> "main" -> "" | _ -> "static " in
+      let linkage = match u.execution_target with Native_program _ when not f.fblock && f.fname <> "main" -> "" | _ -> "static " in
       Printf.sprintf "%s%s%s %s(%s)" linkage (if f.fblock then "__attribute__((noinline)) " else "")
         (ctype u f.fresult) (slow_symbol u f.fname)
         (if params = [] then "void" else String.concat ", " params)
@@ -1592,18 +1595,32 @@ int main(int argc, char **argv)
 
 (** The crunches and rakes, through their verified emission; and for each
     crunch slow code calls, a never-inlined boundary function. *)
-let vector_definitions u =
+let vector_definitions ~source u =
   match u.program.vector_defs with
-  | [] -> ""
+  | [] -> ("", None)
   | defs -> (
       let program = [ { Ast.mod_name = "main"; mod_defs = defs } ] in
+      match u.execution_target with
+      | Native_program profile ->
+          let config = Target.make_exn ~selection:(Explicit profile) Target.Cpu in
+          let allocated = match Native_backend.compile ~config program with
+            | Ok allocated -> allocated
+            | Error error -> fail Ast.dummy_loc "%s" (Native_backend.format_error error) in
+          let assembly = match Native_backend.emit_allocated ~source allocated with
+            | Ok assembly -> assembly
+            | Error error -> fail Ast.dummy_loc "%s" (Native_backend.format_error error) in
+          let assembly = assembly
+            ^ (if Target.is_x86 profile then ".att_syntax prefix\n" else "") ^ ".text\n" in
+          let literal = "__asm__(\"" ^ escape_bytes assembly ^ "\");\n" in
+          (literal, Some allocated)
+      | WebAssembly ->
       match Native_lower.lower_program program with
       | Error error -> raise (Emission_error (error.loc, Native_lower.format_error error))
       | Ok native -> (
           match Wasm_simd128_isel.select native with
           | Error error -> raise (Emission_error (Ast.dummy_loc, Wasm_simd128_isel.format_error error))
           | Ok selected ->
-              String.concat "\n" (List.map Wasm_simd128_c.emit_function selected)))
+              (String.concat "\n" (List.map Wasm_simd128_c.emit_function selected), None)))
 
 let boundaries u =
   let called = Hashtbl.create 4 in
@@ -1645,22 +1662,28 @@ let boundaries u =
       in
       let ps = List.mapi (fun i p -> match p with Ast.PScalar (_, Some t) -> Printf.sprintf "%s a%d" (c_of t) i | _ -> "") params in
       let r = match result.result_type with Some t -> c_of t | None -> "float" in
+      let prototype = match u.execution_target with
+        | WebAssembly -> ""
+        | Native_program _ ->
+            if not (List.for_all (function Ast.PScalar (_, Some { v = TScalar PFloat; _ }) -> true | _ -> false) params
+              && (match result.result_type with Some { v = TScalar PFloat; _ } -> true | _ -> false)) then
+              fail def.loc "a native kernel called from slow code takes uniform f32 parameters and returns f32; other scalar C boundaries are work in progress";
+            Printf.sprintf "extern float %s(%s);\n" name (if ps = [] then "void" else String.concat ", " ps)
+      in
       acc
+      ^ prototype
       ^ Printf.sprintf "static __attribute__((noinline)) %s rake_boundary_%s(%s)\n{\n    return %s(%s);\n}\n" r name
-          (String.concat ", " ps) name (String.concat ", " (List.mapi (fun i _ -> Printf.sprintf "a%d" i) params)))
+          (if ps = [] then "void" else String.concat ", " ps) name (String.concat ", " (List.mapi (fun i _ -> Printf.sprintf "a%d" i) params)))
     called ""
 
 let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (program : program) =
   (match execution_target with
    | WebAssembly -> ()
-   | Native_slow profile ->
+   | Native_program profile ->
        if not (Target.is_x86 profile || profile = Target.Aarch64_neon) then
-         fail Ast.dummy_loc "native slow programs require an x86 or AArch64 profile";
+         fail Ast.dummy_loc "native programs require an x86 or AArch64 profile";
        (match program.runs with
-        | run :: _ -> fail run.run_loc "native runs and packs are work in progress; only slow-only whole programs compile natively"
-        | [] -> ());
-       (match program.vector_defs with
-        | definition :: _ -> fail definition.loc "native mixed vector/slow programs are work in progress; compile kernels separately"
+        | run :: _ -> fail run.run_loc "native runs and packs are work in progress; native programs may combine slow code and register kernels"
         | [] -> ()));
   let u =
     {
@@ -1716,7 +1739,7 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
         (Printf.sprintf "static const uint8_t rake_embed_%s[%d] __attribute__((aligned(16))) =\n\"%s\";\n" name
            (max 1 (String.length contents)) (escape_bytes contents)))
     program.embeds;
-  let vectors = vector_definitions u in
+  let vectors, native_kernels = vector_definitions ~source u in
   let runs = List.map (run_function u) program.runs in
   let slows = List.map (slow_function u) program.slows in
   let prototypes = List.filter_map (fun (signature, _) -> if String.starts_with ~prefix:"int main" signature then None else Some (signature ^ ";\n")) slows in
@@ -1733,9 +1756,9 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
           "\n#ifndef RAKE_WASM_LINKAGE\n#define RAKE_WASM_LINKAGE static inline __attribute__((always_inline))\n#endif\n\n"
           ^ Wasm_simd128_c.relaxed_prologue (),
           Wasm_simd128_c.relaxed_epilogue () )
-    | Native_slow profile ->
+    | Native_program profile ->
         ( Printf.sprintf
-            "/* Generated by rakec --target %s from %s. This unit contains only explicit\n   slow code. The platform C compiler owns scalar lowering and the C ABI. */\n"
+            "/* Generated by rakec --target %s from %s. Rake-selected kernels are opaque\n   assembly. The platform C compiler owns only slow lowering and the C ABI. */\n"
             (Target.profile_name profile) (Filename.basename source)
           ^ "#include <stdint.h>\n#include <stdbool.h>\n_Static_assert(sizeof(void *) == 8, \"native Rake slow code requires a 64-bit C ABI\");\n",
           "", "" )
@@ -1750,4 +1773,4 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
           Buffer.contents u.expressions ]
       @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ entry; vector_epilogue ])
   in
-  (unit_text, u.run_facts)
+  (unit_text, u.run_facts, native_kernels)

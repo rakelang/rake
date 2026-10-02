@@ -104,8 +104,11 @@ not a particular elapsed time or the fastest possible algorithm.
 
 Today: whole programs compile on `wasm-simd128`, as [the slow
 tier](spec/08_slow_tier.md) describes. The unreleased development compiler
-also compiles slow-only programs to native objects through platform C.
-Native mixed vector/slow programs remain work in progress.
+also compiles slow orchestration with register kernels into native objects.
+Their C unit embeds Rake-selected assembly, which remains opaque to the
+platform C compiler. Slow callers currently take uniform `f32` arguments and
+receive `f32` results. Native memory runs and other scalar kernel boundaries
+remain work in progress.
 
 ## Compilation is predictable
 

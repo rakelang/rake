@@ -43,12 +43,15 @@ AVX-512F, or through Intel SDE supplied as `RAKE_SDE=/absolute/path/to/sde64`.
 The suite fails if neither is available, rather than treating object
 verification as runtime agreement.
 
-`test/native_slow_program_test.sh` compares scalar semantics, including
+`test/native_program_test.sh` compares scalar semantics, including
 recursive frames, integer bit casts and checked traps, with the interpreter.
 An independent C harness calls imported and exported functions through
 native pointers and a padded struct with a by-value result. The same checks
 run on x86 profiles and AArch64 under QEMU. These establish slow C lowering
-and ABI agreement, not native vector runs or mixed programs.
+and ABI agreement. Mixed-program fixtures check the final object's kernels,
+signed-zero transfer through the scalar C boundary, and x86 reductions against
+both the selected-profile interpreter and hand-derived lane counts. Native
+memory runs remain work in progress.
 
 The argument fixture runs through actual process startup and compares its
 byte-level result with independent C and the interpreter. It covers no extra

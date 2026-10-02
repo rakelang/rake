@@ -87,16 +87,21 @@ let checked_program source =
   let* _ = Typecheck.check program in
   Ok program
 
-let whole_program_code program =
+let whole_program_code target program =
+  let profile = target_profile target in
+  let execution_target =
+    if Target.is_wasm profile then Tier_c.WebAssembly
+    else Tier_c.Native_program profile
+  in
   match Tier_check.check ~base_dir:"." program with
   | Error message -> Error message
   | Ok checked -> (
-      match Tier_c.emit ~addressing:Barrier ~source:"playground.rk" checked with
-      | code, _ -> Ok (checked, code)
+      match Tier_c.emit ~addressing:Barrier ~execution_target ~source:"playground.rk" checked with
+      | code, _, _ -> Ok (checked, code)
       | exception Tier_c.Emission_error (loc, message) ->
           Error
-            (Printf.sprintf "%s:%d:%d: wasm-simd128 emission: %s" loc.file
-               loc.line loc.col message))
+            (Printf.sprintf "%s:%d:%d: %s emission: %s" loc.file
+               loc.line loc.col (Target.profile_name profile) message))
 
 let vector_code target program =
   let ( let* ) = Result.bind in
@@ -108,11 +113,7 @@ let compile ~source ~target =
   let ( let* ) = Result.bind in
   let* program = checked_program source in
   if is_whole_program program then
-    if target <> Wasm_simd128 then
-      Error
-        "playground.rk:1:0: slow code, runs and module definitions compile for wasm-simd128"
-    else
-      let* checked, code = whole_program_code program in
+      let* checked, code = whole_program_code target program in
       let traces = ref [] in
       let trace value =
         if List.length !traces < 256 then
@@ -123,7 +124,7 @@ let compile ~source ~target =
           checked.slows
           |> List.exists (fun (slow : Tier_ir.slow_func) -> slow.fname = "main")
         then
-          Tier_interp.run_main ~trace checked
+          Tier_interp.run_main ~profile:(target_profile target) ~trace checked
           |> Result.map (fun value -> Some (Int64.to_string value))
         else Ok None
       in

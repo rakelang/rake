@@ -23,7 +23,7 @@ run "SSE2, AVX2 and AVX-512 scalar-oracle agreement" bash test/x86_profiles_test
 run "AArch64 NEON semantic differential runtime" bash test/neon_backend_test.sh
 run "whole-program differential under wasmtime" bash test/program_test.sh
 run "wasm32 run boundary and C interop" bash test/abi_test.sh
-run "native slow-program semantics and C ABI" bash test/native_slow_program_test.sh
+run "native program semantics and C ABI" bash test/native_program_test.sh
 run "compiler/Tree-sitter parser differential" bash test/parser_differential.sh
 run "website" bash tools/check_website.sh
 

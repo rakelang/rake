@@ -15,8 +15,32 @@ definition is a whole program. On `wasm-simd128` it compiles to one C
 translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
 `wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
-compiler also emits native C and objects for slow-only programs on x86-64
-and AArch64. It still rejects native runs and mixed vector/slow units.
+compiler also emits native C and objects combining slow orchestration and
+register kernels on x86-64 and AArch64. Native runs and packs remain work in
+progress.
+
+### Native kernel calls
+
+On the development compiler, a native register kernel called from slow code
+takes uniform `f32` parameters and returns `f32`. Rake selects and allocates
+the kernel's instructions. The generated C contains its opaque assembly,
+and the final object is checked against the selected profile. The platform C
+compiler lowers the slow caller and supplies the scalar calling convention.
+Other native scalar kernel boundaries remain work in progress.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+crunch carry(<value: f32>) -> f32:
+  <value>
+
+slow main() -> i32:
+  return i32(carry(<3.5>))
+```
+
+This example preserves the value across the boundary and returns `3`. A
+kernel may also broadcast its uniforms and reduce a rack where the selected
+profile supports those operations. The reference interpreter uses the chosen
+profile's rack width when `--target` is supplied.
 
 ### Process arguments
 
@@ -337,13 +361,14 @@ rejecting a program that breaks it.
 
 ## The C unit
 
-Each slow function is a `static` C function, and `main` is `int main(void)`.
+On WebAssembly, each slow function is a `static` C function. A parameterless
+entry is `int main(void)`; a process entry uses the adapter described above.
 Records, arrays and views are structs. State and embedded data are statics.
 Checked arithmetic, conversions, indexing and slices are small inline helpers
 that call `__builtin_trap`. Each run is an external, never-inlined `void`
 function.
 
-On the development compiler's native slow-only path, ordinary slow functions
+On the development compiler's native path, ordinary slow functions
 instead have external linkage and use the platform C ABI. Scalar and pointer
 arguments pass by value, array and record arguments are borrowed pointers,
 and record results return by value. Header-backed records retain their C
@@ -351,8 +376,7 @@ layout, including native pointer widths and padding. Rake emits checked
 scalar C; the platform compiler owns its register allocation and calling
 convention. This does not delegate vector kernel compilation to C.
 
-The native entry remains `int main(void)`. Unions, callbacks, function
-pointers and `argc`/`argv` entry are work in progress. Native slow frames are
+Unions, callbacks and function pointers remain work in progress. Native slow frames are
 thread-local, while module state remains process-wide and needs the caller's
 normal synchronization when several threads use it.
 
@@ -372,7 +396,12 @@ that data and overwrite it without a trap.
 
 ## Verification
 
-`rakec --verify-native` compiles the unit and disassembles it. Every crunch
+For a native mixed program, both `--emit-obj` and `--verify-native` check each
+embedded register kernel in the final object. The ordinary slow functions
+retain the platform compiler's C semantics and are outside that vector
+instruction contract. A slow-only unit uses `--emit-obj`.
+
+On WebAssembly, `rakec --verify-native` compiles the unit and disassembles it. Every crunch
 and rake must be locals, constants and register SIMD only. A run may call only
 the scalar helpers emitted for its explicit slow blocks. The verifier checks
 each direct call's relocation against those helper symbols. It rejects every

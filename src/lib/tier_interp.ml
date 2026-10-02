@@ -44,10 +44,15 @@ type trace = {
 
 type machine = {
   program : program;
+  profile : Target.profile;
   globals : (string, value ref) Hashtbl.t;
   externs : externs;
   trace : trace -> unit;
 }
+
+let f32_lanes machine = (Target.info machine.profile).f32_lanes
+
+let rack_lanes machine element = f32_lanes machine * 32 / bits element
 
 let rec copy = function
   | VArr a -> VArr (Array.map copy a)
@@ -461,8 +466,8 @@ and vector_call env loc name args =
       let values = List.map (function Arg_uniform a | Arg_memory a -> to_reference (eval env a)) args in
       let result =
         match def.v with
-        | DCrunch _ -> R.eval_crunch ~lanes:4 def values
-        | _ -> R.eval_rake ~lanes:4 def values
+        | DCrunch _ -> R.eval_crunch ~lanes:(f32_lanes env.machine) def values
+        | _ -> R.eval_rake ~lanes:(f32_lanes env.machine) def values
       in
       (match result with
        | Ok v -> of_reference_scalar loc v
@@ -561,14 +566,14 @@ and exec_rstmt renv ~tail (s : rstmt) =
   | R_uniform (name, e) -> set name (eval renv e)
   | R_pure (name, ty, pure, _) -> (
       R.definitions := renv.machine.program.vector_defs;
-      match R.eval_expr ~lanes:4 (reference_env renv) pure with
+      match R.eval_expr ~lanes:(f32_lanes renv.machine) (reference_env renv) pure with
       | Ok v -> (
           match ty with
           | Sc s -> set name (match of_reference_scalar loc v with VInt (_, x) -> VInt (s, normalise s x) | VFloat (_, f) -> VFloat (s, f) | other -> other)
           | Rack element -> (
               (* A uniform written where a rack is expected, as in out[<i>] <- <x>, is broadcast. *)
               match v with
-              | R.F32_scalar f -> set name (VRack (R.splat 4 f))
+              | R.F32_scalar f -> set name (VRack (R.splat (f32_lanes renv.machine) f))
               | R.Int_scalar (_, x) -> set name (VRack (R.splat_int element x))
               | R.U32_scalar x -> set name (VRack (R.splat_int element (Int64.of_int x)))
               | rack -> set name (VRack rack))
@@ -576,7 +581,7 @@ and exec_rstmt renv ~tail (s : rstmt) =
       | Error error -> trap loc "%s" (R.format_error error))
   | R_load (name, element, view, index, checked) ->
       let v = view_of view and i = Int64.to_int (as_int loc (eval renv index)) in
-      let n = lanes element in
+      let n = rack_lanes renv.machine element in
       if checked && (i < 0 || i + n > v.count) then trap loc "rack load [%d, %d) outside %d elements" i (i + n) v.count;
       if v.start + i < 0 || v.start + i + n > Array.length v.store then trap loc "unchecked load outside its storage: outside Rake's defined semantics";
       set name (VRack (rack_of_elements element (Array.sub v.store (v.start + i) n)))
@@ -616,7 +621,7 @@ and exec_rstmt renv ~tail (s : rstmt) =
   | R_store (view, index, value, checked) ->
       let v = view_of view and i = Int64.to_int (as_int loc (eval renv index)) in
       let element = match view.ty with View (Sc e, _) -> e | _ -> SInt in
-      let n = lanes element in
+      let n = rack_lanes renv.machine element in
       if checked && (i < 0 || i + n > v.count) then trap loc "rack store [%d, %d) outside %d elements" i (i + n) v.count;
       (match !(lookup renv loc value) with
        | VRack r -> Array.iteri (fun k x -> v.store.(v.start + i + k) <- x) (elements_of_rack element r)
@@ -641,7 +646,7 @@ and exec_rstmt renv ~tail (s : rstmt) =
       if count > 0xFFFFFFFFL then trap loc "a traversal of %Ld records exceeds 2^32 - 1" count;
       if count > 0L then (
         let pack = match !(lookup renv loc t.t_pack) with VPack columns -> columns | _ -> trap loc "a pack" in
-        let l = lanes t.t_domain in
+        let l = rack_lanes renv.machine t.t_domain in
         let stack = find_stack renv.machine.program t.t_stack in
         let i = ref 0 in
         while Int64.of_int !i < count do
@@ -689,9 +694,9 @@ and exec_rstmt renv ~tail (s : rstmt) =
 
 (* ─── Programs ──────────────────────────────────────────────────────── *)
 
-let machine ?(externs = Hashtbl.create 1) ?(trace = fun _ -> ())
+let machine ?(externs = Hashtbl.create 1) ?(trace = fun _ -> ()) ?(profile = Target.Wasm_simd128)
     (program : program) =
-  let m = { program; globals = Hashtbl.create 16; externs; trace } in
+  let m = { program; profile; globals = Hashtbl.create 16; externs; trace } in
   let env = { machine = m; vars = Hashtbl.create 1 } in
   List.iter (fun (name, _, value) -> Hashtbl.replace m.globals name (ref (eval env value))) program.consts;
   List.iter
@@ -716,8 +721,8 @@ let call_function m name (args : value list) =
     VUnit
   with Return_value v -> v
 
-let run_main ?externs ?trace ?(program_name = "program") ?(arguments = []) program =
-  let m = machine ?externs ?trace program in
+let run_main ?externs ?trace ?profile ?(program_name = "program") ?(arguments = []) program =
+  let m = machine ?externs ?trace ?profile program in
   match List.find_opt (fun f -> f.fname = "main") program.slows with
   | None -> Error "the program has no slow main to run"
   | Some main ->

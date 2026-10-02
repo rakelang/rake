@@ -55,11 +55,13 @@ multiply-add.
 | `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
 The scalar fallback remains WIP (work in progress), and the compiler rejects
-code for it. Native runs, packs and mixed whole programs are also WIP. The
-unreleased development compiler can compile slow-only programs as native C
-and objects, with platform C imports and exports and typed process arguments.
-This is not in the
-0.6.0-beta source tag. On
+code for it. Native runs and packs are also WIP. The unreleased development
+compiler compiles slow orchestration with register kernels as native C and
+objects. It embeds Rake's selected assembly, checks the kernels in the final
+object, and supports uniform `f32` parameters and `f32` results at the boundary
+from slow code. Other native scalar kernel boundaries remain WIP. Platform C
+imports and exports and typed process arguments are supported too. These
+development additions are absent from the 0.6.0-beta source tag. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one
 `wasm_simd128.h` intrinsic.
@@ -111,8 +113,8 @@ nix develop --command dune exec rakec -- --verify-native --target wasm-simd128 -
 ```
 
 `--interpret` runs `main` in Rake's executable semantics. `--emit-asm` writes
-assembly, or C on the wasm profiles. `--verify-native` builds an object,
-disassembles it and checks every function against the profile's rules. A
+assembly, or C for a whole program. `--verify-native` builds an object,
+disassembles it and checks its vector functions against the profile's rules. A
 crunch or rake contains only register work from the profile's instruction
 list, with no calls and no stack. On x86 and AArch64 each rack is one whole
 physical register, and the object has exactly the fused multiply-adds the
