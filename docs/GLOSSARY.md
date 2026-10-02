@@ -55,7 +55,9 @@ documentation uses them.
 | --- | --- |
 | front end, back end | the front end parses and checks source, and the back end selects instructions, assigns registers and writes the program |
 | SSA | static single assignment: a representation in which each value is defined once, which makes data dependencies explicit |
-| binding, reference | a binding gives a value a name, and a reference uses the name. It means the value, not a memory address |
+| declaration, definition | a declaration introduces a name and may give its type. A definition supplies the value or behaviour it denotes. A language construct can do both |
+| binding, reference | a binding associates a name with a value or other program entity, and a reference uses that name within its scope. Rake's immutable value bindings don't designate memory locations |
+| fusion | combining separate pieces of work so they can execute together, such as merging loops into one pass or forming a fused multiply-add. Rake uses fused bindings for stages of pure vector calculations |
 | instruction selection | choosing the machine instructions for each operation |
 | register allocation | assigning each value to a physical register. Rake does this for its physical targets, while a WebAssembly runtime does it for `v128` values |
 | object code | encoded machine instructions and data, ready for a linker |

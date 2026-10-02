@@ -1,8 +1,15 @@
 # Fused bindings
 
-`| name <| expression` binds one stage of a fused computation. Read it from
-right to left: the expression flows into `name`. Consecutive stages line up on
-their leading bars, so a data path reads down the page:
+*Binding* is general programming terminology for associating a name with a
+value. A declaration introduces the name, and a definition supplies its
+meaning. Rake's `let name = expression` does both: it gives the expression's
+value a name that later code can use.
+
+*Fusion* is a compiler term for combining separate pieces of work so they
+can execute together. Rake's `| name <| expression` binds one stage of a
+fused vector calculation. Read it from right to left: the expression flows
+into `name`. Consecutive stages line up on their leading bars, so we can
+follow the calculation down the page:
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
