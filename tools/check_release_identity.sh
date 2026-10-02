@@ -52,7 +52,12 @@ expect_literal "${project_root}/CHANGELOG.md" "## ${version}"
 expect_literal "${project_root}/src/bin/main.ml" "Rake.Version.display"
 
 expect_literal "${tree_sitter_root}/package.json" "\"version\": \"${version}\""
+expect_literal "${tree_sitter_root}/package-lock.json" "\"version\": \"${version}\""
 expect_literal "${tree_sitter_root}/tree-sitter.json" "\"version\": \"${version}\""
+expect_literal "${tree_sitter_root}/Cargo.toml" "version = \"${version}\""
+expect_literal "${tree_sitter_root}/pyproject.toml" "version = \"${version}\""
+expect_literal "${tree_sitter_root}/CMakeLists.txt" "set(RAKE_PACKAGE_VERSION \"${version}\")"
+expect_literal "${tree_sitter_root}/Makefile" "VERSION := ${version}"
 expect_literal "${tree_sitter_root}/package.json" \
   "https://github.com/rakelang/tree-sitter-rake.git"
 expect_literal "${tree_sitter_root}/tree-sitter.json" \

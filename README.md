@@ -15,9 +15,9 @@ or helper calls. The language and its documentation are at
 What Rust does for safety with `unsafe {}`, Rake does for speed with
 `slow {}`. A run explicitly enters scalar code at `slow {` and resumes vector
 work at `}`. [Slow blocks](docs/spec/08_slow_tier.md#slow-blocks) are available
-on main and in the playground, ahead of the next tagged release.
+in 0.5.0-beta and in the playground.
 
-Release: 0.4.0-beta.
+Release: 0.5.0-beta.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake

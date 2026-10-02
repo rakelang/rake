@@ -5,7 +5,7 @@ website. Beta releases may still change the source language and the binary
 boundaries between versions. A design in the documentation gets a version
 only when the compiler implements it and the tests cover it.
 
-## Unreleased
+## 0.5.0-beta
 
 - Rakes end with `sweep:`, without `return`. This is the rake's result form.
   `return` remains the result of a crunch and an exit from a slow function.

@@ -1,6 +1,6 @@
 # Roadmap
 
-Rake 0.4.0-beta establishes the language's vector contract and proves it on
+Rake 0.5.0-beta establishes the language's vector contract and proves it on
 three target profiles. This roadmap states what we intend to build next.
 [The changelog](../CHANGELOG.md) records work once it has landed, while
 [the goals](GOALS.md) describe the principles that each change must preserve.

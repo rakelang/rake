@@ -394,8 +394,8 @@ fields, `state games: i32 := 0` keeps a value for the life of the program,
 and a `mut` parameter is one the function writes.
 Inside a run, `slow { ... }` explicitly enters scalar mode. This is the
 performance boundary corresponding to Rust's `unsafe { ... }` safety boundary.
-At `}` the run resumes vector mode. This syntax is available in the current
-source and playground, ahead of the next tagged release.
+At `}` the run resumes vector mode. This syntax is available in 0.5.0-beta
+and in the playground.
 
 <!-- rake-check: run 922 -->
 <!-- playground-starter -->

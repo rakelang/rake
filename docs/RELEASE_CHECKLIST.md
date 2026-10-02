@@ -18,6 +18,7 @@ website, from sibling checkouts of `rake`, `tree-sitter-rake` and
 5. Run `tree-sitter generate && tree-sitter test` in `tree-sitter-rake`.
 6. Look at the website's pages at desktop and phone widths, served on
    127.0.0.1.
-7. Tag and publish the compiler and the grammar once the checks pass, then
+7. Tag the compiler and grammar as `vVERSION` once the checks pass, so Go's
+   module tooling recognises the grammar release. Publish the packages, then
    deploy the website as its README describes and confirm the release shown
    in its footer.

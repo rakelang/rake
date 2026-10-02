@@ -8,8 +8,7 @@ block is a lexical escape inside a run, like Rust's explicit `unsafe { ... }`
 boundary. The surrounding rack work retains its vector contract. A whole
 scalar function can instead be declared `slow name(...)`.
 
-Slow blocks are available in the current compiler source and playground. They
-were added after the 0.4.0-beta tag and will be included in the next release.
+Slow blocks are available in 0.5.0-beta and in the playground.
 
 A program with any slow, run, record, state, embed, const or extern
 definition is a whole program. On `wasm-simd128` it compiles to one C
