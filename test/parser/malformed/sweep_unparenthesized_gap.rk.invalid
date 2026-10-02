@@ -1,0 +1,7 @@
+rake malformed_gap(values: f32s) -> f32s:
+  tine #valid means values >= <0.0>
+  through #valid into rooted:
+    sqrt(values)
+  sweep:
+    | #valid => rooted
+    | values >= <0.0> gaps => <0.0>

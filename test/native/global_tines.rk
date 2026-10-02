@@ -1,0 +1,44 @@
+~~ Independent scalar oracles cover global composition, uniform substitution,
+~~ missing fallbacks, total complementary sweeps, NaNs and visible fallbacks.
+tine #at_least(values: f32s, <limit: f32>) means values >= <limit>
+tine #nonnegative(values: f32s) means #at_least(values, <0.0>)
+tine #negative(values: f32s) means values < <0.0>
+
+rake absolute_root(values: f32s) -> f32s:
+  through #nonnegative(values) into positive:
+    sqrt(values)
+  through #negative(values) into negative:
+    sqrt(-values)
+  sweep:
+    | #nonnegative(values) => positive
+    | #negative(values) => negative
+    | (#nonnegative(values) or #negative(values)) gaps => <7.0>
+
+rake visible_fallback(values: f32s) -> f32s:
+  through #nonnegative(values) else <9.0> into rooted:
+    sqrt(values)
+  sweep:
+    | #nonnegative(values) => rooted
+    | #nonnegative(values) gaps => rooted
+
+rake overlapping_partial(values: f32s) -> f32s:
+  tine #positive means #at_least(values, <0.0>)
+  tine #at_most_four means values <= <4.0>
+  through #positive into rooted:
+    sqrt(values)
+  through #at_most_four into small:
+    <3.0>
+  sweep:
+    | #positive => rooted
+    | #at_most_four => small
+    | (#positive or #at_most_four) gaps => <7.0>
+
+rake partitioned_partial(values: f32s) -> f32s:
+  tine #valid means #nonnegative(values)
+  tine #large means values >= <4.0>
+  through #valid into rooted:
+    sqrt(values)
+  sweep:
+    | (#valid and #large) => rooted
+    | (#valid and #large gaps) => rooted
+    | #valid gaps => <0.0>

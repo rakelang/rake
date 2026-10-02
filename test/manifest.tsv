@@ -29,9 +29,9 @@ test/reject/masked_modulo.rk	reject	x86-avx2	8	frontend	reject	feature 'masked.m
 test/reject/masked_user_call.rk	reject	x86-avx2	8	frontend	reject	feature 'masked.user-call'
 test/reject/masked_cross_lane.rk	reject	x86-avx2	8	frontend	reject	feature 'masked.cross-lane'
 test/reject/narrow_column_requires_widen.rk	reject	x86-avx2	8	frontend	reject	call widen(column) explicitly
-test/reject/sweep_arm_after_catchall.rk	reject	x86-avx2	8	frontend	reject	Sweep arm after catch-all (_) is unreachable
-test/reject/sweep_duplicate_tine.rk	reject	x86-avx2	8	frontend	reject	Duplicate tine arm in sweep: #active
-test/reject/sweep_missing_catchall.rk	reject	x86-avx2	8	frontend	reject	Sweep must end with a catch-all (_) arm
+test/reject/sweep_arm_after_catchall.rk	reject	x86-avx2	8	frontend	reject	Unreachable sweep arm
+test/reject/sweep_duplicate_tine.rk	reject	x86-avx2	8	frontend	reject	Unreachable sweep arm
+test/reject/sweep_missing_catchall.rk	reject	x86-avx2	8	frontend	reject	Sweep does not provably cover every lane
 test/reject/tine_forward_reference.rk	reject	x86-avx2	8	frontend	reject	Reference to undefined tine: #later
 test/reject/tine_duplicate.rk	reject	x86-avx2	8	frontend	reject	Duplicate tine declaration: #active
 test/reject/reduction_requires_float_rack.rk	reject	x86-avx2	8	frontend	reject	Floating-point reduction requires float rack
@@ -66,6 +66,8 @@ test/abi/native_slow.rk	abi	x86-sse2	4	program	native-c-interop	-
 test/abi/process_arguments.rk	abi	x86-sse2	4	program	native-c-interop	-
 test/abi/native_mixed.rk	abi	x86-sse2	4	program	native-c-interop	-
 test/abi/native_mixed_x86.rk	abi	x86-sse2	4	program	native-c-interop	-
+test/abi/native_streams.rk	abi	x86-avx2	8	program	native-c-interop	-
+test/abi/opaque.rk	abi	wasm-simd128	4	program	c-interop	-
 test/reject/slow_rack_parameter.rk	reject	wasm-simd128	4	frontend	reject	slow code can't take f32s values
 test/reject/slow_unmarked_uniform.rk	reject	wasm-simd128	4	frontend	reject	a scalar passed to vector code becomes a rack there: mark it <...> at the call
 test/reject/slow_marked_scalar.rk	reject	wasm-simd128	4	frontend	reject	marks a uniform scalar for vector code; every slow value is scalar
@@ -81,3 +83,12 @@ test/program/callbacks.rk	program	wasm-simd128	4	program	differential	-
 test/program/trap/null_callback.rk	trap	wasm-simd128	4	program	trap	-
 test/abi/callbacks.rk	abi	wasm-simd128	4	program	c-interop	-
 test/abi/unions.rk	abi	wasm-simd128	4	program	c-interop	-
+test/native/global_tines.rk	native	x86-avx2	8	native-object	pass	-
+test/program/global_tines.rk	program	wasm-simd128	4	program	differential	-
+test/reject/partial_through_leak.rk	reject	x86-avx2	8	frontend	reject	undefined outside its through mask
+test/reject/partial_through_shuffle.rk	reject	x86-avx2	8	frontend	reject	undefined outside its through mask
+test/reject/global_tine_recursive.rk	reject	x86-avx2	8	frontend	reject	Recursive global tine
+test/reject/global_tine_capture.rk	reject	x86-avx2	8	frontend	reject	Undefined scalar variable
+test/reject/global_tine_argument_type.rk	reject	x86-avx2	8	frontend	reject	argument type mismatch
+test/reject/global_tine_unmarked_uniform.rk	reject	x86-avx2	8	frontend	reject	uniform argument must use angle brackets
+test/reject/sweep_numeric_coverage.rk	reject	x86-avx2	8	frontend	reject	Sweep does not provably cover every lane

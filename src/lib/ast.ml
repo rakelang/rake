@@ -227,6 +227,7 @@ and predicate_kind =
   | POr of predicate * predicate       (** p || q *)
   | PNot of predicate                  (** !p *)
   | PTineRef of ident                  (** reference another tine *)
+  | PTineCall of ident * expr list     (** apply a global predicate to lane data *)
 
 and cmp_op = CLt | CLe | CGt | CGe | CEq | CNe
 
@@ -257,7 +258,7 @@ and sweep = {
 }
 
 and sweep_arm = {
-  arm_tine: ident option;              (** None = catch-all _ *)
+  arm_tine: predicate option;          (** None = catch-all _ *)
   arm_value: expr;
 }
 
@@ -346,6 +347,8 @@ and def_kind =
       (** scratch name(parameters) -> type: body return expression *)
   | DRake of ident * param list * result_spec * stmt list * tine list * through list * sweep
       (** rake name params -> result: setup tines through* sweep *)
+  | DTine of ident * param list * predicate
+      (** tine #name(typed parameters) means predicate *)
   | DRun of ident * param list * result_spec * stmt list
       (** run name params -> result: body *)
 

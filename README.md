@@ -26,20 +26,21 @@ scratch advance(positions: f32s, velocities: f32s) -> f32s:
   | moved  <| positions + scaled
   moved
 
-rake safe_root(values: f32s) -> f32s:
-  tine #valid means values >= <0.0>
+tine #valid(values: f32s) means values >= <0.0>
 
-  through #valid else <0.0> into rooted:
+rake safe_root(values: f32s) -> f32s:
+  through #valid(values) into rooted:
     sqrt(values)
 
   sweep:
-    | #valid => rooted
-    | _      => <0.0>
+    | #valid(values) => rooted
+    | #valid(values) gaps => <0.0>
 ```
 
-`<0.5>` is a uniform, one scalar shared by every lane. `#valid` is a tine, a
-named lane mask, and `through` computes the square root only in its lanes.
-The sweep picks each lane's result. `| name <| expression` binds a stage of a
+`<0.5>` is a uniform, one scalar shared by every lane. `#valid` is a reusable
+tine predicate, and `through` computes roots only in its selected lanes.
+`gaps` selects the complementary lanes, including NaNs. The sweep picks each
+lane's result. `| name <| expression` binds a stage of a
 fused computation: on AVX2 and NEON, `advance` compiles to one fused
 multiply-add.
 

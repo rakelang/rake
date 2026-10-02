@@ -158,8 +158,8 @@ let test_rake_priority_and_inactive_lanes () =
   let sweep =
     {
       sweep_arms =
-        [ { arm_tine = Some "first"; arm_value = var "first_value" };
-          { arm_tine = Some "second"; arm_value = var "second_value" };
+        [ { arm_tine = Some (expression (PTineRef "first")); arm_value = var "first_value" };
+          { arm_tine = Some (expression (PTineRef "second")); arm_value = var "second_value" };
           { arm_tine = None; arm_value = expression (EBroadcast (float 3.0)) } ];
       sweep_binding = "result";
     }

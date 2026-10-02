@@ -1181,6 +1181,9 @@ let rec eval_predicate ~lanes env tines (predicate : predicate) =
       match List.assoc_opt name tines with
       | Some value -> Ok value
       | None -> error predicate.loc (Undefined_variable ("#" ^ name)))
+  | PTineCall _ ->
+      (try eval_predicate ~lanes env tines (Tines.expand_calls !definitions predicate)
+       with Tines.Error (loc, message) -> error loc (Unsupported_definition message))
 
 let eval_rake ~lanes definition arguments =
   match definition.v with
@@ -1258,15 +1261,20 @@ let eval_rake ~lanes definition arguments =
               eval_throughs ((through.through_binding, rack output) :: env) rest
         in
         let* env = eval_throughs setup_env throughs in
-        let arms = sweep.sweep_arms in
+        let rec masks_for_arms = function
+          | [] -> Ok []
+          | arm :: rest ->
+              let* active = match arm.arm_tine with
+                | None -> Ok (Array.make lanes true)
+                | Some predicate -> eval_predicate ~lanes env tines predicate in
+              let* rest = masks_for_arms rest in
+              Ok ((arm, active) :: rest)
+        in
+        let* arms = masks_for_arms sweep.sweep_arms in
         let rec selected_arm lane = function
           | [] -> None
-          | arm :: rest -> (
-              match arm.arm_tine with
-              | None -> Some arm
-              | Some name ->
-                  if (List.assoc name tines).(lane) then Some arm
-                  else selected_arm lane rest)
+          | (arm, active) :: rest ->
+              if active.(lane) then Some arm else selected_arm lane rest
         in
         let output = Array.make lanes 0.0 in
         let rec eval_sweep lane =

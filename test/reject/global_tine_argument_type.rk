@@ -1,0 +1,6 @@
+tine #valid(x: f32s) means x >= <0.0>
+rake mismatch(values: f32s) -> f32s:
+  through #valid(1) into rooted:
+    sqrt(values)
+  sweep:
+    | _ => rooted

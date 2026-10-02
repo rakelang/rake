@@ -88,7 +88,7 @@ let slow_body statements =
 
 (* Tokens: Tines and control *)
 %token <string> TINE_REF
-%token TINE MEANS THROUGH SWEEP ELSE INTO RETURN YIELD IN
+%token TINE MEANS GAPS THROUGH SWEEP ELSE INTO RETURN YIELD IN
 
 (* Tokens: Iteration *)
 %token FOR USING UP TO
@@ -145,6 +145,7 @@ program:
     }
 
 definition:
+  | d = global_tine_def { d }
   | d = pack_def NEWLINE { d }
   | d = record_def NEWLINE { d }
   | d = union_def NEWLINE { d }
@@ -229,7 +230,7 @@ rake_def:
   | RAKE name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     ARROW result_type = typ COLON NEWLINE INDENT
     setup = list(rake_setup_stmt)
-    ts = nonempty_list(canonical_tine_decl)
+    ts = list(canonical_tine_decl)
     ths = nonempty_list(canonical_through_block)
     SWEEP COLON NEWLINE INDENT arms = nonempty_list(canonical_sweep_arm) DEDENT
     DEDENT {
@@ -332,6 +333,12 @@ canonical_tine_decl:
       { tine_name = name; tine_pred = p }
     }
 
+global_tine_def:
+  | TINE name = TINE_REF LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
+    MEANS p = predicate NEWLINE {
+      mk_node (DTine (name, List.concat ps, p)) $startpos $endpos
+    }
+
 predicate:
   | p = pred_or { p }
 
@@ -349,7 +356,9 @@ pred_and:
 
 pred_not:
   | NOT p = pred_not { mk_node (PNot p) $startpos $endpos }
-  | p = pred_cmp { p }
+  | p = pred_cmp invert = option(GAPS) {
+      match invert with None -> p | Some () -> mk_node (PNot p) $startpos $endpos
+    }
 
 pred_cmp:
   | l = pred_expr LT r = pred_expr { mk_node (PCmp (l, CLt, r)) $startpos $endpos }
@@ -358,8 +367,14 @@ pred_cmp:
   | l = pred_expr GE r = pred_expr { mk_node (PCmp (l, CGe, r)) $startpos $endpos }
   | l = pred_expr EQ r = pred_expr { mk_node (PCmp (l, CEq, r)) $startpos $endpos }
   | l = pred_expr NE r = pred_expr { mk_node (PCmp (l, CNe, r)) $startpos $endpos }
-  | name = TINE_REF { mk_node (PTineRef name) $startpos $endpos }
+  | p = tine_predicate { p }
   | LPAREN p = predicate RPAREN { p }
+
+tine_predicate:
+  | name = TINE_REF { mk_node (PTineRef name) $startpos $endpos }
+  | name = TINE_REF LPAREN args = separated_list(COMMA, pred_expr) RPAREN {
+      mk_node (PTineCall (name, args)) $startpos $endpos
+    }
 
 pred_expr:
   | e = pred_add { e }
@@ -408,11 +423,11 @@ broadcast_inner:
   | MINUS f = FLOAT_LIT { mk_node (EFloat (-.f)) $startpos $endpos }
 
 canonical_through_block:
-  | THROUGH tr = tine_ref ELSE pt = simple_expr INTO binding = IDENT COLON NEWLINE INDENT
+  | THROUGH tr = tine_ref pt = option(preceded(ELSE, simple_expr)) INTO binding = IDENT COLON NEWLINE INDENT
     body = list(through_stmt) result = expr NEWLINE DEDENT {
       {
         through_tine = tr;
-        through_passthru = Some pt;
+        through_passthru = pt;
         through_body = body;
         through_result = result;
         through_binding = binding;
@@ -420,8 +435,15 @@ canonical_through_block:
     }
 
 tine_ref:
-  | name = TINE_REF { TRSingle name }
-  | LPAREN p = predicate RPAREN { TRComposed p }
+  | p = tine_predicate invert = option(GAPS) {
+      match p.v, invert with
+      | PTineRef name, None -> TRSingle name
+      | _, None -> TRComposed p
+      | _, Some () -> TRComposed (mk_node (PNot p) $startpos $endpos)
+    }
+  | LPAREN p = predicate RPAREN invert = option(GAPS) {
+      TRComposed (match invert with None -> p | Some () -> mk_node (PNot p) $startpos $endpos)
+    }
 
 through_stmt:
   | LET b = binding NEWLINE { mk_node (SLet b) $startpos $endpos }
@@ -449,8 +471,9 @@ simple_expr:
   | LT e = broadcast_inner GT { mk_node (EBroadcast e) $startpos $endpos }
 
 canonical_sweep_arm:
-  | PIPE_CHAR name = TINE_REF FAT_ARROW e = expr NEWLINE {
-      { arm_tine = Some name; arm_value = e }
+  | PIPE_CHAR tr = tine_ref FAT_ARROW e = expr NEWLINE {
+      let p = match tr with TRSingle name -> mk_node (PTineRef name) $startpos $endpos | TRComposed p -> p in
+      { arm_tine = Some p; arm_value = e }
     }
   | PIPE_CHAR UNDERSCORE FAT_ARROW e = expr NEWLINE {
       { arm_tine = None; arm_value = e }

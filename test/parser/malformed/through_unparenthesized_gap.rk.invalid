@@ -1,0 +1,5 @@
+rake malformed_gap(values: f32s) -> f32s:
+  through values >= <0.0> gaps into negative:
+    values
+  sweep:
+    | _ => <0.0>

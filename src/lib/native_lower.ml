@@ -10,6 +10,8 @@ module Ir = Native_ir
 module StringMap = Map.Make (String)
 module Int32Map = Map.Make (Int32)
 
+let global_tines : def list ref = ref []
+
 let ( let* ) = Result.bind
 
 type error = { loc : loc; message : string }
@@ -1009,6 +1011,9 @@ let rec lower_predicate state (predicate : predicate) =
       match StringMap.find_opt name state.tines with
       | Some value -> Ok value
       | None -> errorf predicate.loc "undefined or forward tine reference '#%s'" name)
+  | PTineCall _ ->
+      (try lower_predicate state (Tines.expand_calls !global_tines predicate)
+       with Tines.Error (loc, message) -> error loc message)
 
 let lower_tine_ref state loc = function
   | TRSingle name -> (
@@ -1062,18 +1067,14 @@ let lower_through ?outer state (through : through) =
   let* () = lower_body None through.through_body in
   let* computed = lower_expr state provenance through.through_result in
   state.bindings <- outer_bindings;
-  let* passthrough =
-    match through.through_passthru with
-    | Some expression -> lower_expr state Ir.source expression
-    | None -> Ok (rack_constant state through.through_result.loc Ir.source 0.0)
-  in
-  let* computed, passthrough =
-    expect_same through.through_result.loc "through result" computed passthrough
-  in
-  let selected =
-    emit state through.through_result.loc Ir.source (snd computed)
-      (Ir.Select
-         { condition = fst mask; if_true = fst computed; if_false = fst passthrough })
+  let* selected = match through.through_passthru with
+    | None -> Ok computed (* Its inactive lanes are inaccessible in checked source. *)
+    | Some expression ->
+        let* passthrough = lower_expr state Ir.source expression in
+        let* computed, passthrough =
+          expect_same through.through_result.loc "through result" computed passthrough in
+        Ok (emit state through.through_result.loc Ir.source (snd computed)
+          (Ir.Select { condition = fst mask; if_true = fst computed; if_false = fst passthrough }))
   in
   bind state through.through_result.loc through.through_binding selected
 
@@ -1116,12 +1117,8 @@ let lower_sweep ?outer state definition_loc (sweep : sweep) =
     | [] -> Ok ()
     | arm :: rest -> (
         match arm.arm_tine with
-        | Some name ->
-            let* tine =
-              match StringMap.find_opt name state.tines with
-              | Some value -> Ok value
-              | None -> errorf arm.arm_value.loc "undefined sweep tine '#%s'" name
-            in
+        | Some predicate ->
+            let* tine = lower_predicate state predicate in
             let provenance =
               if not needs_effective_masks then unmasked
               else
@@ -1157,10 +1154,15 @@ let lower_sweep ?outer state definition_loc (sweep : sweep) =
             lower_arms rest)
   in
   let* () = lower_arms sweep.sweep_arms in
-  let* seed =
+  let* seed, selections =
     match !catchall with
-    | Some value -> Ok value
-    | None -> error definition_loc "native sweep requires a final catch-all arm"
+    | Some value -> Ok (value, !named_rev)
+    | None -> (
+        (* Proven coverage makes the last arm the value for all lanes left
+           after earlier arms. Its selector needs no redundant final select. *)
+        match !named_rev with
+        | (_, value, _) :: earlier -> Ok (value, earlier)
+        | [] -> error definition_loc "a sweep requires at least one result arm")
   in
   let result =
     List.fold_left
@@ -1168,7 +1170,7 @@ let lower_sweep ?outer state definition_loc (sweep : sweep) =
         emit state loc Ir.source (snd accumulator)
           (Ir.Select
              { condition = fst tine; if_true = fst candidate; if_false = fst accumulator }))
-      seed !named_rev
+      seed selections
   in
   let* () = bind state definition_loc sweep.sweep_binding result in
   Ok result
@@ -1334,6 +1336,7 @@ let callee_table definitions =
     exception-capable operation is sanitised. *)
 let lower_expression ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
   callees := callee_table definitions;
+  global_tines := definitions;
   let state =
     {
       next_value = List.length parameters;
@@ -1387,6 +1390,7 @@ let lower_definition (definition : def) =
   | DPack _ -> error definition.loc "pack definitions are not supported by native lowering"
   | DSingle _ -> error definition.loc "single definitions are not supported by native lowering"
   | DType _ -> error definition.loc "type aliases are not supported by native lowering"
+  | DTine _ -> error definition.loc "a global tine is instantiated in a rake, not emitted as a function"
   | DRake (name, parameters, result, setup, tines, throughs, sweep) ->
       lower_rake definition.loc name parameters result setup tines throughs sweep
   | DRun _ -> error definition.loc "run definitions are not supported by native lowering"
@@ -1397,7 +1401,7 @@ let lower_definition (definition : def) =
 let lower_module module_ =
   let rec lower reversed = function
     | [] -> Ok (List.rev reversed)
-    | ({ v = (DPack _ | DSingle _ | DType _); _ } : def) :: rest ->
+    | ({ v = (DPack _ | DSingle _ | DType _ | DTine _); _ } : def) :: rest ->
         lower reversed rest
     | definition :: rest ->
         let* func = lower_definition definition in
@@ -1406,7 +1410,9 @@ let lower_module module_ =
   lower [] module_.mod_defs
 
 let lower_program program =
-  callees := callee_table (List.concat_map (fun (m : module_) -> m.mod_defs) program);
+  let definitions = List.concat_map (fun (m : module_) -> m.mod_defs) program in
+  callees := callee_table definitions;
+  global_tines := definitions;
   let rec lower reversed = function
     | [] ->
         let functions = List.rev reversed in

@@ -1,0 +1,7 @@
+tine #valid(x: f32s) means x >= <0.0>
+rake leak(values: f32s) -> f32s:
+  through #valid(values) into rooted:
+    sqrt(values)
+  sweep:
+    | #valid(values) => shuffle(rooted, [3, 2, 1, 0, 7, 6, 5, 4])
+    | #valid(values) gaps => <0.0>

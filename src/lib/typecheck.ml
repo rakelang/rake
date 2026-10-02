@@ -19,12 +19,14 @@ type env = {
   types: (ident, t) Hashtbl.t;      (** Type definitions (pack, single) *)
   vars: (ident, t) Hashtbl.t;       (** Variable bindings *)
   tines: (ident, unit) Hashtbl.t;   (** Declared tines (for validation) *)
+  global_tines: def list;          (** Parameterized predicates, never runtime globals *)
   funcs: (ident, t list * t) Hashtbl.t;  (** Function signatures *)
   locations: (ident, unit) Hashtbl.t;    (** Mutable locations (from :=) *)
 }
 
-let create_env target = {
+let create_env target global_tines = {
   target;
+  global_tines;
   types = Hashtbl.create 32;
   vars = Hashtbl.create 64;
   tines = Hashtbl.create 16;
@@ -37,6 +39,7 @@ let copy_env env = {
   types = Hashtbl.copy env.types;
   vars = Hashtbl.copy env.vars;
   tines = Hashtbl.copy env.tines;
+  global_tines = env.global_tines;
   funcs = Hashtbl.copy env.funcs;
   locations = Hashtbl.copy env.locations;
 }
@@ -1097,6 +1100,33 @@ let rec check_predicate env (pred: predicate) : unit =
   | PTineRef name ->
       if not (Hashtbl.mem env.tines name) then
         type_errorf pred.loc "Reference to undefined tine: #%s" name
+  | PTineCall (name, arguments) ->
+      let parameters, _ = Tines.find_definition env.global_tines name pred.loc in
+      if List.length parameters <> List.length arguments then
+        type_errorf pred.loc "Global tine #%s expects %d arguments, got %d"
+          name (List.length parameters) (List.length arguments);
+      List.iter2 (fun parameter argument ->
+        let annotation, argument, uniform = match parameter with
+          | PRack (_, Some annotation) -> annotation, argument, false
+          | PScalar (_, Some annotation) ->
+              let argument = match argument.v with
+                | EBroadcast scalar -> scalar
+                | EScalarVar name -> { argument with v = EVar name }
+                | _ -> type_errorf argument.loc "A global tine's uniform argument must use angle brackets"
+              in annotation, argument, true
+          | _ -> type_errorf pred.loc "Global tine parameters require explicit rack or uniform types"
+        in
+        let expected = typ_to_t env annotation in
+        let actual = match uniform, argument.v with
+          | true, EFloat _ -> Scalar SFloat
+          | true, EInt _ -> Scalar SInt
+          | true, EBool _ -> Scalar SBool
+          | _ -> infer_expr env argument in
+        if expected <> actual then type_errorf argument.loc
+          "Global tine #%s argument type mismatch: expected %s, got %s"
+          name (show_concise expected) (show_concise actual)
+      ) parameters arguments;
+      check_predicate env (Tines.expand_calls env.global_tines pred)
 
 (** Audit an expression for CPU-predicated execution.  This is deliberately
     separate from ordinary type inference: a call can be valid in unmasked
@@ -1180,6 +1210,8 @@ and check_masked_stmt env (stmt: stmt) =
 let check_through env (th: through) : t =
   (* Use through_result's location as the block location *)
   let block_loc = th.through_result.loc in
+  if Hashtbl.mem env.vars th.through_binding then
+    type_errorf block_loc "Cannot rebind '%s' (SSA violation)" th.through_binding;
   require_feature env block_loc Capabilities.Rake_through;
   (* Check tine reference *)
   (match th.through_tine with
@@ -1213,30 +1245,9 @@ let check_through env (th: through) : t =
 (** Check sweep block *)
 let check_sweep env (sw: sweep) expected_loc : t =
   require_feature env expected_loc Capabilities.Rake_sweep;
-  (* A total sweep has exactly one final catch-all and mentions each named tine
-     at most once. Keeping this as a source invariant lets emission start from
-     a real value rather than inventing an unmatched-lane seed. *)
-  let rec check_arms seen_tines saw_catchall = function
-    | [] ->
-        if not saw_catchall then
-          type_error "Sweep must end with a catch-all (_) arm" expected_loc
-    | arm :: rest ->
-        if saw_catchall then
-          type_error "Sweep arm after catch-all (_) is unreachable" expected_loc;
-        (match arm.arm_tine with
-         | Some name ->
-             if List.mem name seen_tines then
-               type_errorf expected_loc "Duplicate tine arm in sweep: #%s" name;
-             check_arms (name :: seen_tines) false rest
-         | None -> check_arms seen_tines true rest)
-  in
-  check_arms [] false sw.sweep_arms;
-
   let arm_types = List.map (fun arm ->
     (match arm.arm_tine with
-     | Some name ->
-         if not (Hashtbl.mem env.tines name) then
-           type_errorf expected_loc "Reference to undefined tine in sweep: #%s" name
+     | Some predicate -> check_predicate env predicate
      | None -> ());  (* catch-all *)
     check_masked_expr env arm.arm_value;
     let arm_t = infer_expr env arm.arm_value in
@@ -1305,6 +1316,7 @@ let check_rake env _name params result setup tines throughs sweep loc =
 
   (* Check sweep *)
   let sweep_t = check_sweep env' sweep loc in
+  Tines.check_defined_rake env'.global_tines tines throughs sweep loc;
   Hashtbl.add env'.vars sweep.sweep_binding sweep_t;
 
   (* Verify result type matches *)
@@ -1438,6 +1450,19 @@ let check_def env (def: def) =
       check_scratch env name params result body def.loc
   | DRake (name, params, result, setup, tines, throughs, sweep) ->
       check_rake env name params result setup tines throughs sweep def.loc
+  | DTine (_, parameters, predicate) ->
+      let local = copy_env env in
+      Hashtbl.clear local.vars;
+      Hashtbl.clear local.tines;
+      List.iter (fun parameter ->
+        ensure_supported_rake_param local def.loc parameter;
+        match parameter with
+        | PRack (name, Some annotation) | PScalar (name, Some annotation) ->
+            if Hashtbl.mem local.vars name then type_errorf def.loc "Duplicate global tine parameter: %s" name;
+            Hashtbl.add local.vars name (typ_to_t local annotation)
+        | _ -> type_errorf def.loc "Global tine parameters require explicit rack or uniform types"
+      ) parameters;
+      check_predicate local predicate
   | DRun (name, params, result, body) ->
       if not (run_needs_tier params result body) then check_run env name params result body def.loc
   | DRecord _ | DUnion _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
@@ -1458,7 +1483,17 @@ let check_module env (m: module_) =
 
 (** Check a program *)
 let check_program ?(target = Capabilities.Frontend) (prog: program) =
-  let env = create_env target in
+  let global_tines = List.concat_map (fun module_ ->
+    List.filter (fun definition -> match definition.v with DTine _ -> true | _ -> false) module_.mod_defs
+  ) prog in
+  let seen = Hashtbl.create 16 in
+  List.iter (fun definition -> match definition.v with
+    | DTine (name, _, _) ->
+        if Hashtbl.mem seen name then type_errorf definition.loc "Duplicate global tine: #%s" name;
+        Hashtbl.add seen name ()
+    | _ -> ()
+  ) global_tines;
+  let env = create_env target global_tines in
   add_builtins env;
   List.iter (check_module env) prog;
   env
@@ -1468,6 +1503,6 @@ let check ?(target = Capabilities.Frontend) prog =
   try
     let env = check_program ~target prog in
     Ok env
-  with TypeError (msg, loc) ->
+  with TypeError (msg, loc) | Tines.Error (loc, msg) ->
     Error (Printf.sprintf "%s:%d:%d: Type error: %s"
       loc.file loc.line loc.col msg)

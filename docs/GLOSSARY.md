@@ -10,9 +10,10 @@ explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 | rack | one parallel value of the target profile, such as an `f32s`: one physical CPU vector register or WebAssembly `v128`. The GPU design maps it across a specified warp or subgroup |
 | lane | one element position in a rack: an `f32s` on AVX2 has eight |
 | uniform | one scalar shared by every lane, marked `<name>` |
-| tine | a named mask of lanes, written `#name` |
-| through block | code that computes under a tine, with a value for the other lanes |
-| sweep | the choice of each lane's result from tines in priority order, ending in `_` |
+| tine | a labelled lane mask, local to a rake or defined globally as a typed predicate such as `#valid(values)` |
+| gaps | the exact Boolean complement of a tine or composed mask, including lanes with NaNs that failed its comparisons |
+| through block | code that computes under a mask, with an optional `else` value for other lanes. Without `else`, only selected lanes are defined |
+| sweep | the choice of each lane's result in priority order, with masks that provably cover every lane or a final `_` |
 | scratch | a function of racks without a tine/through/sweep body |
 | rake | a function of racks with tines, through blocks and a sweep |
 | run | vector code over memory: traverse stacks and apply rakes or scratches to racks from their columns |

@@ -8,7 +8,7 @@ stage checks each promise from [the goals](GOALS.md).
 ```text
 source
   -> layout check, lexer and layout tokens, parser       the AST
-  -> type checker                                        types and capabilities
+  -> type checker                                        types, capabilities and lane coverage
   -> native lowering                                     typed native IR
   -> native IR verifier
   -> optimiser                                           identifiers substituted, fused multiply-adds formed, dead code removed
@@ -23,8 +23,17 @@ source
 
 The type checker accepts a program only when every construct it uses has a
 type rule and is available, and `rakec --print-capabilities` lists that
-status for each feature. Native lowering turns a scratch or rake into typed
-SSA, inlining the scratches and rakes it calls. The IR verifier checks that
+status for each feature. Global tines are instantiated with their typed
+arguments before the checker proves mask coverage. A Boolean decision diagram
+checks that each use of a partial `through` result stays inside its defined
+mask, and that the sweep covers every lane. Comparisons remain independent
+Boolean atoms, so `gaps` complements a mask without assuming numeric identities
+that fail for NaNs. Cross-lane operations require fully defined operands.
+
+Native lowering turns a scratch or rake into typed SSA, inlining the scratches
+and rakes it calls. A `through` without `else` needs no intermediate fallback
+selection. The sweep supplies the values for its complementary lanes.
+The IR verifier checks that
 every value is defined once and before its uses, that each operation has
 operands of the right types, that a fused region is contiguous and holds only
 pure rack or mask operations, that every block ends in exactly one

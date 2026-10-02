@@ -15,5 +15,7 @@ test/parser/malformed/tine_missing_parentheses.rk.invalid	malformed	tine declara
 test/parser/malformed/tine_predicate_call.rk.invalid	malformed	tine predicate arithmetic does not contain calls
 test/parser/malformed/tine_reference_whitespace.rk.invalid	malformed	tine reference has no internal whitespace
 test/parser/malformed/through_missing_result_arrow.rk.invalid	malformed	through header requires into binding
+test/parser/malformed/through_unparenthesized_gap.rk.invalid	malformed	through comparisons require parentheses
+test/parser/malformed/sweep_unparenthesized_gap.rk.invalid	malformed	sweep comparisons require parentheses
 test/parser/malformed/reserved_single.rk.invalid	malformed	single schemas are reserved
 test/parser/malformed/reserved_spread.rk.invalid	malformed	parameter spreading is reserved

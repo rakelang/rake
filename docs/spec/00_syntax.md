@@ -35,7 +35,7 @@ identifiers after a field type, in a literal or after `.`. A lone
 
 ```text
 and bool bools break by const continue scratch else embed extern f32 f32s f64
-f64s false fma for from i16 i16s i32 i32s i64 i64s i8 i8s if in into lanes
+f64s false fma for from gaps i16 i16s i32 i32s i64 i64s i8 i8s if in into lanes
 let mask mut not or pack ptr rake record repeat return rotate_left
 rotate_right run shift_left shift_right shuffle slow stack state sweep then
 through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked union up using
@@ -81,21 +81,22 @@ A file holds one or more definitions:
 scratch scale(values: f32s, <factor: f32>) -> f32s:
   values * <factor>
 
-rake safe_root(values: f32s) -> f32s:
-  tine #valid means values >= <0.0>
+tine #valid(values: f32s) means values >= <0.0>
 
-  through #valid else <0.0> into rooted:
+rake safe_root(values: f32s) -> f32s:
+  through #valid(values) into rooted:
     sqrt(values)
 
   sweep:
-    | #valid => rooted
-    | _      => <0.0>
+    | #valid(values) => rooted
+    | #valid(values) gaps => <0.0>
 ```
 
 | Definition | Meaning | Defined in |
 | --- | --- | --- |
 | `scratch name(parameters) -> T:` | straight-line rack computation | [Fused bindings](04_fused_bindings.md) |
 | `rake name(parameters) -> T:` | rack computation with named lane masks | [Tines, through and sweeps](03_tines_and_through.md) |
+| `tine #label(parameters) means predicate` | reusable typed lane predicate | [Tines, through and sweeps](03_tines_and_through.md) |
 | `run name(parameters) -> T:` | vector code over memory | [Packs and runs](02_packs_and_run.md) |
 | `pack Name { T: field, field; }` | one record, also defining the fields of its columnar stack | [Packs, stacks and runs](02_packs_and_run.md) |
 | `slow name(parameters) -> T:` | scalar code | [The slow tier](08_slow_tier.md) |
@@ -173,9 +174,9 @@ and [the slow tier](08_slow_tier.md) the scalar statements.
 
 ## Tines, through and sweeps
 
-A rake defines its lane masks with tines, computes values under them with
-`through`, and combines the results with a sweep. A rake's body is, in order,
-any `let` bindings, its tines, its through blocks and the sweep:
+A global tine defines a reusable predicate with typed inputs. Local tines
+can refer directly to a rake's inputs. A rake's body is, in order, any
+setup bindings, any local tines, its through blocks and the sweep:
 
 ```rake
 rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
@@ -191,14 +192,16 @@ rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
 ```
 
 A tine's predicate uses comparisons, other tines, parentheses, `not`, `and`
-and `or`, and arithmetic and fields on its operands. It contains no calls.
-A through block selects one tine, as in `through #active`, or a predicate in
-parentheses, as in `through (#active and not #edge)`. `else` gives the value
-of the lanes outside the tine, a uniform or a literal, and `into` specifies the
-result. A sweep
-takes the first arm whose tine holds for each lane and ends with one `_` arm
-for the remaining lanes. [Tines, through and sweeps](03_tines_and_through.md)
-defines them.
+and `or`, and arithmetic and fields on its operands. Calls apply global
+tines, as in `#valid(values)`, but ordinary function calls aren't permitted.
+Postfix `gaps` inverts a tine or parenthesised predicate. A through block
+selects a local tine, a global application or a composed predicate.
+`else` is optional: without it, only the selected lanes have a defined
+value. `into` binds that result. A sweep takes the first matching arm for
+each lane and requires provable total coverage. A final `_` supplies any
+remaining lanes, or a `gaps` arm can cover them explicitly.
+[Tines, through and sweeps](03_tines_and_through.md) defines the coverage
+and partial-value rules.
 
 ## Expressions
 

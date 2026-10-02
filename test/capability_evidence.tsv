@@ -20,6 +20,7 @@ definition.single	unavailable	unavailable	capability:definition.single	-	-	-	-	-
 definition.type-alias	unavailable	unavailable	capability:definition.type-alias	-	-	-	-	-	-
 definition.scratch	checked	frontend-only	capability:definition.scratch	-	-	-	-	-	-
 definition.rake	checked	verified-slice	fixture:test/native/predication.rk	runtime:predication	fixture:test/native/predication.rk	dune:x86_simd_isel_test	dune:x86_simd_regalloc_test	verify:predication	runtime:predication
+definition.tine	checked	verified-slice	fixture:test/program/global_tines.rk	program:test/program/global_tines.rk	fixture:test/program/global_tines.rk	dune:wasm_simd128_test	wasm-verify:test/program/global_tines.rk	wasm-verify:test/program/global_tines.rk	program:test/program/global_tines.rk
 definition.run	checked	verified-slice	fixture:test/abi/runs.rk	abi:test/abi/runs.rk	fixture:test/abi/runs.rk	dune:wasm_simd128_test	wasm-verify:test/abi/runs.rk	wasm-verify:test/abi/runs.rk	abi:test/abi/runs.rk
 parameter.rack	checked	frontend-only	capability:parameter.rack	-	-	-	-	-	-
 parameter.scalar	checked	frontend-only	capability:parameter.scalar	-	-	-	-	-	-

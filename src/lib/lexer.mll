@@ -37,7 +37,7 @@ let () = List.iter (fun (k, v) -> Hashtbl.add keywords k v) [
   ("scratch", SCRATCH); ("rake", RAKE); ("run", RUN);
 
   (* Tines and control *)
-  ("tine", TINE); ("means", MEANS);
+  ("tine", TINE); ("means", MEANS); ("gaps", GAPS);
   ("through", THROUGH); ("sweep", SWEEP);
   ("else", ELSE); ("into", INTO); ("return", RETURN); ("yield", YIELD);
   ("in", IN);
@@ -227,7 +227,7 @@ let show_token = function
   | MASK -> "MASK" | STACK -> "STACK" | PACK -> "PACK"
   | SCRATCH -> "SCRATCH" | RAKE -> "RAKE" | RUN -> "RUN"
   | TINE_REF s -> Printf.sprintf "TINE_REF(%s)" s
-  | TINE -> "TINE" | MEANS -> "MEANS"
+  | TINE -> "TINE" | MEANS -> "MEANS" | GAPS -> "GAPS"
   | THROUGH -> "THROUGH" | SWEEP -> "SWEEP" | ELSE -> "ELSE" | INTO -> "INTO"
   | RETURN -> "RETURN" | YIELD -> "YIELD"
   | IN -> "IN" | FOR -> "FOR" | USING -> "USING"

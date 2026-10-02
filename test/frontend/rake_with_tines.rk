@@ -16,7 +16,6 @@ rake clamp_positive(values: f32s) -> f32s:
   sweep:
     | #negative => clamped
     | #positive => kept
-    | _         => kept
 
 ~~ Compare two values, select based on condition
 rake select_greater(a: f32s, b: f32s) -> f32s:
@@ -32,7 +31,6 @@ rake select_greater(a: f32s, b: f32s) -> f32s:
   sweep:
     | #a_wins => a_val
     | #b_wins => b_val
-    | _       => b_val
 
 ~~ Threshold detection with computation
 rake threshold_detect(values: f32s, <threshold: f32>) -> f32s:
@@ -50,7 +48,6 @@ rake threshold_detect(values: f32s, <threshold: f32>) -> f32s:
   sweep:
     | #above => above_result
     | #below => below_result
-    | _      => below_result
 
 ~~ Multiple tines with compound predicates
 rake classify_sign(values: f32s) -> f32s:
@@ -76,4 +73,3 @@ rake classify_sign(values: f32s) -> f32s:
     | #negative => neg_result
     | #positive => pos_result
     | #zero     => zero_result
-    | _         => zero_result

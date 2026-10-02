@@ -1608,7 +1608,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     consts = List.rev !consts;
     slows = slows @ List.rev !(ctx.block_functions);
     runs;
-    vector_defs = List.filter (fun (d : Ast.def) -> match d.v with DScratch _ | DRake _ -> true | _ -> false) defs;
+    vector_defs = List.filter (fun (d : Ast.def) -> match d.v with DScratch _ | DRake _ | DTine _ -> true | _ -> false) defs;
   }
 
 let check ?base_dir program =

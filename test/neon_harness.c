@@ -20,6 +20,11 @@ static uint32_t bits(float value) {
   return result;
 }
 
+#define LANES 4
+static rack load(const float *values) { rack result; memcpy(&result, values, sizeof result); return result; }
+static void store(float *values, rack result) { memcpy(values, &result, sizeof result); }
+#include "global_tines_oracle.h"
+
 static float from_bits(uint32_t value) {
   float result;
   memcpy(&result, &value, sizeof(result));
@@ -36,6 +41,8 @@ static int check(rack actual, const uint32_t *expected, int base) {
 }
 
 int main(int argc, char **argv) {
+  int global_failure = check_global_tines();
+  if (global_failure) return global_failure;
   if (argc != 2)
     return 100;
   FILE *file = fopen(argv[1], "r");

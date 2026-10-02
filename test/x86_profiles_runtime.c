@@ -40,6 +40,8 @@ static uint32_t bits(float value) {
     return result;
 }
 
+#include "global_tines_oracle.h"
+
 static int equal(float actual, float expected) {
     return (isnan(actual) && isnan(expected)) || bits(actual) == bits(expected);
 }
@@ -54,6 +56,8 @@ static float extreme(float a, float b, int maximum) {
 }
 
 int main(void) {
+    int failure = check_global_tines();
+    if (failure) return failure;
     const float a_seed[] = {16777216, 1, -16777216, 1, 2, 3, 4, 5};
     const float b_seed[] = {2, -1, 0, 3, -2, 0.5f, 1, -4};
     float a[LANES], b[LANES], result[LANES];

@@ -40,9 +40,12 @@ reserved and unavailable.
 
 ## Lane choices are masks
 
-Tines are named masks. A through block computes under one, and a sweep picks
-a value for every lane, by the arms' order and a final `_`, so the result is
-always defined. A vector backend keeps these choices as vector predication,
+Tines describe lane masks, either locally or as reusable typed global
+predicates. A through block computes under one. Without `else`, its result
+is defined only there, and the checker refuses reads outside that mask.
+A sweep picks each lane's result in priority order. Its arms must provably
+cover every lane, using `gaps` or a final `_` where needed. A vector backend
+keeps these choices as vector predication,
 with masked instructions or benign operands, and never turns them into
 branches for each lane. An inactive lane raises no floating-point exception,
 touches no memory and has no other effect. A masked operation that a profile

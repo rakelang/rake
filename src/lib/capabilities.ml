@@ -15,7 +15,7 @@ type feature =
   | Type_single | Type_compound_rack | Type_compound_scalar
   | Type_function | Type_tuple | Type_unit
   | Primitive_float | Primitive_int | Primitive_int64 | Primitive_other
-  | Def_pack | Def_single | Def_alias | Def_scratch | Def_rake | Def_run
+  | Def_pack | Def_single | Def_alias | Def_scratch | Def_rake | Def_tine | Def_run
   | Param_rack | Param_scalar | Param_spread
   | Result_annotation
   | Expr_int | Expr_float | Expr_bool | Expr_var | Expr_scalar_var
@@ -88,6 +88,7 @@ let all = [
   unavailable Def_alias "definition.type-alias" "definition" "type aliases";
   supported Def_scratch "definition.scratch" "definition" "scratch semantic checks";
   supported Def_rake "definition.rake" "definition" "rake semantic checks";
+  supported Def_tine "definition.tine" "definition" "typed global tine predicates";
   supported Def_run "definition.run" "definition" "run semantic checks";
   supported Param_rack "parameter.rack" "parameter" "rack parameters";
   supported Param_scalar "parameter.scalar" "parameter" "scalar parameters where target ABI permits";
@@ -296,11 +297,11 @@ let feature_of_predicate = function
   | PExpr _ -> Predicate_expr | PCmp _ -> Predicate_comparison
   | PIs _ | PIsNot _ -> Predicate_is | PAnd _ -> Predicate_and
   | POr _ -> Predicate_or | PNot _ -> Predicate_not
-  | PTineRef _ -> Predicate_tine_ref
+  | PTineRef _ | PTineCall _ -> Predicate_tine_ref
 
 let feature_of_def = function
   | DPack _ -> Def_pack | DSingle _ -> Def_single | DType _ -> Def_alias
-  | DScratch _ -> Def_scratch | DRake _ -> Def_rake | DRun _ -> Def_run
+  | DScratch _ -> Def_scratch | DRake _ -> Def_rake | DTine _ -> Def_tine | DRun _ -> Def_run
   | DRecord _ -> Def_record | DUnion _ -> Def_union | DSlow _ -> Def_slow | DExtern _ -> Def_extern
   | DState _ -> Def_state | DEmbed _ -> Def_embed | DConst _ -> Def_const
 

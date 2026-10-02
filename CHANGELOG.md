@@ -7,6 +7,13 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Define typed global tines with explicit rack and uniform parameters, and
+  apply them in local tines, through blocks and sweeps. `gaps` complements a
+  tine or composed mask, including unordered floating-point lanes.
+  Through fallbacks are optional: without `else`, reading an undefined lane
+  is a compile error. Sweeps may omit `_` when Boolean mask coverage is
+  provably total. Physical and WebAssembly lowering retain their existing
+  predication and inactive-input safety obligations.
 - Support opaque header-backed C typedefs through typed pointers, including
   callback signatures. Reject by-value opaque objects and their construction.
 - Compile the AVX2 `f32` stream traversal subset as complete Rake-selected

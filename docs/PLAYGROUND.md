@@ -82,7 +82,7 @@ updated.
 | 5 | [Loops and reductions](#5-loops-and-reductions) | counted vector loops, rack locations, `sum`, `let <x: T>` | the four running sums fold into one |
 | 6 | [Fused stages](#6-fused-stages) | `\| name <\| e`, fused multiply-add | the x86 Code tab shows one `vfmadd231ps` |
 | 7 | [Choosing by lane](#7-choosing-by-lane) | masks, `if ... then ... else` on racks | both branches run and a select joins them |
-| 8 | [Tines and sweeps](#8-tines-and-sweeps) | `#tine`, `through`, `sweep`, `_` | a NaN in one lane disappears once the root is guarded |
+| 8 | [Tines and sweeps](#8-tines-and-sweeps) | global `#tine` predicates, `through`, `sweep`, `gaps`, optional fallbacks | incomplete coverage and an undefined lane both become compiler errors |
 | 9 | [Columns](#9-columns) | `stack`, `pack`, traversals, `widen`, tails | a count of 6 leaves a tail with two live lanes |
 | 10 | [A whole program](#10-a-whole-program) | `slow {}`, records, `state`, `mut` | scalar state updates require a block, and vector work resumes at `}` |
 | 11 | [Proved or refused](#11-proved-or-refused) | profiles and their rules | `sin` is refused instead of slowed down |
@@ -307,24 +307,25 @@ slow main() -> i32:
 
 Result: a trap at the last line, `-nan does not fit i32`, and the Lanes tab
 shows `4 NaN 3 1`. A rake guards the lanes instead.
-`tine #valid means values >= <0.0>` computes the mask of lanes
-that may take a root.
-`through #valid else <0.0> into rooted:` binds an intermediate rack: roots in
-those lanes, zero in the others. The sweep chooses the final result for each
-lane: the first arm whose tine holds, and `_` for every other lane.
+Define `tine #valid(values: f32s) means values >= <0.0>` outside the rake.
+It is a reusable predicate with an explicit input, so applying
+`#valid(values)` computes the mask of lanes that may take a root.
+`through #valid(values) into rooted:` binds roots in those lanes. The other
+lanes are undefined, so the sweep reads `rooted` only where the tine holds.
+The `gaps` arm supplies zero for every complementary lane.
 
 <!-- rake-check: run 8 -->
 <!-- playground-starter -->
 ```rake
-rake safe_root(values: f32s) -> f32s:
-  tine #valid means values >= <0.0>
+tine #valid(values: f32s) means values >= <0.0>
 
-  through #valid else <0.0> into rooted:
+rake safe_root(values: f32s) -> f32s:
+  through #valid(values) into rooted:
     sqrt(values)
 
   sweep:
-    | #valid => rooted
-    | _      => <0.0>
+    | #valid(values) => rooted
+    | #valid(values) gaps => <0.0>
 
 run all_roots(x: []f32, out: mut []f32):
   out[<0>] <- safe_root(x[<0>])
@@ -338,20 +339,21 @@ slow main() -> i32:
 
 Result: `main returned 8`. The NaN has left the Lanes tab: `4 0 3 1`.
 
-Change only the sweep's `_` arm to `| _ => <-1.0>` and run. The result is
-`main returned 7`, and the output lanes are `4 -1 3 1`. The intermediate
-`rooted` still has zero in lane 1, but the sweep chooses −1 for that lane.
+Change the `gaps` arm's value to `<-1.0>` and run. The result becomes
+`main returned 7`, with output lanes `4 -1 3 1`. There is no intermediate
+zero to change: `rooted` has a value only where `#valid(values)` holds.
 
-Now change only the through fallback to `else <999.0>` and run again. The
-result stays 7. That changes an intermediate lane the sweep doesn't use.
-Change the sweep's `_` arm to `| _ => rooted`: now the result is 1007,
-because the sweep uses the intermediate fallback. These computations are
-pure, but not lazy. A sweep selects the final values in place, rather than
-triggering or rearranging earlier work.
+Delete the `gaps` arm and run. The compiler reports
+`Sweep does not provably cover every lane`. Restore it, then change its
+value to `rooted`. That is also refused: it would read the root in the
+negative lane, where no root was computed.
 
-Reset the lesson, delete the `_` arm and run. The message
-`Sweep must end with a catch-all (_) arm` explains why every lane needs a
-result. `sweep:` is the rake's result form, so it needs no `return` keyword.
+To define that intermediate lane, add `else <999.0>` before `into rooted`
+in the through header. Run with `rooted` still in both sweep arms: the
+result is now 1007. Reset the lesson to restore its original behaviour.
+These computations are pure, but not lazy. A sweep selects values in place
+without triggering or rearranging earlier work. It is the rake's result
+form and needs no `return` keyword.
 
 ## 9. Columns
 

@@ -104,7 +104,7 @@ tests will compare the emitted result with the verified optimised graph.
 
 ### Implement the unavailable language capabilities
 
-We will work down the capability catalogue, which currently reports 90 checked
+We will work down the capability catalogue, which currently reports 91 checked
 and 34 unavailable capabilities. The outstanding language areas
 include tuple types, closures, lambdas, pipelines, type aliases, spread
 parameters, record updates, inline tines, outer products and several masked
@@ -139,6 +139,12 @@ We will keep the tutorial, diagnostics and reference examples aligned so that
 `<uniform>`, `#tine`, fused `| name <| value` bindings, `through` and `sweep`
 are introduced when a learner first needs them. Compiler messages will name
 the same concepts as the documentation and point to the relevant lesson.
+
+Global tines now provide reusable typed predicates, and `gaps` supplies exact
+mask inversion. Optional fallbacks are checked through Boolean coverage and
+lane-definedness proofs. We will extend this analysis only with sound
+floating-point and lane-movement semantics, retaining compile-time refusal
+when coverage cannot be proved.
 
 ### Remove the negative-uniform ambiguity
 

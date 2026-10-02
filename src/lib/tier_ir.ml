@@ -214,7 +214,7 @@ type program = {
   consts : (string * ty * expr) list;
   slows : slow_func list;
   runs : run list;
-  vector_defs : Ast.def list;  (** scratches and rakes, lowered by the native pipeline *)
+  vector_defs : Ast.def list;  (** scratches, rakes and their reusable tine predicates *)
 }
 
 let find_pack program name = List.find (fun s -> s.pack_name = name) program.packs

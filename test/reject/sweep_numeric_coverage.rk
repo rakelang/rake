@@ -1,0 +1,8 @@
+tine #positive(x: f32s) means x >= <0.0>
+tine #negative(x: f32s) means x < <0.0>
+rake incomplete(values: f32s) -> f32s:
+  through #positive(values) into positive:
+    values
+  sweep:
+    | #positive(values) => positive
+    | #negative(values) => values
