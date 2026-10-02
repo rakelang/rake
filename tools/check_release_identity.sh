@@ -51,13 +51,26 @@ expect_literal "${project_root}/README.md" "Release: ${version}"
 expect_literal "${project_root}/CHANGELOG.md" "## ${version}"
 expect_literal "${project_root}/src/bin/main.ml" "Rake.Version.display"
 
-expect_literal "${tree_sitter_root}/package.json" "\"version\": \"${version}\""
-expect_literal "${tree_sitter_root}/package-lock.json" "\"version\": \"${version}\""
-expect_literal "${tree_sitter_root}/tree-sitter.json" "\"version\": \"${version}\""
-expect_literal "${tree_sitter_root}/Cargo.toml" "version = \"${version}\""
-expect_literal "${tree_sitter_root}/pyproject.toml" "version = \"${version}\""
-expect_literal "${tree_sitter_root}/CMakeLists.txt" "set(RAKE_PACKAGE_VERSION \"${version}\")"
-expect_literal "${tree_sitter_root}/Makefile" "VERSION := ${version}"
+# Registry releases are immutable. A grammar-only repair may add a numbered
+# suffix without changing the compiler release whose language it parses.
+grammar_version="$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "${tree_sitter_root}/package.json")"
+if test "${grammar_version}" != "${version}"; then
+  case "${grammar_version}" in
+    "${version}".*)
+      grammar_patch="${grammar_version#"${version}".}"
+      case "${grammar_patch}" in
+        ''|*[!0-9]*) fail "invalid grammar patch version: ${grammar_version}" ;;
+      esac
+      ;;
+    *) fail "grammar ${grammar_version} does not match compiler ${version}" ;;
+  esac
+fi
+expect_literal "${tree_sitter_root}/package-lock.json" "\"version\": \"${grammar_version}\""
+expect_literal "${tree_sitter_root}/tree-sitter.json" "\"version\": \"${grammar_version}\""
+expect_literal "${tree_sitter_root}/Cargo.toml" "version = \"${grammar_version}\""
+expect_literal "${tree_sitter_root}/pyproject.toml" "version = \"${grammar_version}\""
+expect_literal "${tree_sitter_root}/CMakeLists.txt" "set(RAKE_PACKAGE_VERSION \"${grammar_version}\")"
+expect_literal "${tree_sitter_root}/Makefile" "VERSION := ${grammar_version}"
 expect_literal "${tree_sitter_root}/package.json" \
   "https://github.com/rakelang/tree-sitter-rake.git"
 expect_literal "${tree_sitter_root}/tree-sitter.json" \
@@ -79,4 +92,4 @@ if test -x "${project_root}/_build/default/src/bin/main.exe"; then
     || fail "compiled rakec drifted; expected 'rake ${version}', got '${actual}' (run dune build)"
 fi
 
-echo "release identity ${version}: consistent"
+echo "release identity compiler ${version}, grammar ${grammar_version}: consistent"
