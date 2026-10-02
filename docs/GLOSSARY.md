@@ -7,7 +7,7 @@ documentation uses them.
 
 | Term | Meaning |
 | --- | --- |
-| rack | a value that is one vector register of the target, such as an `f32s` |
+| rack | one vector value of the target profile, such as an `f32s`: a physical vector register on x86 or Arm, and one `v128` in WebAssembly |
 | lane | one element position in a rack: an `f32s` on AVX2 has eight |
 | uniform | one scalar shared by every lane, marked `<name>` |
 | tine | a named mask of lanes, written `#name` |
@@ -56,7 +56,7 @@ documentation uses them.
 | SSA | static single assignment: a representation in which each value is defined once, which makes data dependencies explicit |
 | binding, reference | a binding gives a value a name, and a reference uses the name. It means the value, not a memory address |
 | instruction selection | choosing the machine instructions for each operation |
-| register allocation | assigning each value to a physical register |
+| register allocation | assigning each value to a physical register. Rake does this for its physical targets, while a WebAssembly runtime does it for `v128` values |
 | object code | encoded machine instructions and data, ready for a linker |
 | assembler | the tool that encodes textual assembly as object code |
 | ABI | application binary interface: the rules for passing arguments, returning values and laying out data |

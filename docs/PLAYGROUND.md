@@ -4,8 +4,8 @@ This page includes the playground: someone who has never written SIMD code
 can learn Rake by editing and running small programs in the browser. The
 tutorial introduces one idea at a time and makes each idea visible in the
 result, lane trace, generated code or compiler message. The reference after
-the editor records the lesson design and explains syntax that may look strange
-to a programmer coming from C, Java, JavaScript or Python. Every program is
+the editor explains each lesson and the syntax that may look strange to a
+programmer coming from C, Java, JavaScript or Python. Every program is
 also compiled by the documentation checker, and its result is the one the
 lesson promises.
 
@@ -18,9 +18,9 @@ lesson promises.
 | Lesson text                | Editor                                    |
 |                            |  crunch scale(values: f32s,               |
 | What the lesson            |               <factor: f32>) -> f32s:     |
-| introduces, the task, and  |    return values * <factor>               |
-| a hint that opens on       |                                           |
-| request.                   | [Run]   Target: [wasm-simd128 v]  [Reset] |
+| introduces, the task and   |    return values * <factor>               |
+| what to inspect after      |                                           |
+| running it.                | [Run]   Target: [wasm-simd128 v]  [Reset] |
 |                            +-------------------------------------------+
 |                            | Result | Lanes | Code | Messages          |
 |                            |                                           |
@@ -34,7 +34,7 @@ tabs under it:
 | Tab | Shows |
 | --- | --- |
 | Result | what `main` returned, or the trap that stopped it, with its line |
-| Lanes | each rack the program computed as a row of cells, one for each lane, and each mask as a row of filled and empty cells |
+| Lanes | each rack the program computed as a row with one decimal value per lane, and each mask as a row of filled and empty cells |
 | Code | what the compiler made for the chosen target: C with one WebAssembly intrinsic for each instruction on `wasm-simd128`, and assembly on `x86-avx2` and `aarch64-neon` |
 | Messages | the compiler's errors, each also underlined in the editor at its line and column |
 
@@ -51,7 +51,7 @@ The compiler runs in the page. `rakec` is OCaml, and `js_of_ocaml` compiles
 its front end, interpreter and emitters for the browser, so the playground
 calls the same code behind `rakec --interpret` and `rakec --emit-asm` that
 runs on a workstation. The parts that start clang and the assembler stay out
-of the browser build. Compilation and execution happen in a worker; a program
+of the browser build. Compilation and execution happen in a worker. A program
 that runs for more than three seconds is stopped without freezing the editor.
 The Lanes tab reads the
 interpreter's values, which it already computes lane by lane. Object
@@ -71,7 +71,7 @@ updated.
 | ---: | --- | --- | --- |
 | 1 | [A program](#1-a-program) | definitions, indentation, `->`, `let`, comments | changing `6 * 7` and seeing the new result |
 | 2 | [Changing values](#2-changing-values) | `:=` and `<-`, `for`, `if`, `%` | assigning to a `let` is refused |
-| 3 | [A rack](#3-a-rack) | `f32s`, views, `run`, a rack load and store | Lanes shows one multiply on four lanes |
+| 3 | [A rack](#3-a-rack) | `f32s`, views, `run`, a rack load and store | Lanes shows one vector multiply on four lanes |
 | 4 | [Marking uniforms](#4-marking-uniforms) | `crunch`, `<factor: f32>` and `<factor>` | removing the brackets is an error that points at the broadcast |
 | 5 | [Loops and reductions](#5-loops-and-reductions) | counted vector loops, rack locations, `sum`, `let <x: T>` | the four running sums fold into one |
 | 6 | [Fused stages](#6-fused-stages) | `\| name <\| e`, fused multiply-add | the x86 Code tab shows one `vfmadd231ps` |
@@ -94,6 +94,7 @@ integer. The line ends in a colon, and the indented lines below it are its
 body. `let` binds a name to a value, and `~~` starts a comment.
 
 <!-- rake-check: run 42 -->
+<!-- playground-starter -->
 ```rake
 ~~ The program's result is what main returns.
 slow main() -> i32:
@@ -101,9 +102,9 @@ slow main() -> i32:
   return answer
 ```
 
-Result: `main returned 42`. The task is to change the arithmetic and run
-again. This is the key moment of the first lesson, a working loop of edit,
-run and read, before any SIMD appears.
+Result: `main returned 42`. Change `6 * 7` to `9 * 9`, run the program and
+check that Result changes to `main returned 81`. This gives the first lesson
+its edit, run and read loop before any SIMD appears.
 
 ## 2. Changing values
 
@@ -112,6 +113,7 @@ changed with `<-`. `for i from 0 up to 10:` counts from 0 to 9, and `%` is
 the remainder.
 
 <!-- rake-check: run 20 -->
+<!-- playground-starter -->
 ```rake
 slow main() -> i32:
   total := 0
@@ -121,20 +123,21 @@ slow main() -> i32:
   return total
 ```
 
-Result: `main returned 20`, the sum of 0, 2, 4, 6 and 8. The key moment
-comes from the task: change `total := 0` to `let total = 0` and run. The
+Result: `main returned 20`, the sum of 0, 2, 4, 6 and 8. Change
+`total := 0` to `let total = 0` and run. The
 Messages tab says `this location can't be assigned` at the `<-`, which shows
 that the two kinds of name are different things, not two spellings.
 
 ## 3. A rack
 
-`f32s` is a rack: four `f32` values in one WebAssembly vector register. A
+`f32s` is a rack: four `f32` values in one WebAssembly `v128`. A
 `run` is vector code that reads and writes memory. Its parameter `x: []f32`
 is a view of floats, and `mut []f32` one it may write. `x[<0>]` loads the
 rack of four floats starting at element 0, and `out[<0>] <- ...` stores one.
 `<2.0>` is the number 2 in every lane.
 
 <!-- rake-check: run 20 -->
+<!-- playground-starter -->
 ```rake
 run twice(x: []f32, out: mut []f32):
   out[<0>] <- x[<0>] * <2.0>
@@ -146,9 +149,11 @@ slow main() -> i32:
   return i32(doubled[0] + doubled[1] + doubled[2] + doubled[3])
 ```
 
-Result: `main returned 20`. The key moment is in the Lanes tab: the load fills
+Result: `main returned 20`. Change `<2.0>` to `<3.0>` and run. Result becomes
+`main returned 30`. In the Lanes tab, the load fills
 a row of four cells, `1 2 3 4`, and the multiply turns the whole row into
-`2 4 6 8` in one step. The Code tab shows the step is one `wasm_f32x4_mul`.
+`3 6 9 12` in one step. The Code tab shows the step is one
+`wasm_f32x4_mul`.
 
 ## 4. Marking uniforms
 
@@ -157,6 +162,7 @@ scalar shared by every lane, and `<factor>` uses it. The brackets appear at
 both places on purpose: wherever a scalar becomes a rack, the page shows it.
 
 <!-- rake-check: run 40 -->
+<!-- playground-starter -->
 ```rake
 crunch scale(values: f32s, <factor: f32>) -> f32s:
   return values * <factor>
@@ -174,8 +180,7 @@ slow main() -> i32:
 
 Result: `main returned 40`. Slow code writes `factor` bare, because there it
 is just a number. It is marked `<factor>` at the call, where it crosses into
-vector code. The key moment comes from deleting the brackets inside the
-crunch:
+vector code. Delete the brackets around `factor` inside the crunch and run:
 
 <!-- rake-check: reject "'factor' is a uniform scalar: write <factor> where it meets a rack" -->
 ```rake
@@ -194,6 +199,7 @@ four running sums. `sum(sums)` adds a rack's lanes into one scalar, and
 `let <whole: f32> = ...` binds that scalar as a uniform.
 
 <!-- rake-check: run 78 -->
+<!-- playground-starter -->
 ```rake
 run total(x: []f32, out: mut []f32, <n: i32>):
   sums := <0.0>
@@ -209,10 +215,11 @@ slow main() -> i32:
   return i32(result[0])
 ```
 
-Result: `main returned 78`, the sum of 1 to 12. The key moment is in the
-Lanes tab after the loop: `sums` holds `15 18 21 24`, one running sum in each
-lane, and `sum` folds them from lane 0 upwards into 78. Vector code adds in
-columns, then reduces once at the end.
+Result: `main returned 78`, the sum of 1 to 12. Change the count passed to
+`total` from `<12>` to `<8>` and run. Result becomes `main returned 36`.
+In the Lanes tab after the shorter loop, `sums` holds `6 8 10 12`, one
+running sum in each lane, and `sum` folds them from lane 0 upwards into 36.
+Vector code adds in columns, then reduces once at the end.
 
 ## 6. Fused stages
 
@@ -222,6 +229,7 @@ form one region of pure arithmetic, and the names inside it are for the
 reader, so the compiler sees `positions + velocities * <dt>`.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+<!-- playground-starter -->
 ```rake
 crunch advance(positions: f32s, velocities: f32s, <dt: f32>) -> f32s:
   | step  <| velocities * <dt>
@@ -229,8 +237,8 @@ crunch advance(positions: f32s, velocities: f32s, <dt: f32>) -> f32s:
   return moved
 ```
 
-This lesson has no `main`. The key moment is in the Code tab with the target
-switched to `x86-avx2`:
+This lesson has no `main`. Select `x86-avx2`, run the compiler and open Code.
+Find the two instructions that implement the crunch:
 
 ```text
 advance:
@@ -249,6 +257,7 @@ A comparison of racks gives a mask, one true or false for each lane. `if v >
 w then v - w else w - v` with a mask condition chooses lane by lane.
 
 <!-- rake-check: run 4703 -->
+<!-- playground-starter -->
 ```rake
 crunch distance(v: f32s, w: f32s) -> f32s:
   return if v > w then v - w else w - v
@@ -264,10 +273,11 @@ slow main() -> i32:
   return i32(result[0] * 1000.0 + result[1] * 100.0 + result[2] * 10.0 + result[3])
 ```
 
-Result: `main returned 4703`, the four distances 4, 7, 0 and 3 as digits. The
-key moment is in the Lanes tab: the mask row reads `no yes no yes`, both
-subtractions run on all four lanes, and one select takes each lane from one
-of them. There is no branch, because there is only one instruction stream.
+Result: `main returned 4703`, the four distances 4, 7, 0 and 3 as digits.
+Change the first value of `a` from `1.0` to `6.0` and run. Result becomes
+`main returned 1703`. In the Lanes tab, the first mask value changes and the
+select takes the other subtraction for that lane. Both subtractions still run
+on all four lanes, because there is only one instruction stream.
 
 ## 8. Tines and sweeps
 
@@ -297,6 +307,7 @@ others 0. The sweep picks each lane's result: the first arm whose tine holds,
 and `_` for every other lane.
 
 <!-- rake-check: run 8 -->
+<!-- playground-starter -->
 ```rake
 rake safe_root(values: f32s) -> f32s:
   tine #valid when values >= <0.0>
@@ -318,8 +329,8 @@ slow main() -> i32:
   return i32(rooted[0] + rooted[1] + rooted[2] + rooted[3])
 ```
 
-Result: `main returned 8`. The key moment is the NaN leaving the Lanes tab:
-`4 0 3 1`. The task then asks the learner to delete the `_` arm, and the
+Result: `main returned 8`. The NaN has left the Lanes tab: `4 0 3 1`. Delete
+the `_` arm and run. The
 message `Sweep must end with a catch-all (_) arm` explains why every lane
 needs a result.
 
@@ -333,6 +344,7 @@ record, and `widen` turns a chunk of it into a rack of 32-bit lanes when the
 code needs it.
 
 <!-- rake-check: run 1570 -->
+<!-- playground-starter -->
 ```rake
 stack Particles {
   f32: position, velocity;
@@ -357,10 +369,10 @@ slow main() -> i32:
 ```
 
 Result: `main returned 1570`. Each `yield` writes a rack of results to the
-output, which slow code passes as the last argument. The key moment is the
-second chunk in the Lanes tab: six records in racks of four leave a tail
-with two live lanes, drawn filled, and two empty ones. The tail loads and
-stores only the two records that exist.
+output, which slow code passes as the last argument. Change the count passed
+to `advance` from `<6>` to `<5>` and run. The second chunk in the Lanes tab
+now has one live lane and three empty ones. The tail loads and stores only
+the record that exists.
 
 ## 10. A whole program
 
@@ -369,6 +381,7 @@ fields, `state games: i32 := 0` keeps a value for the life of the program,
 and a `mut` parameter is one the function writes.
 
 <!-- rake-check: run 922 -->
+<!-- playground-starter -->
 ```rake
 record Score {
   f32: best;
@@ -398,8 +411,12 @@ slow main() -> i32:
   return i32(score.best) * 100 + score.rounds * 10 + games
 ```
 
-Result: `main returned 922`: the best score 9, two rounds and two games. The
-key moment comes from trying to pass a rack to slow code:
+Result: `main returned 922`: the best score 9, two rounds and two games. Add
+`play(score, first)` after the two existing calls and run. Result becomes
+`main returned 933`, showing that the record and module state survive each
+call.
+
+Slow code can't hold a rack. This separate rejected example shows the rule:
 
 <!-- rake-check: reject "slow code can't take f32s values" -->
 ```rake
@@ -411,25 +428,29 @@ slow main() -> i32:
 ```
 
 Slow code is scalar, so it can't hold a rack. Vector work happens only inside
-the vector functions it calls, which keeps every rack in a register.
+the vector functions it calls, which keeps every rack as one vector value.
 
 ## 11. Proved or refused
 
 The target menu chooses a profile, and each profile has rules that every
-program it compiles obeys: every rack in one register, no calls, no spills,
-and only the instructions the profile lists. Rake has no vector sine yet:
+program it compiles obeys. Physical profiles keep every rack in one register
+without calls or spills. WebAssembly keeps every rack as one `v128` and uses
+only the virtual instructions the profile lists. Rake has no vector sine yet:
 
 <!-- rake-check: reject "call to 'sin' is not supported by native crunch lowering" -->
+<!-- playground-starter -->
 ```rake
 crunch wave(values: f32s) -> f32s:
   return sin(values)
 ```
 
-The key moment is the message. A C compiler given a sine of every lane may
-call the scalar `sinf` once per lane and carry on, slower. Rake stops and says
-which operation it can't compile. The lesson then shows the command a
-workstation runs to check a compiled object, `rakec --verify-native`, which
-disassembles the object and checks the profile's rules.
+Run the program and read the unsupported-operation message. Then replace
+`sin(values)` with `abs(values)` and run again. The supported operation
+compiles, and Code shows its vector instruction. A C compiler given a sine of
+every lane may call the scalar `sinf` once per lane and carry on, slower. Rake
+stops and says which operation it can't compile. On a workstation,
+`rakec --verify-native` also disassembles the object and checks the profile's
+rules.
 
 ## 12. Bits
 
@@ -439,6 +460,7 @@ and `shift_bits_right` move every row's bits one cell east or west at once,
 and `repeat` runs its body a fixed number of times.
 
 <!-- rake-check: run 15 -->
+<!-- playground-starter -->
 ```rake
 ~~ One step of a flood fill on an 8 by 8 board, a row to each byte lane:
 ~~ every reached cell spreads to its east and west neighbours that are open.
@@ -462,8 +484,10 @@ slow main() -> i32:
 ```
 
 Result: `main returned 15`. The fill starts at bit 3 of the first row, and bit
-4 is a wall, so it spreads west to bits 0 to 3. The key moment is the Lanes
-tab drawing each byte as eight cells: one shift moves sixteen rows at once.
+4 is a wall, so it spreads west to bits 0 to 3. Change the first byte in
+`open` from `239` to `255` and run. Result becomes `main returned 255`, because
+the fill reaches the whole row. Lanes shows sixteen decimal byte values, one
+per lane, and each shift updates all sixteen at once.
 
 ## Reading Rake
 

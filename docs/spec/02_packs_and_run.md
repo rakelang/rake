@@ -83,7 +83,7 @@ views (`[]T`, or `mut []T` to write), uniform scalars (`<name: T>`) and racks
 | `acc: [4]i32s := <0>`, `acc[<k>] <- e` | an array of rack locations, indexed by constants |
 | `view[<i>]` | the rack of consecutive elements starting at element `i` |
 | `<view[i]>` | one element, as a uniform |
-| `view[indices]` | a gather by an `i32s` rack of indices, as [memory operations](08_memory_operations.md#gather) define |
+| `view[indices]` | a gather by an `i32s` rack of indices, as [memory operations](07_memory_operations.md#gather) define |
 | `view[<i>] <- e` | a rack store at a uniform index |
 | `for <i: T> from <a> up to <b> by <s>:` | a counted loop with a uniform index |
 | `repeat <i: T> from <a> up to <b>:` | a loop with constant bounds |
@@ -186,7 +186,7 @@ has no `restrict`, because that exact aliasing is allowed.
 
 From slow code, a run is a statement. A run declared `-> T` takes its output
 view as one more argument after its parameters, as `weigh(..., weighed)` does
-in [the slow tier](09_slow_tier.md).
+in [the slow tier](08_slow_tier.md).
 
 `test/abi_test.sh` calls the runs from C for every count from 0 to 20, with
 misaligned arrays, sentinels after the output, null pointers for empty

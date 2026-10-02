@@ -71,7 +71,7 @@ crunch cube(a: f32s) -> f32s:
 
 In a run, `repeat` unrolls while its trips times its body's statements stay
 within 4096, and otherwise it stays a loop with the same meaning. Either way
-each rack location stays one register, in a WebAssembly local. In
+each rack location stays one `v128` value in a WebAssembly local. In
 `test/program/vector_tier.rk`, a `repeat` of 5000 trips compiles to a loop of
 one `f32x4.mul`, one `f32x4.add` and the counter.
 
@@ -123,5 +123,5 @@ traversal of the same lane count.
 
 Slow code has `if`, `else if` and `else`, `while`, the counted `for i from a
 up to b by s`, `break`, `continue` and `return`, as [the slow
-tier](09_slow_tier.md) defines. It holds no racks, so a run called inside a
+tier](08_slow_tier.md) defines. It holds no racks, so a run called inside a
 slow loop does whole-rack work once each iteration.

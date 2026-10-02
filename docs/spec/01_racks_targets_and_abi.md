@@ -163,7 +163,7 @@ contract a multiply and an add into one fused multiply-add when both are in
 one fused region, as [fused bindings](04_fused_bindings.md) describe, and
 the result then has the fused rounding. A NaN result's sign and payload
 aren't specified, except where an operation defines them, as the strict
-minimum and maximum of [reductions and scans](07_reductions_and_scans.md) do.
+minimum and maximum of [reductions and scans](06_reductions_and_scans.md) do.
 
 `exp`, `log`, `log2` and `tanh` are fixed sequences of binary32 operations,
 Cephes' single-precision polynomials. The interpreter, the slow tier's C and
@@ -221,7 +221,7 @@ use, `<scale>`. The use is where the broadcast happens: `vbroadcastss` on
 AVX2, `dup` on NEON and a splat on wasm.
 
 A run's boundary is in [packs and runs](02_packs_and_run.md#wasm32-boundary),
-and a whole program's in [the slow tier](09_slow_tier.md). The x86 and AArch64
+and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
 backends compile neither runs nor slow code.
 
 ## Verification

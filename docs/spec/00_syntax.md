@@ -93,12 +93,12 @@ rake safe_root(values: f32s) -> f32s:
 | `rake name(parameters) -> T:` | rack computation with named lane masks | [Tines, through and sweeps](03_tines_and_through.md) |
 | `run name(parameters) -> T:` | vector code over memory | [Packs and runs](02_packs_and_run.md) |
 | `stack Name { T: field, field; }` | the columns of structure-of-arrays storage | [Packs and runs](02_packs_and_run.md) |
-| `slow name(parameters) -> T:` | scalar code | [The slow tier](09_slow_tier.md) |
-| `extern slow name(parameters) -> T from "file.h"` | a C function | [The slow tier](09_slow_tier.md) |
-| `record Name { T: field; }` | a record of fields | [The slow tier](09_slow_tier.md) |
-| `state name: T := value`, `state name: T` | module state | [The slow tier](09_slow_tier.md) |
-| `embed name from "file"` | a file's bytes | [The slow tier](09_slow_tier.md) |
-| `const name: T = value` | a compile-time constant | [The slow tier](09_slow_tier.md) |
+| `slow name(parameters) -> T:` | scalar code | [The slow tier](08_slow_tier.md) |
+| `extern slow name(parameters) -> T from "file.h"` | a C function | [The slow tier](08_slow_tier.md) |
+| `record Name { T: field; }` | a record of fields | [The slow tier](08_slow_tier.md) |
+| `state name: T := value`, `state name: T` | module state | [The slow tier](08_slow_tier.md) |
+| `embed name from "file"` | a file's bytes | [The slow tier](08_slow_tier.md) |
+| `const name: T = value` | a compile-time constant | [The slow tier](08_slow_tier.md) |
 
 A stack or record groups its fields by type, with the type first:
 `f32: position, velocity;` gives two `f32` columns. A stack column is a
@@ -123,7 +123,7 @@ calls nest at most 32 deep and recursion is rejected.
 | Type | Meaning |
 | --- | --- |
 | `f32` `f64` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `bool` | a scalar |
-| `f32s` `u8s` `i16s` `i32s` `u32s` `i64s` `u64s` | a rack: one register of lanes of that element |
+| `f32s` `u8s` `i16s` `i32s` `u32s` `i64s` `u64s` | a rack: one vector value of lanes of that element |
 | `mask` | a lane mask |
 | `pack Name`, `mut pack Name` | the columns of a stack, read or written |
 | `[]T`, `mut []T` | a view: elements with a runtime count |
@@ -158,9 +158,9 @@ column layout, used through `pack Name`.
 | `e` | a call evaluated for its effect |
 
 A name is bound once in its function and can't be rebound. A mutable location
-changes with `<-`. [Control flow](06_control_flow.md) defines the
+changes with `<-`. [Control flow](05_control_flow.md) defines the
 conditionals and loops, [Packs and runs](02_packs_and_run.md) the traversal,
-and [the slow tier](09_slow_tier.md) the scalar statements.
+and [the slow tier](08_slow_tier.md) the scalar statements.
 
 ## Tines, through and sweeps
 
@@ -226,14 +226,14 @@ Rack operations have names rather than operators:
 | `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `bitmask` | [Racks and targets](01_racks_targets_and_abi.md) |
 | `bit_and` `bit_or` `bit_xor` `bit_andnot` `shift_bits_left` `shift_bits_right` `shift_bits_right_signed` | [Racks and targets](01_racks_targets_and_abi.md) |
 | `shuffle(a, [3, 2, 1, 0])`, `shuffle(a, b, [0, 4, 1, 5])` | [Racks and targets](01_racks_targets_and_abi.md) |
-| `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](07_reductions_and_scans.md) |
-| `sum` `product` `minimum` `maximum` `all` `any` | [Reductions and scans](07_reductions_and_scans.md) |
-| `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | [Reductions and scans](07_reductions_and_scans.md) |
+| `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](06_reductions_and_scans.md) |
+| `sum` `product` `minimum` `maximum` `all` `any` | [Reductions and scans](06_reductions_and_scans.md) |
+| `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | [Reductions and scans](06_reductions_and_scans.md) |
 | `widen(chunk.column)` | [Packs and runs](02_packs_and_run.md) |
 
 A shuffle's lane indices and the lane of `extract` and `insert` are integer
 literals, because the instruction encodes them. Slow code has its own scalar
-functions, listed in [the slow tier](09_slow_tier.md).
+functions, listed in [the slow tier](08_slow_tier.md).
 
 These forms parse but have no implementation on any profile: `@` (the lane
 index), `lanes` (the lane count), `zip_low`, `shift_left`, `shift_right`,

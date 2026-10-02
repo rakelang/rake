@@ -60,7 +60,7 @@ On `x86-avx2` the assembler is `as --64`, and on `aarch64-neon` it is
 The emitted C reads two macros. `RAKE_WASM_LINKAGE` replaces `static inline`
 on each crunch and rake, and `RAKE_FRAME_BYTES` sets the size of a whole
 program's frame stack, 4 MiB by default, as [the slow
-tier](spec/09_slow_tier.md#the-c-unit) describes.
+tier](spec/08_slow_tier.md#the-c-unit) describes.
 
 ## Diagnostics
 

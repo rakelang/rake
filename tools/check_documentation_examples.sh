@@ -48,6 +48,7 @@ for document in "${documents[@]}"; do
     inside && /^```$/ { inside = 0; mode = ""; next }
     inside { print > file; next }
     /^<!-- rake-check: .* -->$/ { mode = $0; sub(/^<!-- rake-check: /, "", mode); sub(/ -->$/, "", mode); next }
+    /^<!-- playground-starter -->$/ { next }
     /^[[:space:]]*$/ { next }
     { mode = "" }
   ' "${document}"

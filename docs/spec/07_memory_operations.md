@@ -74,7 +74,7 @@ In a traversal's tail only the active lanes are checked and loaded: a switch
 on the uniform remainder issues one, two or three lane loads, and the
 inactive lanes are zero. A gather in a traversal needs a 32-bit domain, so
 that its lanes are the traversal's. A gather can't appear in a conditional's
-branches, as [control flow](06_control_flow.md#conditional-expressions)
+branches, as [control flow](05_control_flow.md#conditional-expressions)
 explains, and it isn't allowed in a fused binding, because it reads memory.
 
 ## Scatter

@@ -64,7 +64,7 @@ source
   -> object verifier               crunches, rakes and runs in the object
 ```
 
-The tier checker enforces the rules of [the slow tier](spec/09_slow_tier.md):
+The tier checker enforces the rules of [the slow tier](spec/08_slow_tier.md):
 slow code holds no racks, a scalar becomes a rack only at a marked argument,
 and vector code calls nothing and reads no module state. The C emitter forms a
 run's addresses, writes its loops, tails and checks, and inlines its rack
@@ -87,12 +87,18 @@ registers that a call may clobber, `v0` to `v7` and `v16` to `v31`. GNU
 cross-binutils assemble and disassemble the object, and
 `test/neon_backend_test.sh` compares exact result bits under QEMU.
 
-On `wasm-simd128`, a rack is one `v128`. WebAssembly's locals are typed and
-unlimited, so there is no register allocation and no spill to rule out.
-Selection orders the value stack: a value used once is computed where it is
-used, and one used more than once is kept in a local. The output is C, one
+On `wasm-simd128`, a rack is one `v128` in the WebAssembly virtual machine.
+Rake adheres to that machine's fiction. It selects virtual SIMD instructions
+and locals, but doesn't try to replace the WebAssembly runtime's physical
+register allocation. A value used once is computed where it is consumed, and
+one used more than once is kept in a local. The output is C, one
 `wasm_simd128.h` intrinsic for each selected instruction, because some wasm32
 toolchains accept only C and reject `v128` operands to inline assembly.
+
+The promise is the same as on a physical target: outside a `slow` block, rack
+work uses vector instructions wherever the selected profile implements the
+operation. A run may also contain the uniform address, loop and bounds work
+written in its source. It never replaces rack work with scalar lane loops.
 
 ## Object verification
 
@@ -110,14 +116,15 @@ its profile's list of instructions:
   more lane operations or loops than its source states.
 
 [Racks and targets](spec/01_racks_targets_and_abi.md#verification) and [the
-slow tier](spec/09_slow_tier.md#verification) give the details.
+slow tier](spec/08_slow_tier.md#verification) give the details.
 
 ## Ownership
 
-Rake owns the IR, its rewrites, instruction selection, register allocation,
-assembly and verification. The system assembler, clang and the linker own
-object formats, relocations, linking and start-up. Debug information and
-exception unwinding aren't produced. The x86 and AArch64 backends compile
-crunches and rakes only. Runs and whole programs compile on `wasm-simd128`,
-and the [planned x86-64 run boundary](spec/02_packs_and_run.md#planned-x86-64-boundary)
-is a design.
+Rake owns the IR, its rewrites and instruction selection on every profile.
+It owns register allocation and assembly on x86 and AArch64. For WebAssembly,
+clang encodes the selected virtual instructions and the runtime assigns
+physical registers. The system toolchain also owns object formats,
+relocations, linking and start-up. Debug information and exception unwinding
+aren't produced. The x86 and AArch64 backends compile crunches and rakes only.
+Runs and whole programs compile on `wasm-simd128`, and the [planned x86-64 run
+boundary](spec/02_packs_and_run.md#planned-x86-64-boundary) is a design.

@@ -71,6 +71,10 @@ Changes since 0.3.0.
 - `rakec --interpret` runs a program's `main` in Rake's executable
   semantics. It reports a program without `main` instead of failing, and
   broadcasts a uniform stored where a rack goes, as the compiled code does.
+- The compiler library exposes the front end, interpreter, C and assembly
+  emitters, and a bounded lane trace to the browser through `js_of_ocaml`.
+  The browser build runs in a worker and returns source diagnostics without
+  requiring a server-side compiler.
 - `wasm-simd128-relaxed` is an opt-in profile with `relaxed_madd`,
   `relaxed_nmadd`, `relaxed_min` and `relaxed_max`.
 
@@ -91,6 +95,14 @@ Changes since 0.3.0.
   the compiler does.
 - Every Rake example in the README, the documentation and the website is
   compiled by `tools/check_documentation_examples.sh`, and most are run.
+
+### Website and documentation
+
+- rake-lang.org now publishes the compiler documentation as a checked set of
+  reference pages with Tree-sitter highlighting.
+- The playground is an interactive twelve-lesson tutorial. It runs the same
+  compiler and interpreter in the browser, shows rack values in the Lanes tab,
+  and displays generated C or assembly beside source diagnostics.
 
 ### Removed
 

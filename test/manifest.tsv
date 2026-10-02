@@ -8,6 +8,7 @@ test/frontend/rake_with_tines.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/supported_run_int.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/supported_run_int64.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/sweep_overlap_priority.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/nested_comments.rk	frontend	x86-avx2	8	frontend	pass	-
 test/native/capability_fused.rk	native	x86-avx2	8	native-object	pass	-
 test/native/contracted_fma.rk	native	x86-avx2	8	native-object	pass	-
 test/native/fused_contract.rk	native	x86-avx2	8	native-object	pass	-

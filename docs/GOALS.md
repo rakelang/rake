@@ -7,19 +7,22 @@ makes. A compiler may reject a program or a profile it can't compile under
 them, and it never keeps a program by weakening a rack, a fused region or a
 rake into scalar code. Each section ends with what the compiler does today.
 
-## Racks are registers
+## Racks are vector values
 
-A rack is one vector register of the target profile. The profile fixes the
-register's width, and the element type gives the lane count: on a 256-bit
-profile an `f32s` rack has eight lanes. A rack is never split across
-registers, narrowed, held in memory or computed lane by lane, so a program
-that would need any of these is rejected. A scalar target is a separate,
-explicit profile, never described as SIMD, and a build for another machine
-chooses its profile instead of taking the features of the machine it runs on.
+A rack is one vector register of a physical target profile, or one vector
+value in a virtual machine profile. The profile fixes its width, and the
+element type gives the lane count: on a 256-bit profile an `f32s` rack has
+eight lanes. A rack is never split, narrowed, held in source-visible memory
+or computed lane by lane, so a program that would need any of these is
+rejected. A scalar target is a separate, explicit profile, never described as
+SIMD, and a build for another machine chooses its profile instead of taking
+the features of the machine it runs on.
 
-Today: every production profile keeps each rack in one register, and the
-verifier checks the object for it on x86 and AArch64. On `wasm-simd128` a
-rack is one `v128` value.
+Today: the x86 and AArch64 profiles keep each rack in one physical register,
+which the object verifier checks. The `wasm-simd128` profile keeps each rack
+as one `v128` value and uses SIMD instructions for rack work. Rake accepts the
+virtual machine's fiction and leaves physical register allocation to the
+WebAssembly runtime.
 
 ## Scalars are marked
 
@@ -97,17 +100,20 @@ only through calls whose uniform arguments are marked, so the promises above
 hold unchanged around it.
 
 Today: whole programs compile on `wasm-simd128`, as [the slow
-tier](spec/09_slow_tier.md) describes.
+tier](spec/08_slow_tier.md) describes.
 
 ## Compilation is predictable
 
-The compiler owns every lowering decision from typed source to machine code:
-instruction selection, register allocation, scheduling and assembly. The
-assembler only encodes what it is given. Every stage can be inspected, the
-compiler proves the properties it claims for an accepted program, and when it
-can't prove one it fails with the source construct, the profile and the
-obligation that failed. A benchmark result is reported with its source,
-profile, compiler version, command, input size and baseline.
+On physical profiles the compiler owns every lowering decision from typed
+source to machine code: instruction selection, register allocation,
+scheduling and assembly. The assembler only encodes what it is given. On
+WebAssembly, Rake owns selection of the virtual machine instructions and the
+shape of its `v128` values. The WebAssembly runtime owns their eventual
+physical registers. Every compiler stage can be inspected, and the compiler
+proves the properties it claims for an accepted program. When it can't prove
+one, it fails with the source construct, profile and obligation that failed.
+A benchmark result is reported with its source, profile, compiler version,
+command, input size and baseline.
 
 Today: on `x86-avx2` and `aarch64-neon` the compiler selects instructions,
 allocates registers without spills and writes the assembly, and

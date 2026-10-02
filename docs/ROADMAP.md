@@ -36,11 +36,11 @@ compiles. The gaps:
   - comparisons, `min` and `max` of `u32s` and `u64s`, and `min` and `max`
     of `i64s`,
   - integer reductions,
-  - widening bytes into 16-bit lanes, and narrow columns into 64-bit lanes,
+  - widening `i16s` lanes into 32-bit lanes, and narrow columns into 64-bit lanes,
   - scalar arithmetic in a crunch, as on reductions' results,
   - scatter, on a profile with a scatter instruction, and
   - compression and expansion, as [memory
-    operations](spec/08_memory_operations.md) design them.
+    operations](spec/07_memory_operations.md) design them.
 
 An operation may lower to several vector instructions when the profile's
 published sequence allows it. It may never lower to scalar lanes, helper

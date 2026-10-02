@@ -5,10 +5,12 @@
 # Rake
 
 Rake is a programming language for SIMD kernels. Its values are racks, one
-vector register each, and the compiler refuses a program it can't compile to
-the registers and instructions the source describes: no split vectors, no
-hidden scalar loops, no helper calls and no spills. The language and its
-documentation are at [rake-lang.org](https://rake-lang.org).
+vector register each on a physical target and one `v128` value in the
+WebAssembly virtual machine. Outside `slow` code, the compiler uses vector
+instructions wherever the selected profile supports the source operation, or
+it refuses the program. It never replaces rack work with hidden scalar loops
+or helper calls. The language and its documentation are at
+[rake-lang.org](https://rake-lang.org).
 
 Release: 0.4.0-beta.
 
@@ -101,9 +103,11 @@ assembly, or C on the wasm profiles. `--verify-native` builds an object,
 disassembles it and checks every function against the profile's rules. A
 crunch or rake contains only register work from the profile's instruction
 list, with no calls and no stack. On x86 and AArch64 each rack is one whole
-register, and the object has exactly the fused multiply-adds the compiler
-selected. A run on wasm loads, stores and loops, but calls nothing, keeps no C
-stack and contains only the vector instructions its source selected.
+physical register, and the object has exactly the fused multiply-adds the
+compiler selected. On WebAssembly, Rake keeps to the virtual machine's
+`v128` values and SIMD instructions. It doesn't try to replace the runtime's
+physical register allocation. A wasm run also contains the uniform address,
+loop and bounds work written in the source, but it never scalarises rack work.
 `rakec --help` lists every mode, `--print-targets` the profiles and
 `--print-capabilities` each language feature's status.
 
@@ -113,7 +117,7 @@ The [syntax reference](docs/spec/00_syntax.md) lists every form, and the
 pages it links define what each means. [Goals](docs/GOALS.md) states the
 language's promises, [the backend](docs/BACKEND.md) how the compiler keeps
 them, and [the roadmap](docs/ROADMAP.md) what comes next. [The
-playground](docs/PLAYGROUND.md) designs a tutorial in twelve lessons,
+playground](docs/PLAYGROUND.md) is an interactive tutorial in twelve lessons,
 [the glossary](docs/GLOSSARY.md) defines the terms, and [Rake and other
 languages](docs/COMPARISONS.md) and [GPU profiles](docs/GPU.md) set Rake
 beside ISPC and GPU programming.

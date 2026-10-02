@@ -77,7 +77,7 @@ Its vector code favours pure expressions and bindings that are defined once.
 | | ISPC | Rake |
 | --- | --- | --- |
 | Model | imperative C-family SPMD, with loops, assignments, pointers, functions and ordinary control flow | expression-oriented vector data flow, with marked uniforms, fused bindings, tines, through blocks and sweeps |
-| Parallel unit | a gang of program instances, which may be wider than one CPU vector | a rack, exactly one vector register |
+| Parallel unit | a gang of program instances, which may be wider than one CPU vector | a rack, exactly one physical vector register or one WebAssembly `v128` |
 | Columns | `soa<n>` makes an `n`-wide structure of arrays and supports layout conversion | `stack` declares columns, `pack` supplies them with a count, and the profile chooses the width |
 | Divergence | `if`, loops and calls become uniform or varying from their operands | tines name masks, through blocks compute under them, and a sweep picks each lane's result |
 | Machine rules | gang semantics are preserved, and LLVM selects instructions and allocates registers | the compiler also rejects split racks, scalar lane loops, spills and helper calls wherever the profile forbids them |
@@ -104,10 +104,10 @@ targets.
 
 | Language | What it provides | How it differs from Rake |
 | --- | --- | --- |
-| [Halide](https://halide-lang.org/docs) | a functional language embedded in C++ for image and stencil pipelines, with the algorithm separate from its schedule across CPUs and GPUs | vector widths, tiling and placement come from a programmer or an autoscheduler, and aren't checked as register rules |
-| [Futhark](https://futhark-lang.org/) | a statically typed, purely functional array language compiled to CUDA, OpenCL or multithreaded CPU code | its abstraction is bulk and nested array parallelism, not one rack that must stay one register |
+| [Halide](https://halide-lang.org/docs/) | a functional language embedded in C++ for image and stencil pipelines, with the algorithm separate from its schedule across CPUs and GPUs | vector widths, tiling and placement come from a programmer or an autoscheduler, and aren't checked as register rules |
+| [Futhark](https://futhark-lang.org/) | a statically typed, purely functional array language compiled to CUDA, OpenCL or multithreaded CPU code | its abstraction is bulk and nested array parallelism, not one rack that must stay one profile-sized vector value |
 | CUDA, HIP, shader languages and [Slang](https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/08-compiling.html) | GPU programming over threads, warps, waves and subgroups, for SPIR-V, DXIL and native GPU code | they model the GPU well, but no construct is a portable CPU SIMD register with a compiler that refuses what it can't keep in one |
 | [Taichi](https://docs.taichi-lang.org/docs/hello_world) | a data-oriented language embedded in Python that compiles parallel kernels for CPUs and GPUs | it concentrates on portable parallel iteration and data layout, not on proving a fixed SIMD representation |
-| [Mojo](https://docs.modular.com/mojo/std/builtin/simd/SIMD/) | a systems language with parameterised SIMD values, vectorised algorithms and CPU and GPU facilities | the width is part of the SIMD type, and Mojo documents that an oversized value may be split across registers. In Rake the profile sets the width, and a split is a rejection |
-| SIMD libraries for C++ and Rust | portable vector types and algorithms | they are library interfaces, and don't make one register for each value, no spills, no calls and no scalar lane loops a condition of compiling |
+| [Mojo](https://mojolang.org/docs/manual/types/#simd-and-dtype) | a systems language with parameterised SIMD values, vectorised algorithms and CPU and GPU facilities | the element type and width parameter are part of its `SIMD` type. In Rake the profile fixes the width, and a physical profile rejects a rack it can't keep in one register |
+| SIMD libraries for C++ and Rust | portable vector types and algorithms | they are library interfaces, and don't make one physical register per value, no spills, no calls and no scalar lane loops a condition of compiling |
 | Research languages | Impala and AnyDSL, Lift and Shine, Accelerate and Dex explore staged compilation, rewrite systems and functional data parallelism | their abstractions and status differ by project |
