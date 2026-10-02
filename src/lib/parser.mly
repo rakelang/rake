@@ -209,7 +209,7 @@ rake_def:
     setup = list(rake_setup_stmt)
     ts = nonempty_list(canonical_tine_decl)
     ths = nonempty_list(canonical_through_block)
-    RETURN SWEEP COLON NEWLINE INDENT arms = nonempty_list(canonical_sweep_arm) DEDENT
+    SWEEP COLON NEWLINE INDENT arms = nonempty_list(canonical_sweep_arm) DEDENT
     DEDENT {
       let result = result_of_type result_type in
       let sweep = { sweep_arms = arms; sweep_binding = canonical_result_name } in

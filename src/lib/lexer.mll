@@ -4,7 +4,7 @@
     - Tine references: #name (grid-line evokes SIMD lanes)
     - Tine declarations: tine #name when predicate
     - Through blocks: through #tine else <value> into binding:
-    - Sweep blocks: return sweep: | #tine => value
+    - Sweep blocks: sweep: | #tine => value
     - Named reductions, scans, shuffles, shifts, and rotations
     - Lane access: @
     - Scalar markers: <name> or <expr.field>

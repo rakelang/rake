@@ -4,5 +4,5 @@ rake missing_catchall(values: f32s) -> f32s:
   through #active else <0.0> into active_value:
     values
 
-  return sweep:
+  sweep:
     | #active => active_value

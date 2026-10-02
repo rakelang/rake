@@ -12,7 +12,7 @@ rake safe_root(values: f32s) -> f32s:
   through #valid else <0.0> into rooted:
     sqrt(values)
 
-  return sweep:
+  sweep:
     | #valid => rooted
     | _      => <0.0>
 
@@ -41,8 +41,9 @@ or run can call one.
 lane. The predicate compares float racks and uniforms, and combines
 comparisons and earlier tines with `not`, `and` and `or`. Its operands may
 use arithmetic and fields, but no calls. A tine can refer only to tines
-declared before it, and each name is declared once. A tine is only a mask: it
-computes nothing else and stores nothing.
+declared before it, and each name is declared once. Evaluating the predicate
+computes the mask. The declaration performs no other operation and stores
+nothing.
 
 ## Through blocks
 
@@ -54,6 +55,10 @@ predicate in parentheses, such as `through (#valid and not #large)`.
 The body is any `let` and fused bindings, then the expression whose value is
 the result. It can't assign, loop, call a function other than a built-in
 operation, reduce across lanes, scan, or use `%`.
+
+Names introduced inside the body are local to it. The name after `into`
+belongs to the enclosing rake: later through blocks and the sweep can use
+that complete rack, including its fallback lanes.
 
 An inactive lane's computation doesn't happen. It can't fail on an invalid
 operand, raise a floating-point exception, touch memory or have any other
@@ -92,7 +97,7 @@ rake grade(scores: f32s) -> f32s:
   through #pass else <0.0> into middle:
     <2.0>
 
-  return sweep:
+  sweep:
     | #high => top
     | #pass => middle
     | _     => <1.0>
@@ -112,9 +117,53 @@ A sweep lists arms in priority order. For each lane, the first arm whose tine
 holds gives the result, and the final `_` arm gives the result for every lane
 no earlier arm took. Tines may overlap, and the order of the arms decides
 between them. Every sweep ends with exactly one `_` arm. The compiler rejects
-a sweep without one, an arm after it, or a tine named twice. `return sweep:`
+a sweep without one, an arm after it, or a tine named twice. `sweep:`
 is always the last statement of a rake, and it gives the rake's result.
 
 The backends build the sweep from vector selections, starting from the `_`
 value and applying the named arms from last to first, so every lane gets a
 value from the source.
+
+## Intermediate and final fallbacks
+
+A through block's `else` fills the inactive lanes of its intermediate rack.
+A sweep's `_` gives the final result for lanes no earlier arm selected.
+They have different scopes, even when both are zero.
+
+<!-- rake-check: run 7 -->
+```rake
+rake safe_root(values: f32s) -> f32s:
+  tine #valid when values >= <0.0>
+  through #valid else <0.0> into rooted:
+    sqrt(values)
+  sweep:
+    | #valid => rooted
+    | _      => <-1.0>
+
+run roots(x: []f32, out: mut []f32):
+  out[<0>] <- safe_root(x[<0>])
+
+slow main() -> i32:
+  values: [4]f32 := [16.0, -4.0, 9.0, 1.0]
+  result: [4]f32 := [0.0; 4]
+  roots(values, result)
+  return i32(result[0] + result[1] + result[2] + result[3])
+```
+
+| Stage | Lane 0 | Lane 1 | Lane 2 | Lane 3 |
+| --- | ---: | ---: | ---: | ---: |
+| Input | 16 | −4 | 9 | 1 |
+| `#valid` | true | false | true | true |
+| `rooted` | 4 | 0 | 3 | 1 |
+| Result | 4 | −1 | 3 | 1 |
+
+Here the sweep reads `rooted` only where `#valid` holds, so the intermediate
+zero in lane 1 is unused. Changing the through fallback to `<999.0>` leaves
+the final result unchanged. The optimiser collapses the nested selections
+on that same mask into one selection. If instead the sweep's `_` arm reads
+`rooted`, its fallback lanes become part of the final result.
+
+Tines, through blocks and sweeps are pure computations. They don't build lazy
+operations that wait for the sweep to execute. The compiler optimises their
+data flow together. A sweep selects a value for each lane in place, with no
+scattering, compaction or rearrangement of lanes.

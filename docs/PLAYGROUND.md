@@ -300,11 +300,12 @@ slow main() -> i32:
 ```
 
 Result: a trap at the last line, `-nan does not fit i32`, and the Lanes tab
-shows `4 NaN 3 1`. A rake guards the lanes instead. `tine #valid when values
->= <0.0>` names the mask of lanes that may take a root. `through #valid else
-<0.0> into rooted:` computes its body in those lanes only and gives the
-others 0. The sweep picks each lane's result: the first arm whose tine holds,
-and `_` for every other lane.
+shows `4 NaN 3 1`. A rake guards the lanes instead.
+`tine #valid when values >= <0.0>` computes and names the mask of lanes
+that may take a root.
+`through #valid else <0.0> into rooted:` binds an intermediate rack: roots in
+those lanes, zero in the others. The sweep chooses the final result for each
+lane: the first arm whose tine holds, and `_` for every other lane.
 
 <!-- rake-check: run 8 -->
 <!-- playground-starter -->
@@ -315,7 +316,7 @@ rake safe_root(values: f32s) -> f32s:
   through #valid else <0.0> into rooted:
     sqrt(values)
 
-  return sweep:
+  sweep:
     | #valid => rooted
     | _      => <0.0>
 
@@ -329,10 +330,22 @@ slow main() -> i32:
   return i32(rooted[0] + rooted[1] + rooted[2] + rooted[3])
 ```
 
-Result: `main returned 8`. The NaN has left the Lanes tab: `4 0 3 1`. Delete
-the `_` arm and run. The
-message `Sweep must end with a catch-all (_) arm` explains why every lane
-needs a result.
+Result: `main returned 8`. The NaN has left the Lanes tab: `4 0 3 1`.
+
+Change only the sweep's `_` arm to `| _ => <-1.0>` and run. The result is
+`main returned 7`, and the output lanes are `4 -1 3 1`. The intermediate
+`rooted` still has zero in lane 1, but the sweep chooses −1 for that lane.
+
+Now change only the through fallback to `else <999.0>` and run again. The
+result stays 7. That changes an intermediate lane the sweep doesn't use.
+Change the sweep's `_` arm to `| _ => rooted`: now the result is 1007,
+because the sweep uses the intermediate fallback. These computations are
+pure, but not lazy. A sweep selects the final values in place, rather than
+triggering or rearranging earlier work.
+
+Reset the lesson, delete the `_` arm and run. The message
+`Sweep must end with a catch-all (_) arm` explains why every lane needs a
+result. `sweep:` is the rake's result form, so it needs no `return` keyword.
 
 ## 9. Columns
 

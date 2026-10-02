@@ -32,7 +32,7 @@ rake safe_root(values: f32s) -> f32s:
   through #valid else <0.0> into rooted:
     sqrt(values)
 
-  return sweep:
+  sweep:
     | #valid => rooted
     | _      => <0.0>
 ```

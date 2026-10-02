@@ -243,7 +243,7 @@ and tine_ref =
   | TRComposed of predicate            (** through (a && b) *)
 
 (** Sweep block: collect results from tines.
-    return sweep:
+    sweep:
       | #tine => value
       | _     => fallback
 *)

@@ -84,7 +84,7 @@ rake safe_root(values: f32s) -> f32s:
   through #valid else <0.0> into rooted:
     sqrt(values)
 
-  return sweep:
+  sweep:
     | #valid => rooted
     | _      => <0.0>
 ```
@@ -150,6 +150,7 @@ column layout, used through `pack Name`.
 | `place <- e` | assignment to a location, field, element or memory |
 | `\| name <\| e`, `\| name: T <\| e` | a fused binding |
 | `return e`, `return` | the result of a crunch, or leaving a slow function |
+| `sweep:` with arms | the final, lane-by-lane result of a rake |
 | `yield e` | the rack a traversal produces for its chunk |
 | `if c:` … `else if c:` … `else:` | a conditional statement |
 | `while c:` | a loop in slow code |
@@ -179,7 +180,7 @@ rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
   through (#above and not #over) else <0.0> into shifted:
     values - <low>
 
-  return sweep:
+  sweep:
     | #over => <high> - <low>
     | _     => shifted
 ```

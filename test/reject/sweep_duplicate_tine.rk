@@ -4,7 +4,7 @@ rake duplicate_tine(values: f32s) -> f32s:
   through #active else <0.0> into active_value:
     values
 
-  return sweep:
+  sweep:
     | #active => active_value
     | #active => values
     | _       => <0.0>

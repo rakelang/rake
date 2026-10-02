@@ -14,7 +14,7 @@ rake guarded_partial(
     let fused = fma(x, multiplier, addend)
     squared + quotient + fused
 
-  return sweep:
+  sweep:
     | #active => computed
     | _       => <-7.0>
 
@@ -32,7 +32,7 @@ rake overlap_priority_native(values: f32s) -> f32s:
   through #second else <-2.0> into second_value:
     <2.0>
 
-  return sweep:
+  sweep:
     | #first  => first_value
     | #second => second_value
     | _       => <3.0> / <1.0>

@@ -7,6 +7,9 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Rakes end with `sweep:`, without `return`. This is the rake's result form.
+  `return` remains the result of a crunch and an exit from a slow function.
+  Compiler examples, Tree-sitter and the browser tutorial use the new form.
 - `slow { ... }` is a scoped scalar escape in runs and slow functions. It
   supports scalar loops, calls, state and memory views, nesting and a scalar
   tail result. Rack values can't cross the boundary. WebAssembly object

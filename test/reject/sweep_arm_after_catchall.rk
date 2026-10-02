@@ -4,6 +4,6 @@ rake arm_after_catchall(values: f32s) -> f32s:
   through #active else <0.0> into active_value:
     values
 
-  return sweep:
+  sweep:
     | _       => <0.0>
     | #active => active_value

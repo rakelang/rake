@@ -13,7 +13,7 @@ rake clamp_positive(values: f32s) -> f32s:
   through #positive else <0.0> into kept:
     values
 
-  return sweep:
+  sweep:
     | #negative => clamped
     | #positive => kept
     | _         => kept
@@ -29,7 +29,7 @@ rake select_greater(a: f32s, b: f32s) -> f32s:
   through #b_wins else <0.0> into b_val:
     b
 
-  return sweep:
+  sweep:
     | #a_wins => a_val
     | #b_wins => b_val
     | _       => b_val
@@ -47,7 +47,7 @@ rake threshold_detect(values: f32s, <threshold: f32>) -> f32s:
     let neg_diff = <threshold> - values
     neg_diff
 
-  return sweep:
+  sweep:
     | #above => above_result
     | #below => below_result
     | _      => below_result
@@ -72,7 +72,7 @@ rake classify_sign(values: f32s) -> f32s:
     let zero_val = <0.0>
     zero_val
 
-  return sweep:
+  sweep:
     | #negative => neg_result
     | #positive => pos_result
     | #zero     => zero_result

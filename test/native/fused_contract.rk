@@ -17,6 +17,6 @@ rake fused_through(a: f32s, b: f32s) -> f32s:
     | product: f32s <| a * b
     | root <| sqrt(product) + a
     root
-  return sweep:
+  sweep:
     | #positive => rooted
     | _ => a

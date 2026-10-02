@@ -4,6 +4,6 @@ rake lowering_select(values: f32s) -> f32s:
   through #negative else <0.0> into negated:
     -values
 
-  return sweep:
+  sweep:
     | #negative => negated
     | _         => values

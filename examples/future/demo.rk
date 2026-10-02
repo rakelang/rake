@@ -46,7 +46,7 @@ rake intersect_flat(
     let root = sqrt(discriminant)
     (-b - root) / (<2.0> * a)
 
-  return sweep:
+  sweep:
     | #miss  => <-1.0>
     | #maybe => hit_distance
     | _      => <-1.0>
