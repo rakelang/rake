@@ -27,15 +27,15 @@
  (libraries rake))
 
 (test
- (name x86_avx2_isel_test)
+ (name x86_simd_isel_test)
  (libraries rake))
 
 (test
- (name x86_avx2_regalloc_test)
+ (name x86_simd_regalloc_test)
  (libraries rake))
 
 (test
- (name x86_avx2_asm_test)
+ (name x86_simd_asm_test)
  (libraries rake str unix))
 
 (test

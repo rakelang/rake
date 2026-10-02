@@ -176,7 +176,7 @@ let all = [
     "explicit uniform f32 and u32 crunch parameters";
   unavailable Rake_spread_param "rake.spread-parameter" "boundary" "spread rake parameters";
   unavailable Run_spread_param "run.spread-parameter" "boundary" "spread run parameters";
-  unavailable Crunch_implicit_result "crunch.implicit-result" "boundary" "implicit final-expression crunch results";
+  supported Crunch_implicit_result "crunch.implicit-result" "boundary" "a crunch's final expression supplies its result";
   supported Value_non_f32 "value.non-f32" "boundary" "typed non-f32 frontend values";
   supported Pack_non_f32_field "pack.non-f32-field" "boundary" "mixed-width pack storage fields";
   supported Result_non_float_rack "result.non-float-rack" "boundary"

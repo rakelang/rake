@@ -7,7 +7,7 @@ each lane's result.
 <!-- rake-check: run 15 -->
 ```rake
 rake safe_root(values: f32s) -> f32s:
-  tine #valid when values >= <0.0>
+  tine #valid means values >= <0.0>
 
   through #valid else <0.0> into rooted:
     sqrt(values)
@@ -37,7 +37,7 @@ or run can call one.
 
 ## Tines
 
-`tine #valid when values >= <0.0>` declares a mask with one Boolean for each
+`tine #valid means values >= <0.0>` declares a mask with one Boolean for each
 lane. The predicate compares float racks and uniforms, and combines
 comparisons and earlier tines with `not`, `and` and `or`. Its operands may
 use arithmetic and fields, but no calls. A tine can refer only to tines
@@ -56,7 +56,7 @@ The body is any `let` and fused bindings, then the expression whose value is
 the result. It can't assign, loop, call a function other than a built-in
 operation, reduce across lanes, scan, or use `%`.
 
-Names introduced inside the body are local to it. The name after `into`
+Bindings introduced inside the body are local to it. The identifier after `into`
 belongs to the enclosing rake: later through blocks and the sweep can use
 that complete rack, including its fallback lanes.
 
@@ -89,8 +89,8 @@ stay masked on every target.
 <!-- rake-check: run 3212 -->
 ```rake
 rake grade(scores: f32s) -> f32s:
-  tine #high when scores >= <90.0>
-  tine #pass when scores >= <50.0>
+  tine #high means scores >= <90.0>
+  tine #pass means scores >= <50.0>
 
   through #high else <0.0> into top:
     <3.0>
@@ -133,7 +133,7 @@ They have different scopes, even when both are zero.
 <!-- rake-check: run 7 -->
 ```rake
 rake safe_root(values: f32s) -> f32s:
-  tine #valid when values >= <0.0>
+  tine #valid means values >= <0.0>
   through #valid else <0.0> into rooted:
     sqrt(values)
   sweep:

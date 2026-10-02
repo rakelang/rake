@@ -1,6 +1,6 @@
 module N = Rake.Native_ir
-module M = Rake.X86_avx2_mir
-module I = Rake.X86_avx2_isel
+module M = Rake.X86_simd_mir
+module I = Rake.X86_simd_isel
 
 let instruction ?(provenance = N.source) result op : N.instruction =
   { result; op; provenance; loc = N.unknown_location }

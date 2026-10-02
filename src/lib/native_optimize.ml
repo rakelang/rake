@@ -16,9 +16,9 @@ let format_error errors = String.concat "; " (List.map N.format_error errors)
 type operation_costs = { add : int; multiply : int; fma : int option }
 
 let operation_costs = function
-  | Target.X86_avx2 | Target.Aarch64_neon ->
+  | Target.X86_avx2 | Target.X86_avx512 | Target.Aarch64_neon ->
       Some { add = 1; multiply = 1; fma = Some 1 }
-  | Target.Scalar | Target.X86_sse2 | Target.X86_avx512 | Target.Wasm_simd128 | Target.Wasm_simd128_relaxed -> None
+  | Target.Scalar | Target.X86_sse2 | Target.Wasm_simd128 | Target.Wasm_simd128_relaxed -> None
 
 let fma_is_cheaper costs =
   match costs.fma with

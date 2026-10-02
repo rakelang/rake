@@ -229,7 +229,7 @@ Slow code calls a run as a statement and a crunch or rake as an expression:
 <!-- rake-check: run 7 -->
 ```rake
 crunch score(<x: f32>, <y: f32>) -> f32:
-  return extract(<x> * <y> + <1.0>, 0)
+  extract(<x> * <y> + <1.0>, 0)
 
 slow main() -> i32:
   let a = 2.0

@@ -3,8 +3,8 @@
 
 ~~ Simple conditional: clamp negative values to zero
 rake clamp_positive(values: f32s) -> f32s:
-  tine #negative when values < <0.0>
-  tine #positive when not #negative
+  tine #negative means values < <0.0>
+  tine #positive means not #negative
 
   through #negative else <0.0> into clamped:
     let zero = <0.0>
@@ -20,8 +20,8 @@ rake clamp_positive(values: f32s) -> f32s:
 
 ~~ Compare two values, select based on condition
 rake select_greater(a: f32s, b: f32s) -> f32s:
-  tine #a_wins when a > b
-  tine #b_wins when not #a_wins
+  tine #a_wins means a > b
+  tine #b_wins means not #a_wins
 
   through #a_wins else <0.0> into a_val:
     a
@@ -36,8 +36,8 @@ rake select_greater(a: f32s, b: f32s) -> f32s:
 
 ~~ Threshold detection with computation
 rake threshold_detect(values: f32s, <threshold: f32>) -> f32s:
-  tine #above when values >= <threshold>
-  tine #below when not #above
+  tine #above means values >= <threshold>
+  tine #below means not #above
 
   through #above else <0.0> into above_result:
     let diff = values - <threshold>
@@ -56,9 +56,9 @@ rake threshold_detect(values: f32s, <threshold: f32>) -> f32s:
 rake classify_sign(values: f32s) -> f32s:
   let zero = <0.0>
 
-  tine #negative when values < zero
-  tine #positive when values > zero
-  tine #zero when not #negative and not #positive
+  tine #negative means values < zero
+  tine #positive means values > zero
+  tine #zero means not #negative and not #positive
 
   through #negative else <0.0> into neg_result:
     let neg_one = <-1.0>

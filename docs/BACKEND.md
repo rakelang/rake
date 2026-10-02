@@ -11,9 +11,11 @@ source
   -> type checker                                        types and capabilities
   -> native lowering                                     typed native IR
   -> native IR verifier
-  -> optimiser                                           names substituted, fused multiply-adds formed, dead code removed
+  -> optimiser                                           identifiers substituted, fused multiply-adds formed, dead code removed
   -> instruction selection for the profile
-       x86-avx2      machine IR -> no-spill YMM allocation -> GNU assembly -> as
+       x86-sse2      shared x86 IR -> no-spill XMM allocation -> GNU assembly -> as
+       x86-avx2      shared x86 IR -> no-spill YMM allocation -> GNU assembly -> as
+       x86-avx512    shared x86 IR -> no-spill ZMM allocation -> GNU assembly -> as
        aarch64-neon  machine IR -> no-spill vector allocation -> GNU assembly -> as
        wasm-simd128  WebAssembly instructions -> C with one intrinsic each -> clang
   -> object verifier                                     the disassembled object
@@ -77,9 +79,18 @@ evaluating rack expressions in the same reference semantics as crunches, and
 
 ## Profiles
 
+On x86, an `f32s` rack and its lane mask occupy one XMM register on SSE2,
+one YMM register on AVX2, or one ZMM register on AVX-512F. All three profiles
+share one instruction-selection and no-spill allocation pipeline. The
+emitter chooses two-address SSE2 instructions or three-address AVX
+instructions, and each object verifier checks only its profile's ISA.
+SSE2 reserves `xmm15` for instruction-local temporaries. AVX-512 uses `k1`
+while materialising or selecting a vector mask, and needs no AVX-512DQ,
+BW or VL instructions.
+
 On `x86-avx2`, an `f32s` rack is one YMM register and a mask is a YMM value.
 Arguments follow the System V convention in eight SSE-class registers, and a
-uniform `f32` arrives in an XMM register, whose YMM name is the same physical
+uniform `f32` arrives in an XMM register, whose YMM identifier denotes the same physical
 register, so the allocator tracks the pair as one. A uniform's use is a
 `vbroadcastss`. The profile needs AVX2 and FMA3.
 
@@ -107,7 +118,7 @@ written in its source. It never replaces rack work with scalar lane loops.
 `--verify-native` disassembles the object and checks each function against
 its profile's list of instructions:
 
-- On `x86-avx2` and `aarch64-neon`: no calls, no stack, every rack in one
+- On SSE2, AVX2, AVX-512 and NEON: no calls, no stack, every rack in one
   whole register, no scalar arithmetic on rack lanes, cross-lane instructions
   only in reductions and scans, and exactly the fused multiply-adds that the
   compiler selected.
@@ -118,7 +129,7 @@ its profile's list of instructions:
   instructions its source selected or their documented equivalents, and no
   more lane operations or loops than its source states.
 
-[Racks and targets](spec/01_racks_targets_and_abi.md#verification) and [the
+[Primitives, operations, and targets](spec/01_primitives_operations_and_targets.md#verification) and [the
 slow tier](spec/08_slow_tier.md#verification) give the details.
 
 ## Ownership

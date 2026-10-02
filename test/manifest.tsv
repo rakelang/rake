@@ -21,6 +21,7 @@ test/native/scalar_parameter.rk	native	x86-avx2	8	native-object	pass	-
 test/native/predication.rk	native	x86-avx2	8	native-object	pass	-
 test/native/supported_float_rack.rk	native	x86-avx2	8	native-object	pass	-
 test/native/reductions_scans.rk	native	x86-avx2	8	native-object	pass	-
+test/native/multiple_through.rk	native	x86-avx2	8	native-object	pass	-
 test/reject/fused_user_call.rk	reject	x86-avx2	8	frontend	reject	Fused binding contract for 'result' rejected: call to 'helper' is not a compiler-known pure built-in
 test/reject/fused_annotation_mismatch.rk	reject	x86-avx2	8	frontend	reject	Fused binding 'result' type mismatch: expected i32s, got f32s
 test/reject/fma_requires_float_racks.rk	reject	x86-avx2	8	frontend	reject	fma requires exactly three equal float rack operands

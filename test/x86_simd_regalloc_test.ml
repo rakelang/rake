@@ -1,5 +1,5 @@
-module M = Rake.X86_avx2_mir
-module A = Rake.X86_avx2_regalloc
+module M = Rake.X86_simd_mir
+module A = Rake.X86_simd_regalloc
 
 let loc line =
   { Rake.Native_ir.file = "regalloc.rk"; line; col = 2; offset = line * 10 }

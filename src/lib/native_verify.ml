@@ -61,7 +61,7 @@ let run program arguments ~output =
             (Printf.sprintf "%s: %s" call (Unix.error_message unix_error)))
 
 let disassembler_command = function
-  | Target.X86_avx2 ->
+  | Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512 ->
       ("objdump", [ "-d"; "-M"; "intel"; "--no-show-raw-insn" ])
   | Target.Aarch64_neon ->
       ("aarch64-unknown-linux-gnu-objdump", [ "-d"; "--no-show-raw-insn" ])
@@ -166,7 +166,7 @@ let allowed_avx2 = function
 
 let is_fma profile =
   match profile with
-  | Target.X86_avx2 -> (function "vfmadd213ps" | "vfmadd231ps" -> true | _ -> false)
+  | Target.X86_avx2 | Target.X86_avx512 -> (function "vfmadd213ps" | "vfmadd231ps" -> true | _ -> false)
   | Target.Aarch64_neon -> (function "fmla" -> true | _ -> false)
   | _ -> fun _ -> false
 
@@ -234,6 +234,49 @@ let regexp_contains pattern text =
     ignore (Str.search_forward (Str.regexp pattern) text 0);
     true
   with Not_found -> false
+
+let allowed_sse2 = function
+  | "movaps" | "xorps" | "andps" | "orps" | "pxor" | "pcmpeqd"
+  | "addps" | "subps" | "mulps" | "divps" | "sqrtps" | "shufps"
+  | "cmpps" | "cmpeqps" | "cmpneqps" | "cmpltps" | "cmpleps"
+  | "cmpunordps" | "cmpordps" | "ret" | "retq" -> true
+  | _ -> false
+
+let allowed_avx512f = function
+  | "vbroadcastss" | "vpxord" | "vpandd" | "vpord" | "vpternlogd"
+  | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
+  | "vfmadd213ps" | "vfmadd231ps" | "vcmpps" | "vcmpeq_oqps"
+  | "vcmpneq_oqps" | "vcmplt_oqps" | "vcmple_oqps" | "vcmpeqps"
+  | "vcmpunordps" | "vptestmd" | "vblendmps" | "vmovaps"
+  | "vshuff32x4" | "vpermilps" | "kxnorw" | "kshiftlw" | "kshiftrw"
+  | "ret" | "retq" -> true
+  | _ -> false
+
+let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function_name decoded =
+  let mnemonic = decoded.mnemonic and operands = decoded.operands in
+  let sse = profile = Target.X86_sse2 in
+  let fail obligation =
+    error ~source ~function_name ~obligation (Printf.sprintf "encountered %s %s" mnemonic operands)
+  in
+  let literal_read =
+    contains operands "rip"
+    && not (contains (List.hd (String.split_on_char ',' operands)) "[")
+    && (if sse then List.mem mnemonic [ "movaps"; "xorps"; "andps" ]
+        else List.mem mnemonic [ "vbroadcastss"; "vpxord" ])
+  in
+  let cross_lane =
+    if sse then mnemonic = "shufps" && not (String.ends_with ~suffix:",0x0" operands)
+    else List.mem mnemonic [ "vshuff32x4"; "vpermilps"; "kxnorw"; "kshiftlw"; "kshiftrw" ]
+  in
+  if String.starts_with ~prefix:"call" mnemonic then fail "no calls"
+  else if contains operands "rsp" || contains operands "rbp" then fail "no stack use"
+  else if contains operands "[" && not literal_read then fail "literal rack loads only"
+  else if sse && (contains operands "ymm" || contains operands "zmm") then fail "one XMM per rack"
+  else if not sse && (contains operands "ymm" || (contains operands "xmm" && mnemonic <> "vbroadcastss")) then fail "one ZMM per rack"
+  else if not sse && regexp_contains "\\bk\\(0\\|[2-7]\\)\\b" operands then fail "reserved opmask register"
+  else if cross_lane && not allow_cross_lane then fail "source-authorized cross-lane operation"
+  else if not ((if sse then allowed_sse2 else allowed_avx512f) mnemonic) then fail "instruction allow-list"
+  else Ok ()
 
 let allowed_neon = function
   | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv"
@@ -304,6 +347,8 @@ let verify_instruction ~profile ~allow_cross_lane ~source ~function_name decoded
   match profile with
   | Target.X86_avx2 ->
       verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded
+  | (Target.X86_sse2 | Target.X86_avx512) as profile ->
+      verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function_name decoded
   | Target.Aarch64_neon -> verify_neon_instruction ~source ~function_name decoded
   | profile ->
       error ~source ~function_name ~obligation:"target profile"

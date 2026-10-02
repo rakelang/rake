@@ -18,7 +18,7 @@ lesson promises.
 | Lesson text                | Editor                                    |
 |                            |  crunch scale(values: f32s,               |
 | What the lesson            |               <factor: f32>) -> f32s:     |
-| introduces, the task and   |    return values * <factor>               |
+| introduces, the task and   |    values * <factor>                      |
 | what to inspect after      |                                           |
 | running it.                | [Run]   Target: [wasm-simd128 v]  [Reset] |
 |                            +-------------------------------------------+
@@ -41,9 +41,10 @@ tabs under it:
 Stepping through a program in the Lanes tab shows one instruction acting on
 all the lanes at once, the idea the whole tutorial builds on.
 
-The target menu offers the three production profiles. Runs and slow code
+The target menu offers WebAssembly, SSE2, AVX2, AVX-512 and NEON. Runs and slow code
 compile on `wasm-simd128` only, so a lesson that uses them disables the other
-two and says why.
+profiles and says why. Native code can be inspected in the browser, but only
+WebAssembly can execute there.
 
 ## How it works
 
@@ -165,7 +166,7 @@ both places on purpose: wherever a scalar becomes a rack, the page shows it.
 <!-- playground-starter -->
 ```rake
 crunch scale(values: f32s, <factor: f32>) -> f32s:
-  return values * <factor>
+  values * <factor>
 
 run scale_all(x: []f32, out: mut []f32, <factor: f32>):
   out[<0>] <- scale(x[<0>], <factor>)
@@ -185,7 +186,7 @@ vector code. Delete the brackets around `factor` inside the crunch and run:
 <!-- rake-check: reject "'factor' is a uniform scalar: write <factor> where it meets a rack" -->
 ```rake
 crunch scale(values: f32s, <factor: f32>) -> f32s:
-  return values * factor
+  values * factor
 ```
 
 The message points at `factor` and says what to write. Broadcasting a scalar
@@ -225,7 +226,7 @@ Vector code adds in columns, then reduces once at the end.
 
 `| step <| velocities * <dt>` is one stage of a fused computation. Read it
 from right to left: the expression flows into `step`. Consecutive stages
-form one region of pure arithmetic, and the names inside it are for the
+form one region of pure arithmetic, and the identifiers inside it are for the
 reader, so the compiler sees `positions + velocities * <dt>`.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
@@ -234,7 +235,7 @@ reader, so the compiler sees `positions + velocities * <dt>`.
 crunch advance(positions: f32s, velocities: f32s, <dt: f32>) -> f32s:
   | step  <| velocities * <dt>
   | moved <| positions + step
-  return moved
+  moved
 ```
 
 This lesson has no `main`. Select `x86-avx2`, run the compiler and open Code.
@@ -260,7 +261,7 @@ w then v - w else w - v` with a mask condition chooses lane by lane.
 <!-- playground-starter -->
 ```rake
 crunch distance(v: f32s, w: f32s) -> f32s:
-  return if v > w then v - w else w - v
+  if v > w then v - w else w - v
 
 run distances(a: []f32, b: []f32, out: mut []f32):
   out[<0>] <- distance(a[<0>], b[<0>])
@@ -287,7 +288,7 @@ number is NaN:
 <!-- rake-check: trap "does not fit i32" -->
 ```rake
 crunch roots(values: f32s) -> f32s:
-  return sqrt(values)
+  sqrt(values)
 
 run all_roots(x: []f32, out: mut []f32):
   out[<0>] <- roots(x[<0>])
@@ -301,7 +302,7 @@ slow main() -> i32:
 
 Result: a trap at the last line, `-nan does not fit i32`, and the Lanes tab
 shows `4 NaN 3 1`. A rake guards the lanes instead.
-`tine #valid when values >= <0.0>` computes and names the mask of lanes
+`tine #valid means values >= <0.0>` computes the mask of lanes
 that may take a root.
 `through #valid else <0.0> into rooted:` binds an intermediate rack: roots in
 those lanes, zero in the others. The sweep chooses the final result for each
@@ -311,7 +312,7 @@ lane: the first arm whose tine holds, and `_` for every other lane.
 <!-- playground-starter -->
 ```rake
 rake safe_root(values: f32s) -> f32s:
-  tine #valid when values >= <0.0>
+  tine #valid means values >= <0.0>
 
   through #valid else <0.0> into rooted:
     sqrt(values)
@@ -440,7 +441,7 @@ store after it remain vector work. In Code, find the scalar helper call
 between them.
 
 A block's last expression can return a scalar to a marked uniform binding.
-Its local names end at the brace. A block can't capture a rack: move the
+Its local bindings end at the brace. A block can't capture a rack: move the
 `maximum` into it as `let top = maximum(x[<0>])`, run, and read the error.
 Restore the reduction outside the block. A reduction or extraction is the
 explicit boundary from a rack to a scalar.
@@ -470,7 +471,7 @@ only the virtual instructions the profile lists. Rake has no vector sine yet:
 <!-- playground-starter -->
 ```rake
 crunch wave(values: f32s) -> f32s:
-  return sin(values)
+  sin(values)
 ```
 
 Run the program and read the unsupported-operation message. Then replace
@@ -496,7 +497,7 @@ and `repeat` runs its body a fixed number of times.
 crunch spread(reached: u8s, open: u8s) -> u8s:
   let east = shift_bits_left(reached, 1)
   let west = shift_bits_right(reached, 1)
-  return bit_and(bit_or(reached, bit_or(east, west)), open)
+  bit_and(bit_or(reached, bit_or(east, west)), open)
 
 run flood(rows: []u8, walls: []u8, out: mut []u8):
   reached := rows[<0>]
@@ -534,7 +535,7 @@ stack and record fields, record literals and `slow { ... }` blocks. In a slow
 block, multiline statements are indented, while inline statements use
 semicolons. Its last expression is its value unless a semicolon discards it.
 
-### Types after names
+### Types after identifiers
 
 `values: f32s` reads "values, of type `f32s`", the order of Python's type
 hints, TypeScript, Rust and the ML family, rather than C's `float values`.

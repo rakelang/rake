@@ -15,19 +15,19 @@ or helper calls. The language and its documentation are at
 What Rust does for safety with `unsafe {}`, Rake does for speed with
 `slow {}`. A run explicitly enters scalar code at `slow {` and resumes vector
 work at `}`. [Slow blocks](docs/spec/08_slow_tier.md#slow-blocks) are available
-in 0.5.0-beta and in the playground.
+in 0.6.0-beta and in the playground.
 
-Release: 0.5.0-beta.
+Release: 0.6.0-beta.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
 crunch advance(positions: f32s, velocities: f32s) -> f32s:
   | scaled <| velocities * <0.5>
   | moved  <| positions + scaled
-  return moved
+  moved
 
 rake safe_root(values: f32s) -> f32s:
-  tine #valid when values >= <0.0>
+  tine #valid means values >= <0.0>
 
   through #valid else <0.0> into rooted:
     sqrt(values)
@@ -47,13 +47,16 @@ multiply-add.
 
 | Profile | Rack | What compiles |
 | --- | --- | --- |
+| `x86-sse2` | one 128-bit XMM register, 4 `f32` lanes | `f32s` crunches and rakes, as assembly |
 | `x86-avx2` | one 256-bit YMM register, 8 `f32` lanes | `f32s` crunches and rakes, as assembly |
+| `x86-avx512` | one 512-bit ZMM register, 16 `f32` lanes | `f32s` crunches and rakes, as assembly |
 | `aarch64-neon` | one 128-bit vector register, 4 `f32` lanes | `f32s` crunches and rakes, as assembly |
 | `wasm-simd128` | one `v128`, 4 `f32` lanes | crunches and rakes over float and integer racks, runs over memory, and whole programs with scalar `slow` code, as C |
 | `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
-`x86-sse2`, `x86-avx512` and `scalar` are planned profiles, and the compiler
-rejects code for them. On `wasm-simd128`, a whole program becomes one C file
+The scalar fallback remains WIP (work in progress), and the compiler rejects
+code for it. Native runs, packs and whole programs are also WIP. On
+`wasm-simd128`, a whole program becomes one C file
 with `int main(void)`, and every selected instruction is written as one
 `wasm_simd128.h` intrinsic.
 

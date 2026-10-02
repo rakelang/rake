@@ -1,6 +1,6 @@
 rake forward_tine(values: f32s) -> f32s:
-  tine #first when #later
-  tine #later when values >= <0.0>
+  tine #first means #later
+  tine #later means values >= <0.0>
 
   through #first else <0.0> into selected:
     values

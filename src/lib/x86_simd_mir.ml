@@ -1,4 +1,4 @@
-(** Virtual-register machine IR for the x86-64 AVX2+FMA profile.
+(** Shared virtual-register machine IR for x86-64 SIMD profiles.
 
     Every value in this IR occupies one YMM register.  Destructive FMA form
     selection and physical register allocation deliberately happen later. *)

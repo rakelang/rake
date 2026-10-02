@@ -9,7 +9,7 @@ crunch particle_energy(px: f32s, py: f32s, pz: f32s, mass: f32s) -> f32s:
   let vy2 = py * py
   let vz2 = pz * pz
   let speed2 = vx2 + vy2 + vz2
-  return <0.5> * mass * speed2
+  <0.5> * mass * speed2
 
 run compute_kinetic_energy(
   particles: pack Particle,
@@ -24,14 +24,14 @@ run compute_kinetic_energy(
 
 crunch apply_gravity(y: f32s, <dt: f32>, <gravity: f32>) -> f32s:
   let velocity_delta = <gravity> * <dt>
-  return y + velocity_delta * <dt>
+  y + velocity_delta * <dt>
 
 stack Ray {
   f32: ox, oy, oz, dx, dy, dz;
 }
 
 crunch ray_x_at_t(ox: f32s, dx: f32s, <t: f32>) -> f32s:
-  return ox + dx * <t>
+  ox + dx * <t>
 
 run march_rays(
   rays: pack Ray,

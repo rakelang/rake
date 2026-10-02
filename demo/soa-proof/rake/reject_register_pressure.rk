@@ -13,4 +13,4 @@ crunch reject_register_pressure(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: 
   | t8 <| a + b
   | result <| (t0 + t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8
                + a + b + c + d + e + f + g + h)
-  return result
+  result

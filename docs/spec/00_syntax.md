@@ -1,6 +1,6 @@
 # Syntax
 
-This page is the reference for Rake's source syntax: its layout, names,
+This page is the reference for Rake's source syntax: its layout, identifiers,
 literals, definitions, types, statements and expressions. The other pages
 define what each form means. A form that parses can still be unavailable on a
 target, and the compiler reports that separately from a syntax error.
@@ -23,12 +23,12 @@ Blank lines and comment-only lines don't affect indentation.
 `~~` starts a comment that runs to the end of the line. `(*` and `*)` enclose
 a block comment, and block comments nest.
 
-## Names
+## Identifiers
 
 An identifier starts with a lowercase letter or an underscore and continues
 with letters, digits and underscores. A name that starts with an uppercase
 letter is a type name, used for stacks and records, such as `Samples`. A lone
-`_` is the default arm of a sweep, not a name. These words are reserved and can't be used as names:
+`_` is the default arm of a sweep, not an identifier. These words are reserved and can't be used as identifiers:
 
 ```text
 and bool bools break by const continue crunch else embed extern f32 f32s f64
@@ -36,11 +36,11 @@ f64s false fma for from i16 i16s i32 i32s i64 i64s i8 i8s if in into lanes
 let mask mut not or pack ptr rake record repeat return rotate_left
 rotate_right run shift_left shift_right shuffle slow stack state sweep then
 through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked up using
-when while yield
+means while yield
 ```
 
 `wrap` and `bitcast` are conversions when a parenthesis follows them, as in
-`wrap(u8, x)`, and ordinary names otherwise.
+`wrap(u8, x)`, and ordinary identifiers otherwise.
 
 ## Literals
 
@@ -48,7 +48,7 @@ Integers are written in decimal or in hexadecimal with `0x`. A decimal
 literal up to 2^64 - 1 is accepted, and one above 2^63 - 1 is read as the bit
 pattern of a `u64`. Floats need a decimal point or an exponent: `1.0`, `2.`
 and `1e-3`. `true` and `false` are the Boolean literals. A string literal in
-double quotes names a file after `from`, or passes text to a C function. Its
+double quotes specifies a file after `from`, or passes text to a C function. Its
 escapes are kept as written, for C to read.
 
 A minus sign before a literal makes it negative, and a minus sign between two
@@ -76,10 +76,10 @@ A file holds one or more definitions:
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
 crunch scale(values: f32s, <factor: f32>) -> f32s:
-  return values * <factor>
+  values * <factor>
 
 rake safe_root(values: f32s) -> f32s:
-  tine #valid when values >= <0.0>
+  tine #valid means values >= <0.0>
 
   through #valid else <0.0> into rooted:
     sqrt(values)
@@ -110,12 +110,12 @@ scalar type, and a record field can be any type. A C struct is declared as
 ## Parameters and results
 
 Parameters are written `name: type` and separated by commas. A uniform scalar
-parameter is written `<name: type>`. A result type follows `->`. A crunch or
-rake returns the value of its `return` statement or sweep. A run declared
+parameter is written `<name: type>`. A result type follows `->`. A crunch's
+last expression supplies its result. A rake ends with its sweep. A run declared
 `-> f32` yields racks from a traversal and writes their lanes to an `f32`
 output stream, and a run without a result type writes through its `mut`
 parameters instead. A slow function without a result type returns nothing.
-A crunch's body ends with its `return`.
+`return` is reserved for leaving a slow function, not for a crunch.
 
 A crunch, rake or run may call crunches and rakes. The call is inlined, so
 calls nest at most 32 deep and recursion is rejected.
@@ -149,7 +149,7 @@ column layout, used through `pack Name`.
 | `name := e`, `name: T := e`, `(name: T) := e` | a mutable location |
 | `place <- e` | assignment to a location, field, element or memory |
 | `\| name <\| e`, `\| name: T <\| e` | a fused binding |
-| `return e`, `return` | the result of a crunch, or leaving a slow function |
+| `return e`, `return` | leaving a slow function |
 | `sweep:` with arms | the final, lane-by-lane result of a rake |
 | `yield e` | the rack a traversal produces for its chunk |
 | `if c:` … `else if c:` … `else:` | a conditional statement |
@@ -159,7 +159,7 @@ column layout, used through `pack Name`.
 | `for chunk in p using f32s up to <n>:` | a traversal of a pack |
 | `break`, `continue` | inside a slow loop |
 | `slow { statements; value }` | a scoped scalar escape in a run or slow function, optionally producing a scalar |
-| `e` | a call evaluated for its effect |
+| `e` | a crunch's final result, or a call evaluated for its effect |
 
 A name is bound once in its scope and can't shadow an enclosing name. A mutable location
 changes with `<-`. [Control flow](05_control_flow.md) defines the
@@ -168,14 +168,14 @@ and [the slow tier](08_slow_tier.md) the scalar statements.
 
 ## Tines, through and sweeps
 
-A rake names its lane masks with tines, computes values under them with
+A rake defines its lane masks with tines, computes values under them with
 `through`, and combines the results with a sweep. A rake's body is, in order,
 any `let` bindings, its tines, its through blocks and the sweep:
 
 ```rake
 rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
-  tine #above when values > <low>
-  tine #over when values > <high>
+  tine #above means values > <low>
+  tine #over means values > <high>
 
   through (#above and not #over) else <0.0> into shifted:
     values - <low>
@@ -187,9 +187,9 @@ rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
 
 A tine's predicate uses comparisons, other tines, parentheses, `not`, `and`
 and `or`, and arithmetic and fields on its operands. It contains no calls.
-A through block names one tine, as in `through #active`, or a predicate in
+A through block selects one tine, as in `through #active`, or a predicate in
 parentheses, as in `through (#active and not #edge)`. `else` gives the value
-of the lanes outside the tine, a uniform or a literal, and `into` names the
+of the lanes outside the tine, a uniform or a literal, and `into` specifies the
 result. A sweep
 takes the first arm whose tine holds for each lane and ends with one `_` arm
 for the remaining lanes. [Tines, through and sweeps](03_tines_and_through.md)
@@ -209,7 +209,7 @@ From the lowest precedence to the highest:
 | `a * b`, `a / b`, `a % b` | `%` is integer remainder |
 | `-a`, `not a` | |
 | `a.field`, `a[i]`, `a[unchecked i]` | fields and indexing |
-| literals, names, marks, calls, `(e)` | |
+| literals, identifiers, marks, calls, `(e)` | |
 
 A comparison of floats is false when either operand is NaN, and that includes
 `!=`: Rake's `!=` means "ordered and different". Integer arithmetic in slow
@@ -221,15 +221,15 @@ Other primary forms are calls `f(a, b)`, conversions `i32(x)` (checked),
 `wrap(u8, x)` (the low bits) and `bitcast(u32, x)` (the same bits), record
 literals `Name { field: e }`, and array literals `[a, b, c]` and `[e; n]`.
 
-Rack operations have names rather than operators:
+Rack operations use function-call syntax rather than operators:
 
 | Operations | Page |
 | --- | --- |
-| `sqrt` `abs` `floor` `ceil` `trunc` `nearest` `min` `max` `exp` `log` `log2` `tanh` `fma` `select` | [Racks and targets](01_racks_targets_and_abi.md) |
-| `relaxed_madd` `relaxed_nmadd` `relaxed_min` `relaxed_max` | [Racks and targets](01_racks_targets_and_abi.md) |
-| `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `bitmask` | [Racks and targets](01_racks_targets_and_abi.md) |
-| `bit_and` `bit_or` `bit_xor` `bit_andnot` `shift_bits_left` `shift_bits_right` `shift_bits_right_signed` | [Racks and targets](01_racks_targets_and_abi.md) |
-| `shuffle(a, [3, 2, 1, 0])`, `shuffle(a, b, [0, 4, 1, 5])` | [Racks and targets](01_racks_targets_and_abi.md) |
+| `sqrt` `abs` `floor` `ceil` `trunc` `nearest` `min` `max` `exp` `log` `log2` `tanh` `fma` `select` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
+| `relaxed_madd` `relaxed_nmadd` `relaxed_min` `relaxed_max` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
+| `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `bitmask` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
+| `bit_and` `bit_or` `bit_xor` `bit_andnot` `shift_bits_left` `shift_bits_right` `shift_bits_right_signed` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
+| `shuffle(a, [3, 2, 1, 0])`, `shuffle(a, b, [0, 4, 1, 5])` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](06_reductions_and_scans.md) |
 | `sum` `product` `minimum` `maximum` `all` `any` | [Reductions and scans](06_reductions_and_scans.md) |
 | `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | [Reductions and scans](06_reductions_and_scans.md) |

@@ -6,4 +6,4 @@
 crunch advance_x(position_x: f32s, velocity_x: f32s, <dt: f32>) -> f32s:
   | displacement: f32s <| velocity_x * <dt>
   | result: f32s <| position_x + displacement
-  return result
+  result

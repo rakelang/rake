@@ -38,7 +38,7 @@ computes on registers.
 
 `for chunk in input using f32s up to <count>:` visits the first `count`
 records of `input`, one rack of records at a time: four at once for `f32s` on
-`wasm-simd128`. `using` names the compute domain. `chunk.value` is the rack of
+`wasm-simd128`. `using` specifies the compute domain. `chunk.value` is the rack of
 the current records' `value` column, loaded once for the chunk.
 
 A traversal of a run declared `-> f32` ends each chunk with `yield`, and the

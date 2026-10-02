@@ -36,18 +36,18 @@ the wasm profiles only.
 
 | Option | Meaning |
 | --- | --- |
-| `--target p` | the profile: `native` (the default), `x86-avx2`, `aarch64-neon`, `wasm-simd128`, `wasm-simd128-relaxed`, or the planned `x86-sse2`, `x86-avx512` and `scalar` |
+| `--target p` | the profile: `native` (the default), `x86-sse2`, `x86-avx2`, `x86-avx512`, `aarch64-neon`, `wasm-simd128`, `wasm-simd128-relaxed`, or the WIP scalar fallback |
 | `--width n` | asserts that the profile's `f32` rack has `n` lanes |
 | `--wasm-addressing a` | `barrier`, the default, keeps a run's pointers opaque to clang's loop strength reduction so constant offsets fold into loads and stores, and `plain` emits intrinsics alone |
 | `-o path`, `--output path` | the output file |
 
-[Racks and targets](spec/01_racks_targets_and_abi.md#profiles) explains how
+[Primitives, operations, and targets](spec/01_primitives_operations_and_targets.md#profiles) explains how
 `native` chooses a profile and what `--width` checks, and [packs and
 runs](spec/02_packs_and_run.md#addressing) explains the addressing modes.
 
 ## Tools and environment
 
-On `x86-avx2` the assembler is `as --64`, and on `aarch64-neon` it is
+On every x86 profile the assembler is `as --64`, and on `aarch64-neon` it is
 `aarch64-unknown-linux-gnu-as`. Verification disassembles with the matching
 `objdump`. The wasm profiles use these variables:
 

@@ -36,7 +36,7 @@ let status_text = function
 
 let assembler_command = function
   | Target.Aarch64_neon -> ("aarch64-unknown-linux-gnu-as", [])
-  | Target.X86_avx2 -> ("as", [ "--64" ])
+  | Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512 -> ("as", [ "--64" ])
   | profile ->
       invalid_arg
         (Printf.sprintf "no assembler configured for profile '%s'"

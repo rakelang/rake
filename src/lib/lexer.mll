@@ -2,7 +2,7 @@
 
     Tokenizes rake source with:
     - Tine references: #name (grid-line evokes SIMD lanes)
-    - Tine declarations: tine #name when predicate
+    - Tine declarations: tine #name means predicate
     - Through blocks: through #tine else <value> into binding:
     - Sweep blocks: sweep: | #tine => value
     - Named reductions, scans, shuffles, shifts, and rotations
@@ -37,7 +37,7 @@ let () = List.iter (fun (k, v) -> Hashtbl.add keywords k v) [
   ("crunch", CRUNCH); ("rake", RAKE); ("run", RUN);
 
   (* Tines and control *)
-  ("tine", TINE); ("when", WHEN);
+  ("tine", TINE); ("means", MEANS);
   ("through", THROUGH); ("sweep", SWEEP);
   ("else", ELSE); ("into", INTO); ("return", RETURN); ("yield", YIELD);
   ("in", IN);
@@ -227,7 +227,7 @@ let show_token = function
   | MASK -> "MASK" | STACK -> "STACK" | PACK -> "PACK"
   | CRUNCH -> "CRUNCH" | RAKE -> "RAKE" | RUN -> "RUN"
   | TINE_REF s -> Printf.sprintf "TINE_REF(%s)" s
-  | TINE -> "TINE" | WHEN -> "WHEN"
+  | TINE -> "TINE" | MEANS -> "MEANS"
   | THROUGH -> "THROUGH" | SWEEP -> "SWEEP" | ELSE -> "ELSE" | INTO -> "INTO"
   | RETURN -> "RETURN" | YIELD -> "YIELD"
   | IN -> "IN" | FOR -> "FOR" | USING -> "USING"

@@ -1,47 +1,47 @@
-(** No-spill physical YMM allocation for the initial AVX2 backend. *)
+(** No-spill physical vector-register allocation for x86-64 SIMD profiles. *)
 
-module M = X86_avx2_mir
+module M = X86_simd_mir
 module I = Native_ir.IntMap
 module S = Native_ir.IntSet
 
-type ymm = int
+type vector_register = int
 
 type operation =
-  | Uniform_f32 of { dst : ymm; bits : int32 }
-  | Uniform_mask of { dst : ymm; value : bool }
-  | Broadcastss of { dst : ymm; source : ymm }
+  | Uniform_f32 of { dst : vector_register; bits : int32 }
+  | Uniform_mask of { dst : vector_register; value : bool }
+  | Broadcastss of { dst : vector_register; source : vector_register }
   | Reduce_f32 of {
-      dst : ymm;
-      source : ymm;
+      dst : vector_register;
+      source : vector_register;
       operation : Native_ir.reduction;
-      scratch : ymm list;
+      scratch : vector_register list;
     }
   | Scan_f32 of {
-      dst : ymm;
-      source : ymm;
+      dst : vector_register;
+      source : vector_register;
       operation : Native_ir.scan;
-      scratch : ymm list;
+      scratch : vector_register list;
     }
-  | Addps of { dst : ymm; left : ymm; right : ymm }
-  | Subps of { dst : ymm; left : ymm; right : ymm }
-  | Mulps of { dst : ymm; left : ymm; right : ymm }
-  | Divps of { dst : ymm; left : ymm; right : ymm }
-  | Sqrtps of { dst : ymm; source : ymm }
-  | Negps of { dst : ymm; source : ymm }
-  | Fma213ps of { dst : ymm; multiplier : ymm; addend : ymm }
-  | Fma231ps of { dst : ymm; multiplicand : ymm; multiplier : ymm }
+  | Addps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Subps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mulps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Divps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Sqrtps of { dst : vector_register; source : vector_register }
+  | Negps of { dst : vector_register; source : vector_register }
+  | Fma213ps of { dst : vector_register; multiplier : vector_register; addend : vector_register }
+  | Fma231ps of { dst : vector_register; multiplicand : vector_register; multiplier : vector_register }
   | Cmpps of {
-      dst : ymm;
+      dst : vector_register;
       predicate : M.ordered_comparison;
-      left : ymm;
-      right : ymm;
+      left : vector_register;
+      right : vector_register;
     }
-  | Blendvps of { dst : ymm; mask : ymm; if_true : ymm; if_false : ymm }
-  | Mask_andps of { dst : ymm; left : ymm; right : ymm }
-  | Mask_orps of { dst : ymm; left : ymm; right : ymm }
-  | Mask_xorps of { dst : ymm; left : ymm; right : ymm }
-  | Mask_notps of { dst : ymm; source : ymm }
-  | Moveaps of { dst : ymm; source : ymm }
+  | Blendvps of { dst : vector_register; mask : vector_register; if_true : vector_register; if_false : vector_register }
+  | Mask_andps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mask_orps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mask_xorps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mask_notps of { dst : vector_register; source : vector_register }
+  | Moveaps of { dst : vector_register; source : vector_register }
 
 type instruction = {
   operation : operation;
@@ -53,7 +53,7 @@ type func = {
   name : string;
   loc : Native_ir.source_location;
   instructions : instruction list;
-  result : ymm option;
+  result : vector_register option;
   result_type : Native_ir.typ option;
   maximum_live : int;
 }
@@ -71,7 +71,6 @@ let format_error error =
   Printf.sprintf "%s: %s: %s" (Native_ir.format_source_location error.loc)
     error.function_name error.message
 
-let physical_register_count = 16
 let argument_register_count = 8
 
 let last_uses func =
@@ -99,18 +98,18 @@ let expire uses index allocation =
 
 let occupied allocation = I.fold (fun _ physical set -> S.add physical set) allocation S.empty
 
-let first_free allocation =
+let first_free register_count allocation =
   let occupied = occupied allocation in
   let rec find register =
-    if register = physical_register_count then None
+    if register = register_count then None
     else if S.mem register occupied then find (register + 1)
     else Some register
   in
   find 0
 
-let free_registers allocation excluded =
+let free_registers register_count allocation excluded =
   let occupied = occupied allocation in
-  List.init physical_register_count Fun.id
+  List.init register_count Fun.id
   |> List.filter (fun register ->
          not (S.mem register occupied) && not (List.mem register excluded))
 
@@ -122,7 +121,13 @@ let live_is_fused provenances allocation =
       | _ -> false)
     allocation
 
-let allocate_function func =
+let allocate_function ?(profile = Target.X86_avx2) func =
+  (* SSE2's two-address expansion reserves xmm15 for instruction-local work.
+     It never holds a source value or a spill. *)
+  let physical_register_count =
+    if profile = Target.X86_sse2 then 15 else Target.x86_register_count profile
+  in
+  let register_class = Option.get (Target.info profile).mir_register_class in
   let parameter_count = List.length func.M.parameters in
   if parameter_count > argument_register_count then
     Error
@@ -134,7 +139,7 @@ let allocate_function func =
         fused = false;
         message =
           Printf.sprintf
-            "native AVX2 SysV calling convention requires %d SSE-class arguments but provides %d register argument slots; stack arguments are forbidden"
+            "native x86 SysV calling convention requires %d SSE-class arguments but provides %d register argument slots; stack arguments are forbidden"
             parameter_count argument_register_count;
       }
   else
@@ -150,7 +155,7 @@ let allocate_function func =
     let physical value =
       match I.find_opt value !allocation with
       | Some register -> register
-      | None -> invalid_arg (Printf.sprintf "unallocated AVX2 value %%%d" value)
+      | None -> invalid_arg (Printf.sprintf "unallocated x86 SIMD value %%%d" value)
     in
     let emit loc provenance operation =
       emitted_rev := { operation; loc; provenance } :: !emitted_rev
@@ -168,9 +173,9 @@ let allocate_function func =
           available = physical_register_count;
           fused;
           message =
-            Printf.sprintf "%s requires %d simultaneously live YMM registers; profile provides %d; no spill fallback is permitted"
+            Printf.sprintf "%s requires %d simultaneously live %s registers; profile provides %d allocation slots; no spill fallback is permitted"
               (if fused then "fused region" else "native rack expression") required
-              physical_register_count;
+              register_class physical_register_count;
         }
     in
     let choose_destination index candidates instruction =
@@ -181,7 +186,7 @@ let allocate_function func =
       with
       | Some value -> Ok (physical value, Some value)
       | None -> (
-          match first_free !allocation with
+          match first_free physical_register_count !allocation with
           | Some register -> Ok (register, None)
           | None -> fail_pressure instruction)
     in
@@ -235,6 +240,7 @@ let allocate_function func =
             | M.Fma_ps { addend; multiplicand; multiplier; _ } ->
                 [ addend; multiplicand; multiplier ]
             | M.Blendvps { if_false; if_true; _ } -> [ if_false; if_true ]
+            | M.Cmpps { left; _ } when profile = Target.X86_sse2 -> [ left ]
             | _ -> operands
           in
           (match choose_destination index candidates instruction with
@@ -250,7 +256,7 @@ let allocate_function func =
                 | _ -> 0
               in
               let scratch =
-                free_registers !allocation [ dst ]
+                free_registers physical_register_count !allocation [ dst ]
                 |> List.filteri (fun index _ -> index < scratch_count)
               in
               if List.length scratch <> scratch_count then
@@ -323,11 +329,11 @@ let allocate_function func =
     in
     allocate 0 func.instructions
 
-let allocate module_ =
+let allocate ?(profile = Target.X86_avx2) module_ =
   let rec loop allocated = function
     | [] -> Ok (List.rev allocated)
     | func :: rest -> (
-        match allocate_function func with
+        match allocate_function ~profile func with
         | Ok func -> loop (func :: allocated) rest
         | Error _ as error -> error)
   in

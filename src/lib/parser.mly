@@ -22,8 +22,8 @@ let mk_loc startpos _endpos = {
 
 let mk_node v startpos endpos = { v; loc = mk_loc startpos endpos }
 
-(* This name cannot be written by a Rake program, so an explicit return can be
-   represented by the existing named-result lowering without a collision. *)
+(* This identifier cannot be written by a Rake program, so its final expression
+   can use the existing result-binding lowering without a collision. *)
 let canonical_result_name = "$return"
 
 let result_of_type ty = {
@@ -31,10 +31,10 @@ let result_of_type ty = {
   result_type = Some ty;
 }
 
-(* A crunch body ends in its return, which becomes the canonical result binding. *)
+(* A crunch's final expression supplies its result. *)
 let crunch_body statements =
   match List.rev statements with
-  | { v = SReturn (Some value); loc } :: preceding ->
+  | { v = SExpr value; loc } :: preceding ->
       List.rev preceding @ [ { v = SLet { bind_name = canonical_result_name; bind_type = None; bind_expr = value }; loc } ]
   | _ -> statements
 
@@ -88,7 +88,7 @@ let slow_body statements =
 
 (* Tokens: Tines and control *)
 %token <string> TINE_REF
-%token TINE WHEN THROUGH SWEEP ELSE INTO RETURN YIELD IN
+%token TINE MEANS THROUGH SWEEP ELSE INTO RETURN YIELD IN
 
 (* Tokens: Iteration *)
 %token FOR USING UP TO
@@ -186,7 +186,7 @@ record_group:
 block:
   | COLON NEWLINE INDENT ss = nonempty_list(stmt) DEDENT { ss }
 
-(* crunch name(parameters) -> result-type: body ending in return expression *)
+(* crunch name(parameters) -> result-type: body ending in an expression *)
 crunch_def:
   | CRUNCH name = IDENT LPAREN ps = separated_list(COMMA, crunch_param) RPAREN
     ARROW result_type = typ body = block {
@@ -301,7 +301,7 @@ rack_prim_type:
 (* ═══════════════════════════════════════════════════════════════════ *)
 
 canonical_tine_decl:
-  | TINE name = TINE_REF WHEN p = predicate NEWLINE {
+  | TINE name = TINE_REF MEANS p = predicate NEWLINE {
       { tine_name = name; tine_pred = p }
     }
 

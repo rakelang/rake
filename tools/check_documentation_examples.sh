@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every ```rake block in Rake's documentation is a complete program, checked
+# Every ```rake block in Rake's documentation is checked
 # here against the compiler. The documentation owns its examples: nothing is
 # copied from fixtures. An HTML comment on the line before a block chooses the
 # check, and a block without one must verify on wasm-simd128:
@@ -7,6 +7,8 @@
 #   <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 #                                          rakec --verify-native on each target
 #   <!-- rake-check: frontend -->          parse and type-check only
+#   <!-- rake-check: verify wasm-simd128 with 1 -->
+#                       use block 1 from this page as preceding definitions
 #   <!-- rake-check: run 33 -->            verify on wasm-simd128, and
 #                                          rakec --interpret prints 33
 #   <!-- rake-check: trap "text" -->       verify on wasm-simd128, and
@@ -59,8 +61,19 @@ for document in "${documents[@]}"; do
     read -r kind arguments < "${block}.check" || true
     case "${kind}" in
       verify)
-        for target in ${arguments}; do
-          "${rakec}" --verify-native --target "${target}" -o "${tmp}/out.o" "${block}" > "${tmp}/log" 2>&1 \
+        source="${block}"
+        targets="${arguments}"
+        if [[ "${arguments}" == *" with "* ]]; then
+          targets="${arguments%% with *}"
+          context="${arguments##* with }"
+          [[ "${context}" =~ ^[1-9][0-9]*$ ]] || fail "${where}: invalid preceding block ${context}"
+          prefix="$(printf '%s/block-%03d.rk' "${tmp}" "${context}")"
+          [[ -f "${prefix}" && "${prefix}" < "${block}" ]] || fail "${where}: context must be an earlier block"
+          source="${block}.combined"
+          { sed '$a\' "${prefix}"; sed '$a\' "${block}"; } > "${source}"
+        fi
+        for target in ${targets}; do
+          "${rakec}" --verify-native --target "${target}" -o "${tmp}/out.o" "${source}" > "${tmp}/log" 2>&1 \
             || { sed 's/^/  /' "${tmp}/log" >&2; fail "${where} does not verify on ${target}"; }
         done ;;
       frontend)

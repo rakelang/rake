@@ -1,5 +1,5 @@
 rake malformed_through(values: f32s) -> f32s:
-  tine #active when values >= <0.0>
+  tine #active means values >= <0.0>
 
   through #active else <0.0> active_value:
     values

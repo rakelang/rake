@@ -23,7 +23,7 @@ comparison and one `v128.bitselect`. A mask conditional compiles on
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
 crunch distance(v: f32s, w: f32s) -> f32s:
-  return if v > w then v - w else w - v
+  if v > w then v - w else w - v
 ```
 
 A uniform condition chooses one whole rack. In vector code both branches are
@@ -35,7 +35,7 @@ only:
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
 crunch pick(near: f32s, far: f32s, <late: i32>) -> f32s:
-  return if <late> > <0> then near else far
+  if <late> > <0> then near else far
 ```
 
 In vector code, a branch can't read memory. A load, gather or element read is
@@ -66,7 +66,7 @@ crunch cube(a: f32s) -> f32s:
   power := a
   repeat <i: i32> from <0> up to <2>:
     power <- power * a
-  return power
+  power
 ```
 
 In a run, `repeat` unrolls while its trips times its body's statements stay

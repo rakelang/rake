@@ -1,8 +1,8 @@
 crunch helper(x: f32s) -> f32s:
-  return sqrt(x)
+  sqrt(x)
 
 rake masked_call(x: f32s) -> f32s:
-  tine #active when x >= <0.0>
+  tine #active means x >= <0.0>
 
   through #active else <0.0> into computed:
     helper(x)

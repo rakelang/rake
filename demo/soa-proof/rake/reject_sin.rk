@@ -4,4 +4,4 @@
 ~~ scalarize the rack lane by lane.
 crunch reject_sin(values: f32s) -> f32s:
   | result <| sin(values)
-  return result
+  result

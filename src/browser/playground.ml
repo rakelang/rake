@@ -27,7 +27,9 @@ let js_lane_trace (trace : Rake.Playground.lane_trace) =
 
 let target = function
   | "wasm-simd128" -> Ok Rake.Playground.Wasm_simd128
+  | "x86-sse2" -> Ok X86_sse2
   | "x86-avx2" -> Ok X86_avx2
+  | "x86-avx512" -> Ok X86_avx512
   | "aarch64-neon" -> Ok Aarch64_neon
   | value -> Error (Printf.sprintf "unknown playground target '%s'" value)
 

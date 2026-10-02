@@ -22,10 +22,10 @@ stack Totals {
 }
 
 crunch scaled(v: f32s, <k: f32>) -> f32s:
-  return v * <k> + 1.0
+  v * <k> + 1.0
 
 rake guarded_root(values: f32s) -> f32s:
-  tine #valid when values >= <0.0>
+  tine #valid means values >= <0.0>
   through #valid else <0.0> into rooted:
     sqrt(values)
   sweep:
@@ -111,7 +111,7 @@ run crossed(left: pack Left, right: pack Right, out: mut pack Totals, <nl: i64>,
 
 ~~ A uniform != in a crunch is ordered too: NaN != NaN is false.
 crunch pick(v: f32s, w: f32s, <a: f32>, <b: f32>) -> f32s:
-  return if <a> != <b> then v else w
+  if <a> != <b> then v else w
 
 run nan_pick(x: []f32, out: mut []f32, <q: f32>):
   out[<0>] <- pick(x[<0>], x[<4>], <q>, <q>)

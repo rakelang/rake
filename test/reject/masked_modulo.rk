@@ -1,5 +1,5 @@
 rake masked_modulo(x: f32s, y: f32s) -> f32s:
-  tine #active when x >= <0.0>
+  tine #active means x >= <0.0>
 
   through #active else <0.0> into computed:
     x % y

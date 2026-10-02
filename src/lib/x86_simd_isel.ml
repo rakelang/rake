@@ -1,7 +1,7 @@
-(** Legalization and instruction selection for [x86_64-avx2-fma]. *)
+(** Legalization and instruction selection for x86-64 SIMD profiles. *)
 
 module N = Native_ir
-module M = X86_avx2_mir
+module M = X86_simd_mir
 
 type error = { function_name : string; instruction : int option; message : string }
 
@@ -9,9 +9,9 @@ exception Selection_error of error
 
 let format_error error =
   match error.instruction with
-  | None -> Printf.sprintf "%s: AVX2 selection failed: %s" error.function_name error.message
+  | None -> Printf.sprintf "%s: x86 SIMD selection failed: %s" error.function_name error.message
   | Some index ->
-      Printf.sprintf "%s: AVX2 selection failed at native instruction %d: %s"
+      Printf.sprintf "%s: x86 SIMD selection failed at native instruction %d: %s"
         error.function_name index error.message
 
 let fail function_name ?instruction message =
@@ -21,7 +21,7 @@ let require_f32_rack function_name ?instruction description = function
   | N.Rack N.F32 -> ()
   | typ ->
       fail function_name ?instruction
-        (Printf.sprintf "%s has type %s; x86_64-avx2-fma requires rack<f32>"
+        (Printf.sprintf "%s has type %s; x86 SIMD requires rack<f32>"
            description (N.string_of_typ typ))
 
 let result function_name index (instruction : N.instruction) =
@@ -71,7 +71,7 @@ let ensure_mask function_name environment index value =
   | N.Mask -> ()
   | typ ->
       fail function_name ~instruction:index
-        (Printf.sprintf "operand %%%d has type %s; expected an AVX2 YMM mask" value
+        (Printf.sprintf "operand %%%d has type %s; expected an x86 vector mask" value
            (N.string_of_typ typ))
 
 let const_definitions (func : N.func) =
@@ -107,7 +107,7 @@ let validate_deferred_constants function_name constants uses =
                id))
     constants
 
-let select_function (func : N.func) =
+let select_function ?(profile = Target.X86_avx2) (func : N.func) =
   try
     (match N.verify_function func with
     | Ok () -> ()
@@ -120,7 +120,7 @@ let select_function (func : N.func) =
         | N.Rack N.F32 | N.Scalar N.F32 | N.Mask -> ()
         | typ ->
             fail func.name
-              (Printf.sprintf "parameter %%%d has unsupported type %s; only rack<f32>, scalar<f32>, and mask parameters use the AVX2 SSE-class boundary"
+              (Printf.sprintf "parameter %%%d has unsupported type %s; only rack<f32>, scalar<f32>, and mask parameters use the x86 SSE-class boundary"
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
@@ -128,7 +128,7 @@ let select_function (func : N.func) =
     | Some typ ->
         fail func.name
           ("unsupported result type " ^ N.string_of_typ typ
-         ^ "; AVX2 selection cannot scalarize a rack result"));
+         ^ "; x86 SIMD selection cannot scalarize a rack result"));
     let environment = type_environment func in
     let constants = const_definitions func in
     validate_deferred_constants func.name constants (scalar_constant_uses func);
@@ -153,21 +153,22 @@ let select_function (func : N.func) =
           Some (M.Uniform_mask { dst; value; provenance })
       | N.Const literal ->
           fail func.name ~instruction:index
-            ("scalar constant " ^ N.string_of_literal literal ^ " cannot occupy a YMM rack register")
+            ("scalar constant " ^ N.string_of_literal literal ^ " cannot occupy a vector rack register")
       | N.Rack_splat literal ->
           let dst = rack_result () in
           Some (M.Uniform_f32 { dst; bits = literal_f32 func.name index literal; provenance })
       | N.Rack_const literals ->
           let dst = rack_result () in
-          if List.length literals <> 8 then
+          let lanes = (Target.info profile).f32_lanes in
+          if List.length literals <> lanes then
             fail func.name ~instruction:index
-              (Printf.sprintf "AVX2 rack constant has %d lanes; exactly 8 f32 lanes are required"
-                 (List.length literals));
+              (Printf.sprintf "%s rack constant has %d lanes; exactly %d f32 lanes are required"
+                 (Target.profile_name profile) (List.length literals) lanes);
           (match same_bits literals with
           | Some bits -> Some (M.Uniform_f32 { dst; bits; provenance })
           | None ->
               fail func.name ~instruction:index
-                "non-uniform rack constants are not in the initial AVX2 selection contract")
+                "non-uniform rack constants are not in the initial x86 SIMD selection contract")
       | N.Broadcast scalar ->
           let dst = rack_result () in
           (match N.IntMap.find_opt scalar constants with
@@ -201,8 +202,11 @@ let select_function (func : N.func) =
             | _ -> assert false)
       | N.Binary ((N.Min | N.Max | N.And | N.Or | N.Xor), _, _) ->
           fail func.name ~instruction:index
-            "operation has no strict f32-rack mapping in the initial AVX2 contract"
+            "operation has no strict f32-rack mapping in the initial x86 SIMD contract"
       | N.Fma (multiplicand, multiplier, addend) ->
+          if profile = Target.X86_sse2 then
+            fail func.name ~instruction:index
+              "x86-sse2 has no fused multiply-add instruction; explicit fma cannot be replaced with separately rounded multiply and add";
           let dst = rack_result () in
           List.iter (ensure_operand_f32 func.name environment index)
             [ multiplicand; multiplier; addend ];
@@ -251,16 +255,16 @@ let select_function (func : N.func) =
           Some (M.Mask_notps { dst; source; provenance })
       | N.Call { callee = "sqrt"; _ } ->
           fail func.name ~instruction:index
-            "sqrt reached AVX2 selection as a call; native lowering must use Unary(Sqrt, value)"
+            "sqrt reached x86 SIMD selection as a call; native lowering must use Unary(Sqrt, value)"
       | N.Call { callee; _ } ->
           fail func.name ~instruction:index
             (Printf.sprintf "call @%s is forbidden in the initial leaf-function backend" callee)
       | N.Load _ | N.Store _ | N.Gather _ | N.Scatter _ ->
           fail func.name ~instruction:index
-            "memory operations are not part of this isolated AVX2 register-selection slice"
+            "memory operations are not part of this isolated x86 SIMD register-selection slice"
       | N.Loop _ ->
           fail func.name ~instruction:index
-            "loops are not part of this isolated AVX2 register-selection slice"
+            "loops are not part of this isolated x86 SIMD register-selection slice"
       | N.Reduce (((N.Reduce_add | N.Reduce_mul | N.Reduce_min | N.Reduce_max) as operation), source) ->
           let dst, typ = result func.name index instruction in
           if typ <> N.Scalar N.F32 then
@@ -269,14 +273,14 @@ let select_function (func : N.func) =
           Some (M.Reduce_f32 { dst; source; operation; provenance })
       | N.Reduce ((N.Reduce_and | N.Reduce_or | N.Reduce_bitmask), _) ->
           fail func.name ~instruction:index
-            "mask reductions are not implemented by the AVX2 f32 slice"
+            "mask reductions are not implemented by the x86 SIMD f32 slice"
       | N.Scan (operation, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
           Some (M.Scan_f32 { dst; source; operation; provenance })
       | N.Shuffle _ | N.Extract _ | N.Insert _ ->
           fail func.name ~instruction:index
-            "cross-lane operation is unavailable in the initial AVX2 selection contract"
+            "cross-lane operation is unavailable in the initial x86 SIMD selection contract"
       | N.Unary ((N.Abs | N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
@@ -307,11 +311,11 @@ let select_function (func : N.func) =
       }
   with Selection_error error -> Error error
 
-let select module_ =
+let select ?(profile = Target.X86_avx2) module_ =
   let rec loop selected = function
     | [] -> Ok (List.rev selected)
     | func :: rest -> (
-        match select_function func with
+        match select_function ~profile func with
         | Ok selected_function -> loop (selected_function :: selected) rest
         | Error _ as error -> error)
   in

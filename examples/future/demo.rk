@@ -39,8 +39,8 @@ rake intersect_flat(
     - <sphere_radius> * <sphere_radius>
   let discriminant = b * b - <4.0> * a * c
 
-  tine #miss when discriminant < <0.0>
-  tine #maybe when not #miss
+  tine #miss means discriminant < <0.0>
+  tine #maybe means not #miss
 
   through #maybe else <0.0> into hit_distance:
     let root = sqrt(discriminant)

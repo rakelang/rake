@@ -4,7 +4,7 @@
     result to JavaScript values; the command line and the page therefore use
     the same parser, checker, interpreter and backend emitters. *)
 
-type target = Wasm_simd128 | X86_avx2 | Aarch64_neon
+type target = Wasm_simd128 | X86_sse2 | X86_avx2 | X86_avx512 | Aarch64_neon
 
 type lane_trace = {
   name : string;
@@ -23,7 +23,9 @@ type output = {
 
 let target_profile = function
   | Wasm_simd128 -> Target.Wasm_simd128
+  | X86_sse2 -> Target.X86_sse2
   | X86_avx2 -> Target.X86_avx2
+  | X86_avx512 -> Target.X86_avx512
   | Aarch64_neon -> Target.Aarch64_neon
 
 let target_config target =

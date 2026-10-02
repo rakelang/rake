@@ -2,4 +2,4 @@
 crunch absolute(values: f32s) -> f32s:
   let result = abs(values)
   (* A nested comment (* between statements *) remains layout-neutral. *)
-  return result (* Comments can also follow an expression. *)
+  result (* Comments can also follow an expression. *)

@@ -19,7 +19,7 @@ if "${rakec}" --target imaginary "${fixture}" > "${tmp}/unknown" 2>&1; then
 fi
 grep -q "unknown target profile 'imaginary'" "${tmp}/unknown"
 
-# Exercise both production profiles through Rake-owned SSA and verified
+# Exercise production profiles through Rake-owned SSA and verified
 # objects rather than treating target-aware type checking as enough.
 "${rakec}" --emit-native-ir --target x86-avx2 --width 8 "${fixture}" \
   > "${tmp}/avx2.native"
@@ -27,6 +27,12 @@ grep -Fq '%2 : rack<f32> = add %0, %1' "${tmp}/avx2.native"
 "${rakec}" --verify-native --target x86-avx2 --width 8 \
   -o "${tmp}/avx2.o" "${fixture}"
 test -s "${tmp}/avx2.o"
+
+for profile in x86-sse2 x86-avx512; do
+  "${rakec}" --verify-native --target "${profile}" \
+    -o "${tmp}/${profile}.o" "${fixture}"
+  test -s "${tmp}/${profile}.o"
+done
 
 "${rakec}" --emit-native-ir --target aarch64-neon --width 4 "${fixture}" \
   > "${tmp}/neon.native"
@@ -59,7 +65,7 @@ assert_width_rejected aarch64-neon 8 "one 128-bit native register = 4 f32 lanes"
 
 # Profiles without a production backend must fail explicitly rather than
 # falling back to a checker-only or external-backend success.
-for profile in scalar x86-sse2 x86-avx512; do
+for profile in scalar; do
   if "${rakec}" --emit-obj --target "${profile}" \
       -o "${tmp}/${profile}.o" "${fixture}" > "${tmp}/${profile}.out" 2>&1; then
     echo "${profile} unexpectedly produced a production object" >&2
@@ -73,7 +79,7 @@ done
 # wasm-simd128-relaxed selects, emits and verifies it.
 cat > "${tmp}/relaxed.rk" <<'EOF'
 crunch muladd(a: f32s, b: f32s, c: f32s) -> f32s:
-  return relaxed_madd(a, b, c)
+  relaxed_madd(a, b, c)
 EOF
 if "${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/relaxed.c" "${tmp}/relaxed.rk" > "${tmp}/relaxed.out" 2>&1; then
   echo "wasm-simd128 accepted a relaxed-SIMD operation" >&2

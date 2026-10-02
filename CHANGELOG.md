@@ -1,9 +1,28 @@
 # Changelog
 
-A Rake version names one compiler, Tree-sitter grammar, documentation set and
+A Rake version identifies one compiler, Tree-sitter grammar, documentation set and
 website. Beta releases may still change the source language and the binary
 boundaries between versions. A design in the documentation gets a version
 only when the compiler implements it and the tests cover it.
+
+## 0.6.0-beta
+
+- SSE2 and AVX-512F compile float crunches and rakes to verified vector
+  kernels alongside AVX2 and NEON. Rack widths are four, sixteen, eight and
+  four binary32 lanes respectively. Native pack traversal and whole programs
+  remain work in progress.
+- Native target detection selects AVX-512F, AVX2 with FMA, or SSE2 on x86.
+  SSE2 rejects explicit single-rounded `fma` because that instruction is
+  absent from its ISA. The AVX-512 profile requires AVX-512F only.
+- Crunches end with their result expression, without `return`. Tines use
+  `means` instead of `when`. These are breaking source-language changes.
+- The browser tutorial offers all five implemented vector profiles for
+  kernel inspection. Execution and whole-program lessons use WebAssembly.
+- Tree-sitter preserves a function body across comment-only lines, including
+  comments beginning at the left margin.
+- The introduction explains the notation in sequence, with compound masks
+  and a diagram of a 600-record pack. The reference page is now titled
+  Primitives, operations, and targets.
 
 ## 0.5.0-beta
 
@@ -34,7 +53,7 @@ Changes since 0.3.0.
   and AArch64, and none needed on WebAssembly, which has no floating-point
   exception state. A sweep needs one final `_` arm, and its arms' order is
   its priority.
-- Fused bindings are pure contiguous data flow. Their names are substituted
+- Fused bindings are pure contiguous data flow. Their identifiers are substituted
   before fused multiply-adds are formed on AVX2 and NEON, and `fma` keeps its
   single rounding. A fused stage may now introduce a constant or choose by a
   mask, and fused bindings inside a through block form regions of their own.
@@ -56,7 +75,7 @@ Changes since 0.3.0.
 - A uniform must be marked where it meets a rack: `values * <factor>`, not
   `values * factor`. The type checker reports the unmarked name.
 - `wrap` and `bitcast` are conversions only before a parenthesis, so they
-  remain usable as names. A crunch, rake or run can't be named after a C
+  remain usable as identifiers. A crunch, rake or run can't be named after a C
   keyword, since each becomes a C function of its own name.
 - A rake's through block and its sweep compile to one select, since a select
   whose arm selects on the same mask takes that arm directly.

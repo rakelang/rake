@@ -81,10 +81,10 @@ the verified disposition of the reviewed file.
 | `src/lib/typecheck.ml` | Pending | Semantic/type-analysis ownership unresolved pending review. | — |
 | `src/lib/types.ml` | Pending | Source-language type schema ownership unresolved pending review. | — |
 | `src/lib/version.ml` | Pending | Release-identity ownership unresolved pending review. | — |
-| `src/lib/x86_avx2_asm.ml` | Pending | x86 AVX2 assembly-emission ownership unresolved pending review. | — |
-| `src/lib/x86_avx2_isel.ml` | Pending | x86 AVX2 instruction-selection ownership unresolved pending review. | — |
-| `src/lib/x86_avx2_mir.ml` | Pending | x86 AVX2 machine-IR schema ownership unresolved pending review. | — |
-| `src/lib/x86_avx2_regalloc.ml` | Pending | x86 AVX2 register-allocation ownership unresolved pending review. | — |
+| `src/lib/x86_simd_asm.ml` | Pending | x86 AVX2 assembly-emission ownership unresolved pending review. | — |
+| `src/lib/x86_simd_isel.ml` | Pending | x86 AVX2 instruction-selection ownership unresolved pending review. | — |
+| `src/lib/x86_simd_mir.ml` | Pending | x86 AVX2 machine-IR schema ownership unresolved pending review. | — |
+| `src/lib/x86_simd_regalloc.ml` | Pending | x86 AVX2 register-allocation ownership unresolved pending review. | — |
 
 ## Deferred compiler-driven cleanup
 

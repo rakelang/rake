@@ -1,2 +1,2 @@
 crunch native_identity(value: f32s) -> f32s:
-  return value
+  value

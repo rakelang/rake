@@ -1,7 +1,7 @@
-# Racks and targets
+# Primitives, operations, and targets
 
-A rack is one vector register. Its type names its element, as `f32s` names a
-rack of `f32` lanes, and the target profile gives its width. This page
+A rack is one vector register. Its type specifies its element: `f32s` is a
+rack of `f32` lanes. The target profile gives its width. This page
 defines the profiles, the operations each one compiles, the floating-point
 rules and the calling conventions of crunches and rakes.
 
@@ -9,18 +9,20 @@ rules and the calling conventions of crunches and rakes.
 
 | Profile | Register | `f32` lanes | Status |
 | --- | --- | ---: | --- |
+| `x86-sse2` | one 128-bit XMM register, SSE2 | 4 | `f32s` crunches and rakes, as GNU assembly |
 | `x86-avx2` | one 256-bit YMM register, AVX2 and FMA3 | 8 | `f32s` crunches and rakes, as GNU assembly |
+| `x86-avx512` | one 512-bit ZMM register, AVX-512F | 16 | `f32s` crunches and rakes, as GNU assembly |
 | `aarch64-neon` | one 128-bit vector register, AAPCS64 | 4 | `f32s` crunches and rakes, as GNU assembly |
 | `wasm-simd128` | one `v128` | 4 | float and integer crunches and rakes, runs and whole programs, as C |
 | `wasm-simd128-relaxed` | one `v128` | 4 | `wasm-simd128` and the relaxed SIMD operations |
-| `x86-sse2` | one 128-bit XMM register | 4 | planned |
-| `x86-avx512` | one 512-bit ZMM register | 16 | planned |
-| `scalar` | none | 1 | planned, without the one-register guarantee |
+| `scalar` | none | 1 | WIP*, without the one-register guarantee |
 
-`--target native`, the default, chooses `x86-avx2` on a host with AVX2 and
-FMA and `aarch64-neon` on a host with Advanced SIMD, and fails elsewhere. A
-build for another machine names its profile. The compiler rejects code for a
-planned profile.
+*WIP: work in progress.*
+
+`--target native`, the default, chooses the strongest available profile:
+AVX-512F, then AVX2 with FMA, then SSE2 on x86, or Advanced SIMD on AArch64.
+A build for another machine specifies its profile. Other CPU architectures
+and the scalar fallback remain WIP*. The compiler rejects unsupported targets.
 
 `--width n` asserts the `f32` lane count. It must equal the profile's, and a
 mismatch is an error before any code is generated. The compiler never meets
@@ -33,19 +35,24 @@ unavailable on every profile.
 
 These operations on `f32s` racks compile on each profile:
 
-| Operation | `x86-avx2` | `aarch64-neon` | `wasm-simd128` |
-| --- | :-: | :-: | :-: |
-| `+` `-` `*` `/`, negation, `sqrt` | yes | yes | yes |
-| comparisons, `and` `or` `not` on masks, `select`, `if` on a mask | yes | yes | yes |
-| `fma(a, b, c)` | yes | yes | no |
-| `min` `max` `abs` `floor` `ceil` `trunc` `nearest` | no | no | yes |
-| `exp` `log` `log2` `tanh` | no | no | yes |
-| `if` on a uniform condition | no | no | yes |
-| `sum` `product` `minimum` `maximum`, and the scans | yes | no | yes |
-| `all` `any` `bitmask`, `extract` `insert` `shuffle` | no | no | yes |
+| Operation | `x86-sse2` | `x86-avx2` | `x86-avx512` | `aarch64-neon` | `wasm-simd128` |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| `+` `-` `*` `/`, negation, `sqrt` | yes | yes | yes | yes | yes |
+| comparisons, `and` `or` `not` on masks, `select`, `if` on a mask | yes | yes | yes | yes | yes |
+| `fma(a, b, c)` | ISA limit† | yes | yes | yes | ISA limit† |
+| `min` `max` `abs` `floor` `ceil` `trunc` `nearest` | WIP* | WIP* | WIP* | WIP* | yes |
+| `exp` `log` `log2` `tanh` | WIP* | WIP* | WIP* | WIP* | yes |
+| `if` on a uniform condition | WIP* | WIP* | WIP* | WIP* | yes |
+| `sum` `product` `minimum` `maximum`, and the scans | yes | yes | yes | WIP* | yes |
+| `all` `any` `bitmask`, `extract` `insert` `shuffle` | WIP* | WIP* | WIP* | WIP* | yes |
+
+*WIP: work in progress. Compilation fails for these cells.* †SSE2 and strict
+WebAssembly SIMD have no fused multiply-add instruction. Their rejection of
+explicit `fma` preserves its single-rounding semantics, rather than indicating
+an unfinished lowering. Relaxed WebAssembly SIMD is a separate opt-in profile.
 
 A crunch or rake may return a rack or a mask on every profile, a scalar from
-a reduction on `x86-avx2` and `wasm-simd128`, and a `bool` from `all` or
+a reduction on the x86 profiles and `wasm-simd128`, and a `bool` from `all` or
 `any` on `wasm-simd128`. `%` has no float form, and `true` and `false` have
 no rack form: a mask comes from a comparison. `sin`, `cos`, `tan`, `pow` and
 `atan2` type-check but have no lowering, so the compiler rejects them on every
@@ -69,11 +76,11 @@ and `u64s` 2. Integer arithmetic on racks wraps.
 | Operation | `u8s` | `i16s` | `i32s` | `u32s` | `i64s` | `u64s` |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: |
 | `+` `-` | yes | yes | yes | yes | yes | yes |
-| `*` | no | yes | yes | yes | yes | yes |
-| negation | no | yes | yes | no | yes | no |
-| `abs` | yes | yes | yes | no | yes | no |
-| `min` `max` | yes | yes | yes | no | no | no |
-| comparisons, and so `select` and `bitmask` | yes | yes | yes | no | yes | no |
+| `*` | WIP* | yes | yes | yes | yes | yes |
+| negation | WIP* | yes | yes | WIP* | yes | WIP* |
+| `abs` | yes | yes | yes | WIP* | yes | WIP* |
+| `min` `max` | yes | yes | yes | WIP* | WIP* | WIP* |
+| comparisons, and so `select` and `bitmask` | yes | yes | yes | WIP* | yes | WIP* |
 | bitwise operations and bit shifts | yes | yes | yes | yes | yes | yes |
 | `shuffle` `extract` `insert` | yes | yes | yes | yes | yes | yes |
 
@@ -102,12 +109,12 @@ Each is one instruction except `to_i32`, which is `f32x4.nearest` then
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
 crunch accumulate(sums: i32s, pair: i16s, weights: i16s) -> i32s:
-  return sums + dot(pair, weights)
+  sums + dot(pair, weights)
 
 crunch requantise(low: i32s, high: i32s, low_scale: f32s, high_scale: f32s) -> i16s:
   | a <| to_i32(to_f32(low) * low_scale)
   | b <| to_i32(to_f32(high) * high_scale)
-  return max(narrow(a, b), <0>)
+  max(narrow(a, b), <0>)
 ```
 
 ## Bitwise operations and bit shifts
@@ -120,7 +127,7 @@ end, filling with zeros, and `shift_bits_right_signed(x, n)` fills with the
 sign bit. The count is an integer literal below the lane's width in bits, or
 a uniform `u32` taken modulo that width.
 
-These shift bits within a lane. The reserved names `shift_left`,
+These shift bits within a lane. The reserved identifiers `shift_left`,
 `shift_right`, `rotate_left` and `rotate_right` are for moving whole lanes,
 and are unavailable.
 
@@ -129,7 +136,7 @@ and are unavailable.
 crunch step_east(here: u64s, open: u64s, board: u64s, <carry: u32>) -> u64s:
   let moving = bit_and(here, open)
   let moved = bit_or(shift_bits_left(moving, 1), shift_bits_right(moving, <carry>))
-  return bit_or(here, bit_and(moved, board))
+  bit_or(here, bit_and(moved, board))
 ```
 
 ## Shuffles and bitmasks
@@ -145,10 +152,10 @@ zero. Like a reduction, its result is a scalar.
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
 crunch occupied_bits(tiles: u8s) -> u32:
-  return bitmask(tiles != <0>)
+  bitmask(tiles != <0>)
 
 crunch reversed(values: f32s) -> f32s:
-  return shuffle(values, [3, 2, 1, 0])
+  shuffle(values, [3, 2, 1, 0])
 ```
 
 ## Floating-point values
@@ -158,7 +165,7 @@ Every comparison with a NaN operand is false, `!=` included, so `a != b`
 means that `a` and `b` are ordered and different.
 
 `wasm-simd128` contracts nothing, so the target and `rakec --interpret`
-agree on every result bit that isn't a NaN. `x86-avx2` and `aarch64-neon`
+agree on every result bit that isn't a NaN. `x86-avx2`, `x86-avx512` and `aarch64-neon`
 contract a multiply and an add into one fused multiply-add when both are in
 one fused region, as [fused bindings](04_fused_bindings.md) describe, and
 the result then has the fused rounding. A NaN result's sign and payload
@@ -183,7 +190,7 @@ with `target("relaxed-simd")`.
 <!-- rake-check: verify wasm-simd128-relaxed -->
 ```rake
 crunch blend(a: f32s, b: f32s, weight: f32s) -> f32s:
-  return relaxed_madd(a - b, weight, b)
+  relaxed_madd(a - b, weight, b)
 ```
 
 ## Calling conventions
@@ -192,17 +199,30 @@ A crunch or rake is a function that C can call. Its parameters arrive in
 registers and its result returns in one. No profile passes an argument on
 the stack, so a function that would need to is rejected.
 
-On `x86-avx2`, the function is a hidden global symbol following the System V
+On x86, the function is a hidden global symbol following the System V
 convention. Parameters take the eight SSE-class argument registers in source
-order: an `f32s` rack or a mask in `ymm0` to `ymm7`, a uniform `f32` in the
-low lane of `xmm0` to `xmm7`. A rack or mask result returns in `ymm0`, and an
-`f32` result in `xmm0`. In this crunch, `a` arrives in `ymm0`, `scale` in
-`xmm1` and `b` in `ymm2`:
+order. A uniform `f32` occupies the low lane of an XMM register. A rack or
+mask uses XMM on SSE2, YMM on AVX2, or ZMM on AVX-512. The result uses register
+zero of the same class, or `xmm0` for a scalar `f32`.
 
-<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+| Profile | Rack arguments | Rack result | C caller flags |
+| --- | --- | --- | --- |
+| `x86-sse2` | `xmm0`–`xmm7` | `xmm0` | `-msse2` |
+| `x86-avx2` | `ymm0`–`ymm7` | `ymm0` | `-mavx2 -mfma` |
+| `x86-avx512` | `zmm0`–`zmm7` | `zmm0` | `-mavx512f` |
+
+SSE2 reserves `xmm15` for two-address instruction lowering and allocates
+source values to the other 15 registers. AVX2 has 16 vector registers and
+AVX-512 has 32. The AVX-512 emitter also uses `k1` as an instruction-local
+mask. Constant pools are aligned to the profile's 16-, 32- or 64-byte rack.
+
+In this crunch on AVX2, `a` arrives in `ymm0`, `scale` in `xmm1` and `b` in
+`ymm2`:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 crunch scaled_sum(a: f32s, <scale: f32>, b: f32s) -> f32s:
-  return a * <scale> + b
+  a * <scale> + b
 ```
 
 On `aarch64-neon`, parameters take `v0` to `v7` in source order, a uniform
@@ -218,7 +238,7 @@ a `float`, a 64-bit uniform a `uint64_t`, and any other uniform, `bool` or
 
 Each uniform keeps its brackets at its declaration, `<scale: f32>`, and at its
 use, `<scale>`. The use is where the broadcast happens: `vbroadcastss` on
-AVX2, `dup` on NEON and a splat on wasm.
+AVX2 and AVX-512, `shufps` on SSE2, `dup` on NEON and a splat on wasm.
 
 A run's boundary is in [packs and runs](02_packs_and_run.md#wasm32-boundary),
 and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
@@ -229,9 +249,9 @@ backends compile neither runs nor slow code.
 `--verify-native` assembles the emitted code, or compiles the emitted C,
 then disassembles the object and checks every function:
 
-- `x86-avx2`: only instructions from the profile's list, no calls, no stack
+- x86 profiles: only instructions from the profile's list, no calls, no stack
   register, no memory operand except a constant load relative to `rip`, every
-  rack in a whole YMM register, cross-lane instructions only in reductions and
+  rack in a whole XMM, YMM or ZMM register, cross-lane instructions only in reductions and
   scans, and exactly the fused multiply-adds the compiler selected.
 - `aarch64-neon`: only listed instructions, no calls, no stack, no `v8` to
   `v15`, no general or scalar float registers, loads only of literal

@@ -32,7 +32,9 @@ let ( let* ) = Result.bind
 
 let require_backend (config : Target.config) =
   match (config.target, config.profile, config.width) with
+  | Target.Cpu, Target.X86_sse2, 4 -> Ok ()
   | Target.Cpu, Target.X86_avx2, 8 -> Ok ()
+  | Target.Cpu, Target.X86_avx512, 16 -> Ok ()
   | Target.Cpu, Target.Aarch64_neon, 4 -> Ok ()
   | Target.Cpu, (Target.Wasm_simd128 | Target.Wasm_simd128_relaxed), 4 -> Ok ()
   | _ ->
@@ -41,7 +43,7 @@ let require_backend (config : Target.config) =
           stage = Target;
           message =
             Printf.sprintf
-              "profile '%s' has no production backend yet; select --target x86-avx2, aarch64-neon or wasm-simd128"
+              "profile '%s' has no production backend yet; select --target x86-sse2, x86-avx2, x86-avx512, aarch64-neon or wasm-simd128"
               (Target.profile_name config.profile);
         }
 
@@ -64,23 +66,23 @@ let lower ~config program =
   | Error error -> Error { stage = Native_ir; message = Native_lower.format_error error }
 
 type allocated =
-  | Avx2 of X86_avx2_regalloc.func list
+  | X86 of Target.profile * X86_simd_regalloc.func list
   | Neon of Aarch64_neon_regalloc.func list
   | Wasm of Wasm_simd128_isel.func list  (** WebAssembly locals need no register allocation *)
 
-let allocate_avx2 native_ir =
-  match X86_avx2_isel.select native_ir with
+let allocate_x86 ~profile native_ir =
+  match X86_simd_isel.select ~profile native_ir with
   | Error error ->
       Error
-        { stage = Instruction_selection; message = X86_avx2_isel.format_error error }
+        { stage = Instruction_selection; message = X86_simd_isel.format_error error }
   | Ok mir -> (
-      match X86_avx2_regalloc.allocate mir with
-      | Ok allocated -> Ok (Avx2 allocated)
+      match X86_simd_regalloc.allocate ~profile mir with
+      | Ok allocated -> Ok (X86 (profile, allocated))
       | Error error ->
           Error
             {
               stage = Register_allocation;
-              message = X86_avx2_regalloc.format_error error;
+              message = X86_simd_regalloc.format_error error;
             })
 
 let allocate_neon native_ir =
@@ -103,7 +105,7 @@ let allocate_neon native_ir =
 
 let allocate ~config native_ir =
   match config.Target.profile with
-  | Target.X86_avx2 -> allocate_avx2 native_ir
+  | (Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512) as profile -> allocate_x86 ~profile native_ir
   | Target.Aarch64_neon -> allocate_neon native_ir
   | Target.Wasm_simd128 | Target.Wasm_simd128_relaxed -> (
       match Wasm_simd128_isel.select native_ir with
@@ -128,11 +130,11 @@ let emit_allocated ~source = function
       match Wasm_simd128_c.emit ~source selected with
       | source -> Ok source
       | exception Wasm_simd128_c.Emission_error message -> Error { stage = Assembly; message })
-  | Avx2 allocated -> (
-      match X86_avx2_asm.emit allocated with
+  | X86 (profile, allocated) -> (
+      match X86_simd_asm.emit ~profile allocated with
       | Ok assembly -> Ok assembly
       | Error error ->
-          Error { stage = Assembly; message = X86_avx2_asm.format_error error })
+          Error { stage = Assembly; message = X86_simd_asm.format_error error })
   | Neon allocated -> (
       match Aarch64_neon_asm.emit allocated with
       | Ok assembly -> Ok assembly
@@ -160,13 +162,13 @@ let emit_object ~source ~config program =
   assemble ~source ~config assembly
 
 let fma_count = function
-  | Avx2 allocated ->
+  | X86 (_, allocated) ->
       List.fold_left
-        (fun count (func : X86_avx2_regalloc.func) ->
+        (fun count (func : X86_simd_regalloc.func) ->
           List.fold_left
-            (fun count (instruction : X86_avx2_regalloc.instruction) ->
+            (fun count (instruction : X86_simd_regalloc.instruction) ->
               match instruction.operation with
-              | X86_avx2_regalloc.Fma213ps _ | X86_avx2_regalloc.Fma231ps _ ->
+              | X86_simd_regalloc.Fma213ps _ | X86_simd_regalloc.Fma231ps _ ->
                   count + 1
               | _ -> count)
             count func.instructions)
@@ -185,21 +187,21 @@ let fma_count = function
 
 let function_names = function
   | Wasm selected -> List.map (fun (func : Wasm_simd128_isel.func) -> func.name) selected
-  | Avx2 allocated ->
-      List.map (fun (func : X86_avx2_regalloc.func) -> func.name) allocated
+  | X86 (_, allocated) ->
+      List.map (fun (func : X86_simd_regalloc.func) -> func.name) allocated
   | Neon allocated ->
       List.map (fun (func : Aarch64_neon_regalloc.func) -> func.name) allocated
 
 let cross_lane_function_names = function
-  | Avx2 allocated ->
+  | X86 (_, allocated) ->
       List.filter_map
-        (fun (func : X86_avx2_regalloc.func) ->
+        (fun (func : X86_simd_regalloc.func) ->
           if
             List.exists
-              (fun (instruction : X86_avx2_regalloc.instruction) ->
+              (fun (instruction : X86_simd_regalloc.instruction) ->
                 match instruction.operation with
-                | X86_avx2_regalloc.Reduce_f32 _
-                | X86_avx2_regalloc.Scan_f32 _ -> true
+                | X86_simd_regalloc.Reduce_f32 _
+                | X86_simd_regalloc.Scan_f32 _ -> true
                 | _ -> false)
               func.instructions
           then Some func.name
@@ -217,7 +219,7 @@ let emit_verified_object ~source ~config program =
       match Wasm_simd128_toolchain.verify ~functions object_bytes with
       | Ok () -> Ok object_bytes
       | Error error -> Error { stage = Verify; message = Wasm_simd128_toolchain.format_error error })
-  | Avx2 _ | Neon _ ->
+  | X86 _ | Neon _ ->
     let cross_lane_functions = cross_lane_function_names allocated in
     match
       Native_verify.verify ~profile:config.profile ~source ~functions

@@ -1,4 +1,4 @@
-module A = Rake.X86_avx2_regalloc
+module A = Rake.X86_simd_regalloc
 
 let loc line =
   { Rake.Native_ir.file = "asm.rk"; line; col = 1; offset = line * 10 }
@@ -26,7 +26,7 @@ let function_ =
           (A.Cmpps
              {
                dst = 8;
-               predicate = Rake.X86_avx2_mir.Olt;
+               predicate = Rake.X86_simd_mir.Olt;
                left = 6;
                right = 7;
              });
@@ -123,9 +123,9 @@ let objdump object_bytes =
 
 let () =
   let assembly =
-    match Rake.X86_avx2_asm.emit [ function_; reduction_function; scan_function ] with
+    match Rake.X86_simd_asm.emit [ function_; reduction_function; scan_function ] with
     | Ok assembly -> assembly
-    | Error error -> failwith (Rake.X86_avx2_asm.format_error error)
+    | Error error -> failwith (Rake.X86_simd_asm.format_error error)
   in
   List.iter
     (fun line -> if not (contains assembly line) then failwith ("missing assembly: " ^ line))
@@ -172,8 +172,8 @@ let () =
       if contains disassembly forbidden then failwith ("forbidden disassembly: " ^ forbidden))
     [ "call"; "rsp"; "rbp" ];
   let invalid = { function_ with instructions = [ instruction 30 (A.Moveaps { dst = 16; source = 0 }) ] } in
-  (match Rake.X86_avx2_asm.emit [ invalid ] with
-  | Error error when contains (Rake.X86_avx2_asm.format_error error) "invalid physical YMM register 16" -> ()
-  | Error error -> failwith ("unexpected invalid-register error: " ^ Rake.X86_avx2_asm.format_error error)
+  (match Rake.X86_simd_asm.emit [ invalid ] with
+  | Error error when contains (Rake.X86_simd_asm.format_error error) "invalid physical YMM register 16" -> ()
+  | Error error -> failwith ("unexpected invalid-register error: " ^ Rake.X86_simd_asm.format_error error)
   | Ok _ -> failwith "invalid physical register unexpectedly emitted");
   print_endline "x86 AVX2 Intel assembly emitter tests passed"

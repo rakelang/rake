@@ -11,7 +11,7 @@ test/parser/malformed/parenthesized_run_list.rk.invalid	malformed	parameters req
 test/parser/malformed/scalar_literal_parameter.rk.invalid	malformed	scalar parameter marker contains an identifier
 test/parser/malformed/scalar_marker_whitespace.rk.invalid	malformed	scalar parameter marker has no internal whitespace
 test/parser/malformed/sweep_missing_arrow.rk.invalid	malformed	sweep arm requires =>
-test/parser/malformed/tine_missing_parentheses.rk.invalid	malformed	tine declaration requires when
+test/parser/malformed/tine_missing_parentheses.rk.invalid	malformed	tine declaration requires means
 test/parser/malformed/tine_predicate_call.rk.invalid	malformed	tine predicate arithmetic does not contain calls
 test/parser/malformed/tine_reference_whitespace.rk.invalid	malformed	tine reference has no internal whitespace
 test/parser/malformed/through_missing_result_arrow.rk.invalid	malformed	through header requires into binding

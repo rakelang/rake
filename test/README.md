@@ -36,6 +36,13 @@ nix develop --command bash -c 'dune build && bash test/full_tests.sh'
 evidence in `capability_evidence.tsv`, the parser differential and the
 website.
 
+`test/x86_profiles_test.sh` checks SSE2, AVX2 and AVX-512 against independent
+scalar results, including ordered reductions, masked partial operations and
+NaNs. SSE2 and AVX2 execute on the test host. AVX-512 executes on hardware with
+AVX-512F, or through Intel SDE supplied as `RAKE_SDE=/absolute/path/to/sde64`.
+The suite fails if neither is available, rather than treating object
+verification as runtime agreement.
+
 `tools/check_documentation_examples.sh` compiles every ` ```rake ` block in
 the README, the documentation and the website's pages. The pages own their
 examples, so a change to the language that breaks one fails here until the

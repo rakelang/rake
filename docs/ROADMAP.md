@@ -1,7 +1,8 @@
 # Roadmap
 
-Rake 0.5.0-beta establishes the language's vector contract and proves it on
-three target profiles. This roadmap states what we intend to build next.
+Rake's vector contract now has SSE2, AVX2, AVX-512F, NEON and WebAssembly
+implementations. Native runs and packs, a scalar fallback and operation parity
+remain work in progress. This roadmap states what we intend to build next.
 [The changelog](../CHANGELOG.md) records work once it has landed, while
 [the goals](GOALS.md) describe the principles that each change must preserve.
 
@@ -10,7 +11,7 @@ three target profiles. This roadmap states what we intend to build next.
 ### Compile runs, packs and whole programs for physical targets
 
 We will extend `run`, packs and whole programs from `wasm-simd128` to
-`x86-avx2` and `aarch64-neon`. That work includes native traversal, full-rack
+SSE2, AVX2, AVX-512 and NEON. That work includes native traversal, full-rack
 loads and stores, masked tails with benign operands, stable C boundaries and
 runtime tests over empty, short, exact and tail counts. The object verifier
 will confirm vector memory operations and reject scalar cleanup loops.
@@ -22,20 +23,21 @@ WebAssembly runtime. Its promise is the same on every target: code outside a
 
 ### Add and validate target profiles
 
-We will implement `x86-sse2`, `x86-avx512`, a scalar fallback and, after the
-CPU profiles are complete, GPU targets. Each physical profile will own its
-instruction selection, register allocation, calling convention, object
-verification and differential runtime tests.
+SSE2 and AVX-512F now compile `f32s` crunches and rakes, alongside AVX2 and
+NEON. We will add the explicit scalar fallback and complete CPU operation and
+program coverage before beginning GPU targets. Each physical profile must
+have instruction selection, register allocation, a calling convention,
+object verification and differential runtime checks.
 
 We will validate relaxed WebAssembly SIMD on the competition runtime before
 considering it a default. Until then it remains explicitly opt-in.
 
-### Complete AVX2 and NEON operation coverage
+### Complete physical CPU operation coverage
 
 We will bring the physical profiles up to the language's published operation
 set. The next work covers substantial maths, integer racks, shuffles, lane
 extraction and insertion, reductions and scans, uniform conditionals and
-gather. AVX2 and NEON will gain an operation only when their compiled result
+gather. A CPU profile will gain an operation only when its compiled result
 matches the interpreter and their object verifier proves the selected vector
 sequence.
 
@@ -61,8 +63,8 @@ tests will compare the emitted result with the verified optimised graph.
 
 ### Implement the unavailable language capabilities
 
-We will work down the capability catalogue from its 0.4.0-beta baseline of 86
-checked and 36 unavailable capabilities. The outstanding language areas
+We will work down the capability catalogue, which currently reports 88 checked
+and 35 unavailable capabilities. The outstanding language areas
 include tuple and function types, lambdas, pipelines, type aliases, spread
 parameters, record updates, inline tines, outer products and several masked
 operations.
@@ -155,10 +157,10 @@ separate dialect of the language.
 
 ### Publish and verify every Tree-sitter package
 
-We will publish the generated Tree-sitter bindings to the relevant package
-registries and test installation from those registries. SwiftPM will run in an
-official Swift environment with Foundation available, alongside the npm,
-Python, Rust and Go package checks. Generated bindings, comments, queries and
+The grammar is published on npm, PyPI and crates.io. SwiftPM builds in CI
+with Foundation available, alongside the npm, Python, Rust and Go package
+checks. We will keep testing installation from each registry and publish
+syntax changes together with the compiler. Generated bindings, comments, queries and
 version metadata will continue to come from the same current grammar revision.
 
 ## Release gates

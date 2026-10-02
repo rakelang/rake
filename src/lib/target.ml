@@ -49,7 +49,7 @@ let info = function
         register_bits = Some 128;
         f32_lanes = 4;
         mir_register_class = Some "xmm";
-        description = "planned x86-64 SSE2, one 128-bit XMM rack";
+        description = "x86-64 SSE2 baseline, one 128-bit XMM rack (no FMA)";
       }
   | X86_avx2 ->
       {
@@ -67,7 +67,7 @@ let info = function
         register_bits = Some 512;
         f32_lanes = 16;
         mir_register_class = Some "zmm";
-        description = "planned x86-64 AVX-512F, one 512-bit ZMM rack";
+        description = "x86-64 AVX-512F, one 512-bit ZMM rack";
       }
   | Aarch64_neon ->
       {
@@ -100,6 +100,11 @@ let info = function
 let profiles = [ Scalar; X86_sse2; X86_avx2; X86_avx512; Aarch64_neon; Wasm_simd128; Wasm_simd128_relaxed ]
 
 let is_wasm = function Wasm_simd128 | Wasm_simd128_relaxed -> true | _ -> false
+let is_x86 = function X86_sse2 | X86_avx2 | X86_avx512 -> true | _ -> false
+let x86_register_count = function
+  | X86_sse2 | X86_avx2 -> 16
+  | X86_avx512 -> 32
+  | _ -> invalid_arg "not an x86 SIMD profile"
 let profile_name profile = (info profile).id
 let name Cpu = "cpu"
 
@@ -151,11 +156,13 @@ let resolve_native () =
   let has feature = List.mem feature tokens in
   (* Native selects the strongest backend that this compiler can actually
      emit, not the strongest instruction set merely present in the host. *)
-  if has "avx2" && has "fma" then Ok X86_avx2
+  if has "avx512f" then Ok X86_avx512
+  else if has "avx2" && has "fma" then Ok X86_avx2
+  else if has "sse2" then Ok X86_sse2
   else if has "asimd" then Ok Aarch64_neon
   else
     Error
-      "this host provides neither AVX2+FMA nor AArch64 Advanced SIMD, the production backends in this compiler build; select an explicit profile for deterministic cross-compilation"
+      "this host provides neither x86-64 SSE2 nor AArch64 Advanced SIMD; select an explicit profile for deterministic cross-compilation"
 
 let resolve = function Native -> resolve_native () | Explicit profile -> Ok profile
 

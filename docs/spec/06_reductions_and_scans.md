@@ -1,7 +1,7 @@
 # Reductions and scans
 
 A reduction combines every lane of a rack into one scalar. A scan returns a
-rack whose lane `i` holds the reduction of lanes 0 to `i`. Both have names
+rack whose lane `i` holds the reduction of lanes 0 to `i`. Both have identifiers
 rather than operators, so they are easy to find in code and to read aloud.
 
 | Form | Operand | Result | Each step |
@@ -19,7 +19,7 @@ rather than operators, so they are easy to find in code and to read aloud.
 
 Nothing converts an operand to fit: the arithmetic forms reject masks and
 integer racks, and `all` and `any` reject racks. `extract(x, lane)` and
-`bitmask(m)`, defined in [racks and targets](01_racks_targets_and_abi.md),
+`bitmask(m)`, defined in [primitives, operations, and targets](01_primitives_operations_and_targets.md),
 also turn a rack into a scalar.
 
 A crunch can return a reduction's scalar. In a run, `let <x: T> = ...` binds
@@ -28,7 +28,7 @@ one as a uniform, and arithmetic on reductions there is scalar work:
 <!-- rake-check: run 103 -->
 ```rake
 crunch top(values: f32s) -> f32:
-  return maximum(values)
+  maximum(values)
 
 run prefix_sums(x: []f32, out: mut []f32):
   out[<0>] <- scan_sum(x[<0>])
@@ -84,11 +84,16 @@ reduction leaves the rack, and a scan orders its lanes.
 
 | Profile | Reductions and scans | `all`, `any` |
 | --- | :-: | :-: |
-| `x86-avx2` | yes | no |
-| `aarch64-neon` | no | no |
+| `x86-sse2` | yes | WIP* |
+| `x86-avx2` | yes | WIP* |
+| `x86-avx512` | yes | WIP* |
+| `aarch64-neon` | WIP* | WIP* |
 | `wasm-simd128` | yes | yes |
 
-On AVX2, an eight-lane fold takes seven ordered steps of shuffles,
+*WIP: work in progress. The compiler rejects these operations on these profiles.*
+
+On SSE2, AVX2 and AVX-512, a fold takes three, seven or fifteen ordered
+steps respectively. The steps use shuffles,
 permutations, blends and packed arithmetic, and a reduction's scalar returns
 in `xmm0`. On `wasm-simd128`, each of a reduction's three steps moves lane `i`
 to lane 0 with one `i8x16.shuffle` and combines it with the running value. A

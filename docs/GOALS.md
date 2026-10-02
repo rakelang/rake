@@ -51,14 +51,14 @@ Today: rakes compile on `x86-avx2`, `aarch64-neon` and `wasm-simd128`.
 ## Fused regions are pure data flow
 
 Consecutive `| name <| expression` bindings describe one pure graph of vector
-operations, with no calls, spills or reloads. Its names are aliases. They
+operations, with no calls, spills or reloads. Its identifiers are aliases. They
 impose no evaluation order, storage, instruction or rounding boundary, so the
 backend may rewrite the whole region to the cheapest graph for the profile,
 and different profiles may round its intermediates differently. `fma(a, b, c)`
 means one rounding, and is for programs whose correctness needs it. Rake has
 no mode that keeps a slower sequence of ordinary operations.
 
-Today: the compiler substitutes names and forms fused multiply-adds on
+Today: the compiler substitutes identifiers and forms fused multiply-adds on
 `x86-avx2` and `aarch64-neon`. Other rewrites are planned, as [fused
 bindings](spec/04_fused_bindings.md) describe.
 
@@ -77,7 +77,7 @@ Rake's vector operations are to cover:
 a set of profiles that support it and a verified lowering. A profile without
 a native form of an operation rejects it before generating code.
 
-Today: [racks and targets](spec/01_racks_targets_and_abi.md) lists what each
+Today: [primitives, operations, and targets](spec/01_primitives_operations_and_targets.md) lists what each
 profile compiles. Lane indices, interleaving, lane shifts and rotations,
 scatter, compression, expansion and single-record layouts are planned.
 

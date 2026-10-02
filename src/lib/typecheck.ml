@@ -1348,6 +1348,7 @@ let add_params_to_env env params loc =
 (** Check crunch function definition *)
 let check_crunch env _name params _result body loc =
   let env' = copy_env env in
+  require_feature env' loc Capabilities.Crunch_implicit_result;
 
   List.iter (ensure_supported_crunch_param env' loc) params;
   (match _result.result_type with
@@ -1367,16 +1368,7 @@ let check_crunch env _name params _result body loc =
   let actual_t = match Hashtbl.find_opt env'.vars _result.result_name with
     | Some t -> t
     | None ->
-        let has_trailing_expr = match List.rev body with
-          | { v = SExpr _; _ } :: _ -> true
-          | _ -> false
-        in
-        if has_trailing_expr then
-          (require_feature env' loc Capabilities.Crunch_implicit_result;
-           unavailable_invariant Capabilities.Crunch_implicit_result)
-        else
-          type_errorf loc "Crunch result '%s' is not bound; bind it with let or a fused binding"
-            _result.result_name
+        type_errorf loc "a crunch must end with the expression that supplies its result"
   in
   if actual_t <> Rack SFloat && actual_t <> Scalar SFloat then
     require_feature env' loc Capabilities.Result_non_float_rack;

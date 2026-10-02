@@ -33,7 +33,7 @@ run dense(pairs_in: []i32, weights: []i16, rows: []f32, biases: []f32, sums: mut
 crunch requantise(low: i32s, high: i32s, scale: f32s, low_offset: f32s, high_offset: f32s, ceiling: i16s) -> i16s:
   | a <| to_i32(to_f32(low) * scale + low_offset)
   | b <| to_i32(to_f32(high) * scale + high_offset)
-  return min(max(narrow(a, b), <0>), ceiling)
+  min(max(narrow(a, b), <0>), ceiling)
 
 ~~ A 3x3 convolution of a bordered map of 32 channels into 32 outputs, four
 ~~ pixels at a time with each weight vector loaded once for all four.
