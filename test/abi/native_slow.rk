@@ -1,0 +1,40 @@
+~~ C owns this struct's native layout. The C harness exercises both imported
+~~ and exported calls, including a by-value return and borrowed arguments.
+record NativePacket from "native_slow.h" {
+  u8: tag;
+  f64: weight;
+  ptr i32: values;
+  [3]u16: samples;
+}
+
+extern slow native_packet_make(values: ptr i32) -> NativePacket from "native_slow.h"
+extern slow native_packet_check(packet: ptr NativePacket) -> i64 from "native_slow.h"
+extern slow native_frame_wait() from "native_slow.h"
+
+slow rake_packet_score(packet: NativePacket) -> i64:
+  return i64(packet.tag) + i64(packet.weight * 8.0) + i64(packet.values[unchecked 2]) + i64(packet.samples[1])
+
+slow rake_packet_update(packet: mut NativePacket) -> i64:
+  packet.weight <- packet.weight + 0.5
+  packet.values[unchecked 2] <- packet.values[unchecked 2] + 10
+  packet.samples[1] <- packet.samples[1] + 2
+  return native_packet_check(addr(packet))
+
+slow rake_packet_make(values: ptr i32) -> NativePacket:
+  let packet = native_packet_make(values)
+  return packet
+
+~~ Both host threads pause at the deepest call after filling their frames.
+~~ Their independently chosen seeds must survive the other thread's unwind.
+slow rake_frame_sum(seed: i32, depth: i32) -> i32:
+  local: [128]i32 := [0; 128]
+  for index from 0 up to 128:
+    local[index] <- seed * 100 + depth * 10 + index
+  total: i32 := 0
+  if depth > 0:
+    total <- rake_frame_sum(seed + 1, depth - 1)
+  else:
+    native_frame_wait()
+  for index from 0 up to 128:
+    total <- total + local[index]
+  return total

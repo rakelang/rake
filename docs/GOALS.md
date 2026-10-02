@@ -46,7 +46,8 @@ branches for each lane. An inactive lane raises no floating-point exception,
 touches no memory and has no other effect. A masked operation that a profile
 can't compile under both this rule and the one-register rule is rejected.
 
-Today: rakes compile on `x86-avx2`, `aarch64-neon` and `wasm-simd128`.
+Today: rakes compile on `x86-sse2`, `x86-avx2`, `x86-avx512`,
+`aarch64-neon` and `wasm-simd128`.
 
 ## Fused regions are pure data flow
 
@@ -59,7 +60,7 @@ means one rounding, and is for programs whose correctness needs it. Rake has
 no mode that keeps a slower sequence of ordinary operations.
 
 Today: the compiler substitutes identifiers and forms fused multiply-adds on
-`x86-avx2` and `aarch64-neon`. Other rewrites are planned, as [fused
+`x86-avx2`, `x86-avx512` and `aarch64-neon`. Other rewrites are planned, as [fused
 bindings](spec/04_fused_bindings.md) describe.
 
 ## A complete vector vocabulary
@@ -102,7 +103,9 @@ above hold unchanged around it. The compiler guarantees vector lowering,
 not a particular elapsed time or the fastest possible algorithm.
 
 Today: whole programs compile on `wasm-simd128`, as [the slow
-tier](spec/08_slow_tier.md) describes.
+tier](spec/08_slow_tier.md) describes. The unreleased development compiler
+also compiles slow-only programs to native objects through platform C.
+Native mixed vector/slow programs remain work in progress.
 
 ## Compilation is predictable
 
@@ -117,7 +120,7 @@ one, it fails with the source construct, profile and obligation that failed.
 A benchmark result is reported with its source, profile, compiler version,
 command, input size and baseline.
 
-Today: on `x86-avx2` and `aarch64-neon` the compiler selects instructions,
+Today: on SSE2, AVX2, AVX-512 and NEON the compiler selects instructions,
 allocates registers without spills and writes the assembly, and
 `--emit-native-ir` and `--emit-asm` show its work. On `wasm-simd128` it
 selects the instructions and writes each as one intrinsic in C, and clang

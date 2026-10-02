@@ -5,6 +5,19 @@ website. Beta releases may still change the source language and the binary
 boundaries between versions. A design in the documentation gets a version
 only when the compiler implements it and the tests cover it.
 
+## Unreleased
+
+- Native slow-only programs emit platform C and compile to x86-64 or
+  AArch64 objects. Their public slow functions use the platform C ABI,
+  with header-backed struct imports, pointer parameters and struct returns.
+  Native mixed vector/slow units and runs remain work in progress.
+- Native slow frames are thread-local; independent host threads can call
+  exported functions with large recursive locals. Module state stays shared.
+- Pointer fields in C struct declarations are checked against
+  `sizeof(void *)`, rather than assuming a wasm32 pointer.
+- Slow scalar bit casts use an alias-safe byte copy, shared by the native
+  and WebAssembly C paths.
+
 ## 0.6.0-beta
 
 - SSE2 and AVX-512F compile float crunches and rakes to verified vector

@@ -138,7 +138,7 @@ let validate_width loc lanes = function
 
 (** Two's-complement wrapping to 16 and 32 bits. *)
 let wrap16 x = ((x + 0x8000) land 0xffff) - 0x8000
-let wrap32 x = ((x + 0x80000000) land 0xffffffff) - 0x80000000
+let wrap32 x = Int32.to_int (Int32.of_int x)
 let saturate low high x = if x < low then low else if x > high then high else x
 
 (** Rounds a binary32 value to the nearest integer, ties to even, saturated to
@@ -162,7 +162,7 @@ let normalize_value = function
   | F32_rack xs -> rack xs
   | Mask xs -> mask xs
   | U8_rack xs -> U8_rack (Array.map (fun x -> x land 0xff) xs)
-  | U32_scalar x -> U32_scalar (x land 0xffffffff)
+  | U32_scalar x -> U32_scalar (Int64.to_int (Int64.logand (Int64.of_int x) 0xffffffffL))
   | I16_rack xs -> I16_rack (Array.map wrap16 xs)
   | I32_rack xs -> I32_rack (Array.map wrap32 xs)
   | I64_rack xs -> I64_rack (Array.copy xs)
@@ -808,7 +808,13 @@ let rec eval_expr ~lanes env (expr : expr) =
                 | "shift_bits_right" -> x lsr c
                 | _ -> signed x asr c) land 0xff) xs))
          | I16_rack xs -> Ok (I16_rack (Array.map (shift 16 wrap16 (fun x -> x land 0xffff)) xs))
-         | I32_rack xs -> Ok (I32_rack (Array.map (shift 32 wrap32 (fun x -> x land 0xffffffff)) xs))
+         | I32_rack xs ->
+             let operation = match name with
+               | "shift_bits_left" -> Int32.shift_left
+               | "shift_bits_right" -> Int32.shift_right_logical
+               | _ -> Int32.shift_right
+             in
+             Ok (I32_rack (Array.map (fun x -> Int32.to_int (operation (Int32.of_int x) (count land 31))) xs))
          | I64_rack xs ->
              let c = count land 63 in
              Ok (I64_rack (Array.map (fun x ->

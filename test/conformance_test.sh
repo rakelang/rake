@@ -38,7 +38,7 @@ while IFS=$'\t' read -r path category targets widths stage outcome diagnostic; d
   esac
   case "${category}:${stage}:${outcome}" in
     frontend:frontend:pass|native:native-object:pass|reject:frontend:reject|future:design:excluded) ;;
-    program:program:differential|trap:program:trap|abi:program:boundary|abi:program:c-interop) ;;
+    program:program:differential|trap:program:trap|abi:program:boundary|abi:program:c-interop|abi:program:native-c-interop) ;;
     *) fail "${path}: inconsistent stage/outcome metadata" ;;
   esac
   test -n "${targets}" && test -n "${widths}" \
@@ -79,7 +79,11 @@ while IFS=$'\t' read -r path category target width stage outcome diagnostic; do
       # Checked here; executed against the interpreter by program_test.sh.
       "${rakec}" "${source}" > /dev/null
       if test "${category}" != trap; then
-        "${rakec}" --verify-native --target "${target}" -o "${tmp}/program.o" "${source}"
+        if test "${outcome}" = native-c-interop; then
+          "${rakec}" --emit-obj --target "${target}" -o "${tmp}/program.o" "${source}"
+        else
+          "${rakec}" --verify-native --target "${target}" -o "${tmp}/program.o" "${source}"
+        fi
       fi
       ;;
     future) ;;

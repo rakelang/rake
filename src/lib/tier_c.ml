@@ -1,4 +1,4 @@
-(** One C translation unit for a whole Rake program on [wasm-simd128].
+(** One C translation unit for WebAssembly programs and native slow-only programs.
 
     Crunches and rakes keep their verified emission ({!Wasm_simd128_c}).
     A run becomes an external, never-inlined C function whose body is Rake's
@@ -22,6 +22,8 @@
 open Tier_ir
 
 type addressing = Barrier | Plain
+
+type execution_target = WebAssembly | Native_slow of Target.profile
 
 exception Emission_error of Ast.loc * string
 
@@ -67,6 +69,7 @@ let signed_of = function
 
 type unit_ = {
   program : program;
+  execution_target : execution_target;
   addressing : addressing;
   types : Buffer.t;
   defined : (string, unit) Hashtbl.t;
@@ -188,7 +191,18 @@ let float_extreme u op s =
        t name t t nan equal pick);
   name
 
-let math_helpers u = helper u "rake_math" (Rake_math.c_source ())
+let bitcast_helper u target source =
+  let name = Printf.sprintf "rake_bitcast_%s_from_%s" (scalar_tag target) (scalar_tag source) in
+  let target_type = scalar_c target in
+  helper u name
+    (Printf.sprintf "static inline %s %s(%s x)\n{\n    %s result;\n    __builtin_memcpy(&result, &x, sizeof result);\n    return result;\n}\n"
+       target_type name (scalar_c source) target_type);
+  name
+
+let math_helpers u =
+  let float_from_bits = bitcast_helper u SFloat SUint in
+  let bits_from_float = bitcast_helper u SUint SFloat in
+  helper u "rake_math" (Rake_math.c_source ~float_from_bits ~bits_from_float ())
 
 (* ─── Uniform scalar expressions ────────────────────────────────────── *)
 
@@ -473,7 +487,9 @@ and convert u scope (e : expr) kind target value =
   let v = expr u scope value in
   let t = scalar_c target in
   match kind with
-  | Ast.Convert_bitcast -> Printf.sprintf "__builtin_bit_cast(%s, %s)" t v
+  | Ast.Convert_bitcast ->
+      let name = bitcast_helper u target source in
+      Printf.sprintf "%s(%s)" name v
   | Convert_wrap -> Printf.sprintf "((%s)(%s)%s)" t (unsigned_of target) v
   | Convert_checked when source = target -> v
   | Convert_checked when is_float target -> Printf.sprintf "((%s)%s)" t v
@@ -1425,8 +1441,8 @@ let rec approximate_size u = function
       match List.find_opt (fun r -> r.rname = name) u.program.records with
       | Some { rheader = None; rfields; _ } -> List.fold_left (fun acc (_, t) -> acc + max 4 (approximate_size u t)) 0 rfields
       | _ -> 0)
-  | Ptr _ -> 4
-  | View _ -> 8
+  | Ptr _ -> (match u.execution_target with WebAssembly -> 4 | Native_slow _ -> 8)
+  | View _ -> (match u.execution_target with WebAssembly -> 8 | Native_slow _ -> 16)
   | _ -> 0
 
 let frame_threshold = 256
@@ -1434,12 +1450,13 @@ let frame_threshold = 256
 (** Rake's frame stack: a static region in linear memory from which each slow
     function holding large aggregates takes one frame, released on return. *)
 let frame_helpers u =
+  let storage = match u.execution_target with WebAssembly -> "static" | Native_slow _ -> "static _Thread_local" in
   helper u "rake_frame"
-    "#ifndef RAKE_FRAME_BYTES\n#define RAKE_FRAME_BYTES (4u << 20)\n#endif\n\
-     static uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\n\
-     static uint32_t rake_frame_top;\n\
+    (Printf.sprintf "#ifndef RAKE_FRAME_BYTES\n#define RAKE_FRAME_BYTES (4u << 20)\n#endif\n\
+     %s uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\n\
+     %s uint32_t rake_frame_top;\n\
      static inline void *rake_frame_enter(uint32_t size)\n{\n    size = (size + 15u) & ~15u;\n    if (size > RAKE_FRAME_BYTES - rake_frame_top) __builtin_trap();\n    void *const frame = rake_frames + rake_frame_top;\n    rake_frame_top += size;\n    return frame;\n}\n\
-     static inline void rake_frame_leave(void *frame) { rake_frame_top = (uint32_t)((uint8_t *)frame - rake_frames); }\n"
+     static inline void rake_frame_leave(void *frame) { rake_frame_top = (uint32_t)((uint8_t *)frame - rake_frames); }\n" storage storage)
 
 let slow_function u (f : slow_func) =
   let scope = new_scope () in
@@ -1468,7 +1485,8 @@ let slow_function u (f : slow_func) =
   let signature =
     if f.fname = "main" then "int main(void)"
     else
-      Printf.sprintf "static %s%s %s(%s)" (if f.fblock then "__attribute__((noinline)) " else "")
+      let linkage = match u.execution_target with Native_slow _ when not f.fblock -> "" | _ -> "static " in
+      Printf.sprintf "%s%s%s %s(%s)" linkage (if f.fblock then "__attribute__((noinline)) " else "")
         (ctype u f.fresult) (function_name f.fname)
         (if params = [] then "void" else String.concat ", " params)
   in
@@ -1596,10 +1614,21 @@ let boundaries u =
           (String.concat ", " ps) name (String.concat ", " (List.mapi (fun i _ -> Printf.sprintf "a%d" i) params)))
     called ""
 
-let emit ?(addressing = Barrier) ~source (program : program) =
+let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (program : program) =
+  (match execution_target with
+   | WebAssembly -> ()
+   | Native_slow profile ->
+       if not (Target.is_x86 profile || profile = Target.Aarch64_neon) then
+         fail Ast.dummy_loc "native slow programs require an x86 or AArch64 profile";
+       (match program.runs with
+        | run :: _ -> fail run.run_loc "native runs and packs are work in progress; only slow-only whole programs compile natively"
+        | [] -> ());
+       (match program.vector_defs with
+        | definition :: _ -> fail definition.loc "native mixed vector/slow programs are work in progress; compile kernels separately"
+        | [] -> ()));
   let u =
     {
-      program; addressing; types = Buffer.create 1024; defined = Hashtbl.create 32; helpers = Buffer.create 1024;
+      program; execution_target; addressing; types = Buffer.create 1024; defined = Hashtbl.create 32; helpers = Buffer.create 1024;
       helper_names = Hashtbl.create 32; expressions = Buffer.create 4096; selected = []; lane_operations = 0; loops = 0; slow_calls = [];
       run_facts = Hashtbl.create 8;
     }
@@ -1623,8 +1652,8 @@ let emit ?(addressing = Barrier) ~source (program : program) =
               (fun (field, ty) ->
                 match ty with
                 | Sc _ | Ptr _ ->
-                    let size = match ty with Sc s -> bytes s | _ -> 4 in
-                    Some (Printf.sprintf "_Static_assert(sizeof(((%s *)0)->%s) == %d, \"%s.%s is declared %s in Rake\");\n" r.rname field size r.rname field (string_of_ty ty))
+                    let size = match ty with Sc s -> string_of_int (bytes s) | _ -> "sizeof(void *)" in
+                    Some (Printf.sprintf "_Static_assert(sizeof(((%s *)0)->%s) == %s, \"%s.%s is declared %s in Rake\");\n" r.rname field size r.rname field (string_of_ty ty))
                 | Array (n, Sc s) ->
                     Some (Printf.sprintf "_Static_assert(sizeof(((%s *)0)->%s) == %d, \"%s.%s is declared %s in Rake\");\n" r.rname field (n * bytes s) r.rname field (string_of_ty ty))
                 | _ -> None)
@@ -1655,19 +1684,31 @@ let emit ?(addressing = Barrier) ~source (program : program) =
   let runs = List.map (run_function u) program.runs in
   let slows = List.map (slow_function u) program.slows in
   let prototypes = List.filter_map (fun (signature, _) -> if String.starts_with ~prefix:"int main" signature then None else Some (signature ^ ";\n")) slows in
+  let prologue, vector_prologue, vector_epilogue =
+    match execution_target with
+    | WebAssembly ->
+        ( Printf.sprintf
+            "/* Generated by rakec --target wasm-simd128 from %s. Runs are Rake's loops, loads and\n   stores; every intrinsic is one Rake-selected WebAssembly SIMD instruction. */\n"
+            (Filename.basename source)
+          ^ "#pragma STDC FP_CONTRACT OFF\n#include <stdint.h>\n#include <stdbool.h>\n#include <wasm_simd128.h>\n",
+          "\n#ifndef RAKE_WASM_LINKAGE\n#define RAKE_WASM_LINKAGE static inline __attribute__((always_inline))\n#endif\n\n"
+          ^ Wasm_simd128_c.relaxed_prologue (),
+          Wasm_simd128_c.relaxed_epilogue () )
+    | Native_slow profile ->
+        ( Printf.sprintf
+            "/* Generated by rakec --target %s from %s. This unit contains only explicit\n   slow code. The platform C compiler owns scalar lowering and the C ABI. */\n"
+            (Target.profile_name profile) (Filename.basename source)
+          ^ "#include <stdint.h>\n#include <stdbool.h>\n_Static_assert(sizeof(void *) == 8, \"native Rake slow code requires a 64-bit C ABI\");\n",
+          "", "" )
+  in
   let unit_text =
     String.concat ""
-      ([
-         Printf.sprintf
-           "/* Generated by rakec --target wasm-simd128 from %s. Runs are Rake's loops, loads and\n   stores; every intrinsic is one Rake-selected WebAssembly SIMD instruction. */\n"
-           (Filename.basename source);
-         "#pragma STDC FP_CONTRACT OFF\n#include <stdint.h>\n#include <stdbool.h>\n#include <wasm_simd128.h>\n";
-       ]
+      ([ prologue ]
       @ List.map (fun h -> Printf.sprintf "#include \"%s\"\n" h) headers
-      @ [ "\n#ifndef RAKE_WASM_LINKAGE\n#define RAKE_WASM_LINKAGE static inline __attribute__((always_inline))\n#endif\n\n"; Wasm_simd128_c.relaxed_prologue () ]
+      @ [ vector_prologue ]
       @ forward @ [ Buffer.contents u.types ] @ layout_checks
       @ [ "\n"; Buffer.contents u.helpers; "\n"; Buffer.contents globals; "\n"; vectors; "\n"; boundaries u; "\n";
           Buffer.contents u.expressions ]
-      @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ Wasm_simd128_c.relaxed_epilogue () ])
+      @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ vector_epilogue ])
   in
   (unit_text, u.run_facts)

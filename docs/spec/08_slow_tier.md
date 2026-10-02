@@ -14,7 +14,9 @@ A program with any slow, run, record, state, embed, const or extern
 definition is a whole program. On `wasm-simd128` it compiles to one C
 translation unit with `int main(void)`, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
-`wasm-simd128-relaxed` only. Other profiles reject them.
+`wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
+compiler also emits native C and objects for slow-only programs on x86-64
+and AArch64. It still rejects native runs and mixed vector/slow units.
 
 ## An example
 
@@ -101,7 +103,7 @@ block refer only to scalar loops inside that block.
 
 Crunches, rakes and fused regions remain pure vector kernels and reject slow
 blocks. Put scalar orchestration in the run that calls them. Blocks and whole
-programs currently compile for WebAssembly only.
+programs containing vector work currently compile for WebAssembly only.
 
 ## Definitions
 
@@ -311,6 +313,19 @@ Records, arrays and views are structs. State and embedded data are statics.
 Checked arithmetic, conversions, indexing and slices are small inline helpers
 that call `__builtin_trap`. Each run is an external, never-inlined `void`
 function.
+
+On the development compiler's native slow-only path, ordinary slow functions
+instead have external linkage and use the platform C ABI. Scalar and pointer
+arguments pass by value, array and record arguments are borrowed pointers,
+and record results return by value. Header-backed records retain their C
+layout, including native pointer widths and padding. Rake emits checked
+scalar C; the platform compiler owns its register allocation and calling
+convention. This does not delegate vector kernel compilation to C.
+
+The native entry remains `int main(void)`. Unions, callbacks, function
+pointers and `argc`/`argv` entry are work in progress. Native slow frames are
+thread-local, while module state remains process-wide and needs the caller's
+normal synchronization when several threads use it.
 
 A slow block in scalar code becomes a GNU C statement expression, preserving
 its lexical scope and enclosing function's `return`. A block in a run becomes

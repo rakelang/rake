@@ -77,6 +77,14 @@ a crunch. `rakec --interpret` runs `main` in Rake's executable semantics,
 evaluating rack expressions in the same reference semantics as crunches, and
 `test/program_test.sh` compares it with the compiled program.
 
+The unreleased development compiler adds a second destination for the same
+tier IR: a native slow-only C unit. It rejects runs and vector definitions
+before emission, so no rack work enters a general-purpose C compiler.
+The platform compiler lowers explicit slow code and supplies the System V
+AMD64 or AAPCS64 C ABI. `test/native_slow_program_test.sh` compares scalar
+results with the interpreter and exercises header-backed struct layout and
+imports/exports with independent C on x86 and under AArch64 QEMU.
+
 ## Profiles
 
 On x86, an `f32s` rack and its lane mask occupy one XMM register on SSE2,
@@ -140,5 +148,6 @@ clang encodes the selected virtual instructions and the runtime assigns
 physical registers. The system toolchain also owns object formats,
 relocations, linking and start-up. Debug information and exception unwinding
 aren't produced. The x86 and AArch64 backends compile crunches and rakes only.
-Runs and whole programs compile on `wasm-simd128`, and the [planned x86-64 run
+Runs and mixed whole programs compile on `wasm-simd128`; native slow-only
+programs use the unreleased C boundary described above. The [planned x86-64 run
 boundary](spec/02_packs_and_run.md#planned-x86-64-boundary) is a design.

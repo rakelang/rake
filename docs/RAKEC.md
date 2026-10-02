@@ -18,7 +18,7 @@ rakec --verify-native --target wasm-simd128 program.rk  # write a verified progr
 | none | parses and type-checks the file, and prints a confirmation |
 | `--interpret` | runs `slow main() -> i32` in Rake's executable semantics and prints its result, or the trap |
 | `--emit-native-ir` | the typed native IR after optimisation, and a whole program's tier IR |
-| `--emit-asm` | GNU assembly on x86 and AArch64, C on the wasm profiles |
+| `--emit-asm` | GNU assembly for native kernels; C for wasm programs and native slow-only programs |
 | `--emit-obj` | an object file, assembled or compiled from that output |
 | `--verify-native` | the object, after disassembling and checking it |
 | `--emit-tokens`, `--emit-ast` | the tokens or the syntax tree, for debugging the front end |
@@ -30,7 +30,12 @@ rakec --verify-native --target wasm-simd128 program.rk  # write a verified progr
 with `.s`, `.c` or `.o` unless `-o path` gives another. `-o` isn't allowed
 with the check, token and syntax-tree modes. A whole program, one with slow
 code, runs, records, state, embedded files, constants or externs, compiles for
-the wasm profiles only.
+the wasm profiles in 0.6.0-beta. The unreleased development compiler also
+supports slow-only native programs. Their `--emit-asm` output is `.c` and
+their `--emit-obj` output is a platform C object. `--verify-native` applies
+to vector kernels and WebAssembly programs, not native slow-only units:
+these have no vector function whose instruction contract could be checked.
+Native mixed vector/slow programs and runs remain work in progress.
 
 ## Options
 
@@ -56,6 +61,14 @@ On every x86 profile the assembler is `as --64`, and on `aarch64-neon` it is
 | `RAKE_WASM_CC` | `clang` | the C compiler for wasm32 objects |
 | `RAKE_WASM_OBJDUMP` | `llvm-objdump` | the disassembler for verification |
 | `RAKE_WASM_CFLAGS` | empty | extra flags when compiling a whole program |
+
+The development compiler's native slow C path uses `gcc` on x86 and
+`aarch64-unknown-linux-gnu-gcc` on AArch64. `RAKE_NATIVE_CC` can select a
+different executable with the same GCC-compatible command-line interface.
+The compiler writes GNU C11, disables floating-point contraction and fast
+math, and compiles with warnings treated as errors. Its source directory is
+on the include path. Link the emitted object with the platform linker and
+its required C libraries, including `libm` for scalar maths.
 
 The emitted C reads two macros. `RAKE_WASM_LINKAGE` replaces `static inline`
 on each crunch and rake, and `RAKE_FRAME_BYTES` sets the size of a whole

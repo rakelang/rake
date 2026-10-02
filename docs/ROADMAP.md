@@ -10,11 +10,23 @@ remain work in progress. This roadmap states what we intend to build next.
 
 ### Compile runs, packs and whole programs for physical targets
 
+The development compiler after 0.6.0-beta now compiles slow-only programs
+to native objects through its C emitter. Imported C structs use their header's
+layout, and public slow functions have the platform C ABI. This is an
+unreleased first stage: native runs and mixed vector/slow programs are still
+work in progress.
+
 We will extend `run`, packs and whole programs from `wasm-simd128` to
 SSE2, AVX2, AVX-512 and NEON. That work includes native traversal, full-rack
 loads and stores, masked tails with benign operands, stable C boundaries and
 runtime tests over empty, short, exact and tail counts. The object verifier
 will confirm vector memory operations and reject scalar cleanup loops.
+
+The C interface also needs unions, function pointers and callbacks, and
+`argc`/`argv` entry. We will check layouts, alignment, field offsets and
+imported/exported calls against independently compiled C headers on x86-64
+and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
+that permission will never apply to rack work outside the block.
 
 WebAssembly will continue to honour the virtual machine's abstraction. Rake
 selects vector instructions, but leaves physical register allocation to the

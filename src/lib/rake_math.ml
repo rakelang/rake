@@ -117,7 +117,7 @@ let c_float x =
   else Printf.sprintf "%hf" x
 
 (** The same definitions as C, for slow code. *)
-let c_source () =
+let c_source ~float_from_bits ~bits_from_float () =
   let poly var coefficients =
     let first = c_float (List.hd coefficients) in
     String.concat ""
@@ -126,7 +126,7 @@ let c_source () =
   in
   String.concat ""
     [
-      "static inline float rake_pow2_f32(int32_t k) { return __builtin_bit_cast(float, (uint32_t)(k + 127) << 23); }\n";
+      Printf.sprintf "static inline float rake_pow2_f32(int32_t k) { return %s((uint32_t)(k + 127) << 23); }\n" float_from_bits;
       "static float rake_exp_f32(float x)\n{\n";
       "    if (x != x) return x;\n";
       Printf.sprintf "    if (x > %s) return __builtin_inff();\n" (c_float exp_high);
@@ -142,9 +142,9 @@ let c_source () =
       "static float rake_log_parts_f32(float x, int32_t *exponent, float *mantissa, float *square)\n{\n";
       "    int32_t adjust = 0;\n";
       Printf.sprintf "    if (x < %s) { x = x * %s; adjust = -23; }\n" (c_float min_normal) (c_float two_23);
-      "    const uint32_t b = __builtin_bit_cast(uint32_t, x);\n";
+      Printf.sprintf "    const uint32_t b = %s(x);\n" bits_from_float;
       "    int32_t e = (int32_t)((b >> 23) & 0xffu) - 126 + adjust;\n";
-      "    float m = __builtin_bit_cast(float, (b & 0x807fffffu) | 0x3f000000u);\n";
+      Printf.sprintf "    float m = %s((b & 0x807fffffu) | 0x3f000000u);\n" float_from_bits;
       Printf.sprintf "    if (m < %s) { e = e - 1; m = m + m - 1.0f; } else { m = m - 1.0f; }\n" (c_float sqrt_half);
       "    const float z = m * m;\n";
       poly "m" log_poly;

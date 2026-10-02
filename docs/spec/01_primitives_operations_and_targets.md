@@ -242,7 +242,9 @@ AVX2 and AVX-512, `shufps` on SSE2, `dup` on NEON and a splat on wasm.
 
 A run's boundary is in [packs and runs](02_packs_and_run.md#wasm32-boundary),
 and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
-backends compile neither runs nor slow code.
+backends in the 0.6.0-beta tag compile neither runs nor slow code. The
+unreleased development compiler adds slow-only native C programs; native
+runs and mixed vector/slow programs remain work in progress.
 
 ## Verification
 

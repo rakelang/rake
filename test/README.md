@@ -43,6 +43,13 @@ AVX-512F, or through Intel SDE supplied as `RAKE_SDE=/absolute/path/to/sde64`.
 The suite fails if neither is available, rather than treating object
 verification as runtime agreement.
 
+`test/native_slow_program_test.sh` compares scalar semantics, including
+recursive frames, integer bit casts and checked traps, with the interpreter.
+An independent C harness calls imported and exported functions through
+native pointers and a padded struct with a by-value result. The same checks
+run on x86 profiles and AArch64 under QEMU. These establish slow C lowering
+and ABI agreement, not native vector runs or mixed programs.
+
 `tools/check_documentation_examples.sh` compiles every ` ```rake ` block in
 the README, the documentation and the website's pages. The pages own their
 examples, so a change to the language that breaks one fails here until the

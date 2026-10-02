@@ -30,12 +30,15 @@ Options:
                  wasm_simd128.h intrinsics alone.
   -o <file>      Write the selected emission product to <file>.
 
-The production backends are x86-avx2, aarch64-neon and wasm-simd128. Rake owns
+The production kernel backends are x86-sse2, x86-avx2, x86-avx512,
+aarch64-neon and wasm-simd128. Rake owns
 native SSA, instruction selection, no-spill allocation and assembly emission.
 On wasm-simd128 the emitted text is C with one wasm_simd128.h intrinsic per
 selected instruction, and a program with slow code or runs compiles to one C
 file with int main(void). External tools only assemble or compile Rake's text
 into an object file, which --verify-native then disassembles and checks.
+Native slow-only programs emit C and compile with the platform C compiler.
+Native mixed vector/slow programs and runs remain work in progress.
 
 |}
 
@@ -139,12 +142,17 @@ let tier_check filename program =
   | Ok checked -> checked
   | Error message -> fail message
 
-let whole_program_c ~addressing filename program =
+let whole_program_c ~addressing ~profile filename program =
   let checked = tier_check filename program in
-  match Rake.Tier_c.emit ~addressing ~source:filename checked with
+  let execution_target =
+    if Rake.Target.is_wasm profile then Rake.Tier_c.WebAssembly
+    else Rake.Tier_c.Native_slow profile
+  in
+  match Rake.Tier_c.emit ~addressing ~execution_target ~source:filename checked with
   | text, facts -> (checked, text, facts)
   | exception Rake.Tier_c.Emission_error (loc, message) ->
-      fail (Printf.sprintf "%s:%d:%d: wasm-simd128 emission: %s" loc.file loc.line loc.col message)
+      fail (Printf.sprintf "%s:%d:%d: %s emission: %s" loc.file loc.line loc.col
+              (Rake.Target.profile_name profile) message)
 
 let whole_program_object filename c_source =
   match Rake.Wasm_simd128_toolchain.assemble_program ~include_dir:(Filename.dirname filename) c_source with
@@ -294,19 +302,24 @@ let () =
           let _ = typecheck program in
           let config = resolve_target_config opts in
           if is_whole_program program then (
-            if not (Rake.Target.is_wasm config.profile) then
-              fail "Error: slow code, runs and module definitions compile for --target wasm-simd128";
             Rake.Native_lower.relaxed := config.profile = Rake.Target.Wasm_simd128_relaxed;
             Rake.Native_ir.floating_point_exceptions := false;
             Rake.Wasm_simd128_c.relaxed := !Rake.Native_lower.relaxed;
             Rake.Wasm_simd128_toolchain.relaxed := !Rake.Native_lower.relaxed;
-            let checked, c_source, facts = whole_program_c ~addressing:opts.addressing filename program in
+            let checked, c_source, facts = whole_program_c ~addressing:opts.addressing ~profile:config.profile filename program in
             let default extension = Some (match opts.output with Some path -> path | None -> source_stem filename ^ extension) in
             match mode with
             | Native_ir ->
                 let native = report_backend (Rake.Native_backend.lower ~config [ { Rake.Ast.mod_name = "main"; mod_defs = checked.vector_defs } ]) in
                 write_output (Rake.Native_ir.dump native ^ Rake.Tier_ir.dump checked) opts.output
             | Assembly -> write_output c_source (default ".c")
+            | Object when not (Rake.Target.is_wasm config.profile) ->
+                (match Rake.Native_toolchain.compile_slow_program ~profile:config.profile
+                         ~source:filename ~include_dir:(Filename.dirname filename) c_source with
+                 | Ok bytes -> write_output bytes (default ".o")
+                 | Error error -> fail (Rake.Native_toolchain.format_error error))
+            | Verify_native when not (Rake.Target.is_wasm config.profile) ->
+                fail "Error: native slow-only code has no vector functions to verify; use --emit-obj for its platform C compilation"
             | Object -> write_output (whole_program_object filename c_source) (default ".o")
             | _ ->
                 let object_bytes = whole_program_object filename c_source in
