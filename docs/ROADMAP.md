@@ -27,16 +27,16 @@ will confirm vector memory operations and reject scalar cleanup loops.
 The development compiler also accepts typed `argc`/`argv` entry, adapting the
 runtime's C pointer array without incompatible pointer aliasing. The C interface
 supports typed function pointers and noncapturing callbacks. Unions remain
-work in progress. We will check layouts,
-alignment, field offsets and
+work in progress. We will check layouts, alignment, field offsets and
 imported/exported calls against independently compiled C headers on x86-64
 and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
 that permission will never apply to rack work outside the block.
 
 WebAssembly will continue to honour the virtual machine's abstraction. Rake
 selects vector instructions, but leaves physical register allocation to the
-WebAssembly runtime. Its promise is the same on every target: code outside a
-`slow` block uses vector instructions throughout or compilation fails.
+WebAssembly runtime. Rack work outside a `slow` block uses vector
+instructions or compilation fails. A run's explicit traversal also needs
+uniform address, bounds and loop work.
 
 ### Add and validate target profiles
 
@@ -48,6 +48,25 @@ object verification and differential runtime checks.
 
 We will validate relaxed WebAssembly SIMD on the competition runtime before
 considering it a default. Until then it remains explicitly opt-in.
+
+### Preserve and verify GPU lane execution
+
+After CPU coverage and native C interoperation, we will implement
+`nvidia-ptx-sm120`: a 32-lane warp profile emitting PTX 8.7, compiled ahead
+of time by pinned CUDA 12.8.1 tools. Its final cubin verifier will check lane
+mapping, allowed control/data flow, memory effects and resource obligations.
+The runtime will load the exact verified artifact through an explicit CUDA
+context, stream and parameter ABI, refusing unverified PTX JIT fallback.
+
+This virtual profile delegates final physical allocation and instruction
+scheduling to NVIDIA. The useful guarantee is preserved parallel structure
+and checked costs. Partial masks remain legitimate program choices, and
+occupancy, workload balance and elapsed time still need measurement.
+
+We will later consider portable SPIR-V/Vulkan subgroup profiles, with
+device-specific evidence for physical resource claims, and a direct physical
+profile for a sufficiently documented ISA. All are designs today.
+[GPU profiles](GPU.md) owns the detailed contract and acceptance checks.
 
 ### Complete physical CPU operation coverage
 

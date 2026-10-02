@@ -27,8 +27,8 @@ the same computation as `| moved <| positions + velocities * <0.5>`.
 
 ## The contract
 
-Every rack in Rake already lives in one physical register or one WebAssembly
-`v128` value, with no source-visible spills. A fused
+Every rack on the implemented profiles lives in one physical CPU register or
+one WebAssembly `v128` value, with no source-visible spills. A fused
 binding adds a promise about its expression: it is pure data flow that the
 compiler can emit as one contiguous run of vector instructions. The compiler
 proves that or rejects the binding. It never falls back to something weaker.

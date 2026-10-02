@@ -1,6 +1,7 @@
 # Primitives, operations, and targets
 
-A rack is one vector register. Its type specifies its element: `f32s` is a
+A rack is one vector value on the current CPU and WebAssembly profiles.
+Its type specifies its element: `f32s` is a
 rack of `f32` lanes. The target profile gives its width. This page
 defines the profiles, the operations each one compiles, the floating-point
 rules and the calling conventions of crunches and rakes.
@@ -27,6 +28,19 @@ and the scalar fallback remain WIP*. The compiler rejects unsupported targets.
 `--width n` asserts the `f32` lane count. It must equal the profile's, and a
 mismatch is an error before any code is generated. The compiler never meets
 it by splitting or narrowing a rack.
+
+GPU targets are designs, outside the implemented table above:
+
+| Proposed profile | Rack | Boundary and status |
+| --- | --- | --- |
+| `nvidia-ptx-sm120` | 32 thread lanes | PTX 8.7 to ahead-of-time cubin, with final artifact verification. WIP* |
+| Vulkan subgroup profiles | required 32- or 64-invocation subgroup | portable SPIR-V, with device verification for physical claims. Later design, WIP* |
+| Direct physical GPU profile | specified wave/lane mapping | Rake-owned selection, allocation and sequencing for a documented ISA. Later design, WIP* |
+
+A GPU lane's scalar arithmetic is the SIMT mapping, not CPU scalar fallback.
+The [GPU contract](../GPU.md) defines the proposed operation set, masks,
+collectives, memory rules and verification boundary. These profiles are not
+accepted by the current compiler.
 
 `lanes`, the lane count, and `@`, the lane index, are reserved and
 unavailable on every profile.

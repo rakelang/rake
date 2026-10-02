@@ -7,7 +7,7 @@ documentation uses them.
 
 | Term | Meaning |
 | --- | --- |
-| rack | one vector value of the target profile, such as an `f32s`: a physical vector register on x86 or Arm, and one `v128` in WebAssembly |
+| rack | one parallel value of the target profile, such as an `f32s`: one physical CPU vector register or WebAssembly `v128`. The GPU design maps it across a specified warp or subgroup |
 | lane | one element position in a rack: an `f32s` on AVX2 has eight |
 | uniform | one scalar shared by every lane, marked `<name>` |
 | tine | a named mask of lanes, written `#name` |
@@ -59,7 +59,7 @@ documentation uses them.
 | binding, reference | a binding associates a name with a value or other program entity, and a reference uses that name within its scope. Rake's immutable value bindings don't designate memory locations |
 | fusion | combining separate pieces of work so they can execute together, such as merging loops into one pass or forming a fused multiply-add. Rake uses fused bindings for stages of pure vector calculations |
 | instruction selection | choosing the machine instructions for each operation |
-| register allocation | assigning each value to a physical register. Rake does this for its physical targets, while a WebAssembly runtime does it for `v128` values |
+| register allocation | assigning each value to a physical register. Rake does this on its physical CPU targets. WebAssembly runtimes and the proposed NVIDIA toolchain own it on their virtual targets |
 | object code | encoded machine instructions and data, ready for a linker |
 | assembler | the tool that encodes textual assembly as object code |
 | ABI | application binary interface: the rules for passing arguments, returning values and laying out data |
@@ -75,11 +75,15 @@ These appear in [the GPU design](GPU.md).
 | Term | Meaning |
 | --- | --- |
 | GPU compute | using a graphics processor for general parallel calculation |
+| PTX | NVIDIA's virtual instruction language, translated into a GPU-specific executable by its toolchain |
+| cubin, SASS | a compiled NVIDIA device artifact, and its physical instruction assembly |
 | SPIR-V | a standard binary format for GPU programs, which a driver translates into the device's instructions |
 | Vulkan | a cross-platform interface for submitting graphics and compute work to GPUs |
-| driver | the vendor's software that translates portable GPU programs into device instructions and schedules them |
+| driver | the vendor's software that loads GPU programs and manages submission. It may translate portable programs into device instructions. Hardware schedules warps |
 | shader invocation | one execution of a GPU program, over one element of the data |
 | subgroup | a set of invocations that execute together and exchange values directly, called a warp or wave by vendors |
+| warp | NVIDIA's group of 32 thread lanes, scheduled by the hardware |
+| occupancy | the resident warps relative to the device's capacity. Resource limits affect it, while achieved utilisation also depends on work and inputs |
 | workgroup | a programmer-declared batch of invocations that may share local memory, containing one or more subgroups |
 | SPMD, SIMT | single program, multiple data: many instances of one program. GPUs call their hardware model single instruction, multiple threads |
 | ISPC | Intel's compiler for a C-like language that runs one program across a group of CPU SIMD lanes |

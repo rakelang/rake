@@ -5,7 +5,7 @@
 # Rake
 
 Rake is a programming language for SIMD kernels. Its values are racks, one
-vector register each on a physical target and one `v128` value in the
+vector register each on a physical CPU target and one `v128` value in the
 WebAssembly virtual machine. Outside `slow` code, the compiler uses vector
 instructions wherever the selected profile supports the source operation, or
 it refuses the program. It never replaces rack work with hidden scalar loops
@@ -60,7 +60,7 @@ compiler compiles slow orchestration with register kernels as native C and
 objects. It embeds Rake's selected assembly, checks the kernels in the final
 object, and supports uniform `f32` parameters and `f32` results at the boundary
 from slow code. Other native scalar kernel boundaries remain WIP. Platform C
-imports and exports and typed process arguments are supported too. These
+imports and exports, typed C callbacks and process arguments are supported too. These
 development additions are absent from the 0.6.0-beta source tag. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one
@@ -134,7 +134,11 @@ them, and [the roadmap](docs/ROADMAP.md) what comes next. [The
 playground](docs/PLAYGROUND.md) is an interactive tutorial in twelve lessons,
 [the glossary](docs/GLOSSARY.md) defines the terms, and [Rake and other
 languages](docs/COMPARISONS.md) and [GPU profiles](docs/GPU.md) set Rake
-beside ISPC and GPU programming.
+beside ISPC and Bend 2. The GPU contract is a design, not an implemented
+backend. Its first proposed profile maps racks across NVIDIA warp lanes,
+emits PTX and verifies the ahead-of-time cubin. It separates checked
+execution properties from occupancy, memory costs and elapsed time, which
+still need measurement.
 [The rakec command](docs/RAKEC.md) lists its modes and options,
 [`test/README.md`](test/README.md) describes the tests, and
 [`CHANGELOG.md`](CHANGELOG.md) the releases.

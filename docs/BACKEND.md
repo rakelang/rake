@@ -176,3 +176,29 @@ and rakes only. The development compiler adds native mixed programs through
 the limited scalar C boundary above. Runs and packs still compile only on
 WebAssembly. The [planned x86-64 run
 boundary](spec/02_packs_and_run.md#planned-x86-64-boundary) is a design.
+
+## Planned GPU pipeline
+
+GPU profiles will add lane-to-invocation mapping, uniformity and collective
+participation to the existing checked lowering. They will preserve useful
+parallel execution, with explicit memory and synchronisation effects.
+They will never serially emulate a rack with a hidden per-thread lane loop.
+
+```text
+Physical CPU: Rake selection + allocation -> assembly -> object verification
+WebAssembly: Rake virtual SIMD selection -> object verification -> runtime
+NVIDIA (planned): Rake SIMT mapping -> PTX -> pinned ptxas -> cubin verification
+Vulkan (later): Rake subgroup mapping -> SPIR-V -> driver -> device verification
+```
+
+The proposed `nvidia-ptx-sm120` profile targets PTX 8.7 and a 32-thread warp.
+NVIDIA will own final allocation and instruction scheduling. Rake will check
+the final cubin's instructions, control/data flow and resources against its
+contract, rejecting unknown or insufficient evidence. A certificate applies
+to that artifact, not every translation of its PTX.
+
+The runtime will load only the verified cubin, with an explicit parameter ABI,
+context and CUDA stream. It will refuse an unverified PTX JIT fallback.
+Hardware scheduling, input-dependent lane activity and achieved occupancy
+remain outside compiler ownership. [The GPU design](GPU.md) separates the
+proof obligations from measurements and defines the acceptance gates.
