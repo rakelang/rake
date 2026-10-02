@@ -716,12 +716,25 @@ let call_function m name (args : value list) =
     VUnit
   with Return_value v -> v
 
-let run_main ?externs ?trace program =
+let run_main ?externs ?trace ?(program_name = "program") ?(arguments = []) program =
   let m = machine ?externs ?trace program in
-  if not (List.exists (fun f -> f.fname = "main") program.slows) then
-    Error "the program has no slow main() -> i32 to run"
-  else
-    match call_function m "main" [] with
+  match List.find_opt (fun f -> f.fname = "main") program.slows with
+  | None -> Error "the program has no slow main to run"
+  | Some main ->
+    let args = match entry_parameters main.fparams with
+      | Some No_arguments -> []
+      | Some Process_arguments ->
+          let strings = program_name :: arguments in
+          let pointer text =
+            let store = Array.init (String.length text + 1) (fun i ->
+              VInt (SUint8, if i = String.length text then 0L else Int64.of_int (Char.code text.[i]))) in
+            VPtr { store; index = 0 }
+          in
+          let store = Array.of_list (List.map pointer strings @ [ VNull ]) in
+          [ VInt (SInt, Int64.of_int (List.length strings)); VPtr { store; index = 0 } ]
+      | None -> invalid_arg "unchecked main signature"
+    in
+    match call_function m "main" args with
     | VInt (_, v) -> Ok v
     | _ -> Error "main returned no integer"
     | exception Trap (loc, message) -> Error (Printf.sprintf "%s:%d:%d: trap: %s" loc.file loc.line loc.col message)

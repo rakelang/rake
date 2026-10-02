@@ -7,6 +7,7 @@ build`, which puts it at `_build/default/src/bin/main.exe`, or run it with
 ```sh
 rakec program.rk                                   # parse and type-check
 rakec --interpret program.rk                       # run main and print its result
+rakec --interpret program.rk -- alpha --flag        # pass process arguments
 rakec --emit-asm --target x86-avx2 program.rk      # write program.s
 rakec --verify-native --target wasm-simd128 program.rk  # write a verified program.o
 ```
@@ -16,7 +17,7 @@ rakec --verify-native --target wasm-simd128 program.rk  # write a verified progr
 | Mode | Output |
 | --- | --- |
 | none | parses and type-checks the file, and prints a confirmation |
-| `--interpret` | runs `slow main() -> i32` in Rake's executable semantics and prints its result, or the trap |
+| `--interpret` | runs `slow main` in Rake's executable semantics and prints its result, or the trap |
 | `--emit-native-ir` | the typed native IR after optimisation, and a whole program's tier IR |
 | `--emit-asm` | GNU assembly for native kernels; C for wasm programs and native slow-only programs |
 | `--emit-obj` | an object file, assembled or compiled from that output |
@@ -45,6 +46,13 @@ Native mixed vector/slow programs and runs remain work in progress.
 | `--width n` | asserts that the profile's `f32` rack has `n` lanes |
 | `--wasm-addressing a` | `barrier`, the default, keeps a run's pointers opaque to clang's loop strength reduction so constant offsets fold into loads and stores, and `plain` emits intrinsics alone |
 | `-o path`, `--output path` | the output file |
+| `-- args...` | process arguments for `--interpret`, including strings that begin with `-` |
+
+The unreleased development compiler supports [process arguments](spec/08_slow_tier.md#process-arguments)
+through `slow main(argc: i32, argv: ptr ptr u8) -> i32`. The input path is
+`argv[0]` in the interpreter. Native and WASI executables receive their
+runtime's program string instead. Without parameters, `main` ignores the
+process arguments.
 
 [Primitives, operations, and targets](spec/01_primitives_operations_and_targets.md#profiles) explains how
 `native` chooses a profile and what `--width` checks, and [packs and
@@ -61,6 +69,12 @@ On every x86 profile the assembler is `as --64`, and on `aarch64-neon` it is
 | `RAKE_WASM_CC` | `clang` | the C compiler for wasm32 objects |
 | `RAKE_WASM_OBJDUMP` | `llvm-objdump` | the disassembler for verification |
 | `RAKE_WASM_CFLAGS` | empty | extra flags when compiling a whole program |
+
+Process entries with arguments need WASI headers during WebAssembly object
+compilation. The development shell supplies their include path through
+`RAKE_WASM_CFLAGS`. Outside it, set that variable to your WASI include or
+sysroot flags and link the emitted object with WASI libc and its command
+startup object.
 
 The development compiler's native slow C path uses `gcc` on x86 and
 `aarch64-unknown-linux-gnu-gcc` on AArch64. `RAKE_NATIVE_CC` can select a

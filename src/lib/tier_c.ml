@@ -84,6 +84,23 @@ type unit_ = {
       (** per run: loops, lane operations and selected instructions, for verification *)
 }
 
+(* The process wrapper has C's char ** ABI. Its Rake body receives a separately
+   typed pointer array, avoiding an incompatible uint8_t ** alias of argv. *)
+let slow_symbol u name =
+  if name <> "main" then function_name name
+  else match List.find_opt (fun f -> f.fname = name) u.program.slows with
+    | Some f when entry_parameters f.fparams = Some Process_arguments ->
+        let occupied = List.map (fun f -> function_name f.fname) u.program.slows
+          @ List.map (fun e -> function_name e.ename) u.program.externs
+          @ List.map (fun r -> function_name r.run_name) u.program.runs
+          @ List.filter_map (fun (d : Ast.def) -> match d.v with
+              | DCrunch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> Some (function_name n)
+              | _ -> None) u.program.vector_defs in
+        let rec choose candidate =
+          if List.mem candidate occupied then choose (candidate ^ "_") else candidate in
+        choose "rake_process_main"
+    | _ -> "main"
+
 let helper u name text =
   if not (Hashtbl.mem u.helper_names name) then (
     Hashtbl.replace u.helper_names name ();
@@ -321,7 +338,7 @@ let rec expr u scope (e : expr) : string =
       Printf.sprintf "((%s)%s)" (scalar_c s) r
   | Call (name, args) ->
       let f = List.find (fun f -> f.fname = name) u.program.slows in
-      if f.fblock then u.slow_calls <- function_name name :: u.slow_calls;
+      if f.fblock then u.slow_calls <- slow_symbol u name :: u.slow_calls;
       let params = f.fparams in
       let args =
         List.concat (List.mapi
@@ -333,7 +350,7 @@ let rec expr u scope (e : expr) : string =
             | _ -> [ go a ])
           args)
       in
-      Printf.sprintf "%s(%s)" (function_name name) (String.concat ", " args)
+      Printf.sprintf "%s(%s)" (slow_symbol u name) (String.concat ", " args)
   | Extern_call (name, args) ->
       let args =
         List.map
@@ -1483,11 +1500,11 @@ let slow_function u (f : slow_func) =
       f.fparams
   in
   let signature =
-    if f.fname = "main" then "int main(void)"
+    if f.fname = "main" && entry_parameters f.fparams = Some No_arguments then "int main(void)"
     else
-      let linkage = match u.execution_target with Native_slow _ when not f.fblock -> "" | _ -> "static " in
+      let linkage = match u.execution_target with Native_slow _ when not f.fblock && f.fname <> "main" -> "" | _ -> "static " in
       Printf.sprintf "%s%s%s %s(%s)" linkage (if f.fblock then "__attribute__((noinline)) " else "")
-        (ctype u f.fresult) (function_name f.fname)
+        (ctype u f.fresult) (slow_symbol u f.fname)
         (if params = [] then "void" else String.concat ", " params)
   in
   (* Aggregates larger than this live in Rake's frame stack rather than C's:
@@ -1553,6 +1570,25 @@ let escape_bytes contents =
       incr column)
     contents;
   Buffer.contents b
+
+let process_entry u =
+  match List.find_opt (fun f -> f.fname = "main") u.program.slows with
+  | Some f when entry_parameters f.fparams = Some Process_arguments ->
+      Printf.sprintf
+        {|
+int main(int argc, char **argv)
+{
+    if (argc < 0 || (size_t)argc > SIZE_MAX / sizeof(uint8_t *) - 1) __builtin_trap();
+    uint8_t **arguments = malloc(((size_t)argc + 1) * sizeof(*arguments));
+    if (!arguments) __builtin_trap();
+    for (int i = 0; i < argc; ++i) arguments[i] = (uint8_t *)argv[i];
+    arguments[argc] = NULL;
+    int result = %s((int32_t)argc, arguments);
+    free(arguments);
+    return result;
+}
+|} (slow_symbol u f.fname)
+  | _ -> ""
 
 (** The crunches and rakes, through their verified emission; and for each
     crunch slow code calls, a never-inlined boundary function. *)
@@ -1684,6 +1720,9 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
   let runs = List.map (run_function u) program.runs in
   let slows = List.map (slow_function u) program.slows in
   let prototypes = List.filter_map (fun (signature, _) -> if String.starts_with ~prefix:"int main" signature then None else Some (signature ^ ";\n")) slows in
+  let entry = process_entry u in
+  let entry_headers = if entry = "" then "" else
+    "#include <stdlib.h>\n#include <stddef.h>\n_Static_assert(sizeof(int) == sizeof(int32_t), \"Rake main requires a 32-bit C int\");\n" in
   let prologue, vector_prologue, vector_epilogue =
     match execution_target with
     | WebAssembly ->
@@ -1703,12 +1742,12 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
   in
   let unit_text =
     String.concat ""
-      ([ prologue ]
+      ([ prologue; entry_headers ]
       @ List.map (fun h -> Printf.sprintf "#include \"%s\"\n" h) headers
       @ [ vector_prologue ]
       @ forward @ [ Buffer.contents u.types ] @ layout_checks
       @ [ "\n"; Buffer.contents u.helpers; "\n"; Buffer.contents globals; "\n"; vectors; "\n"; boundaries u; "\n";
           Buffer.contents u.expressions ]
-      @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ vector_epilogue ])
+      @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ entry; vector_epilogue ])
   in
   (unit_text, u.run_facts)

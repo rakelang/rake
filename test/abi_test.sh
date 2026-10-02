@@ -24,4 +24,29 @@ result="$(wasmtime run --invoke __main_void "${tmp}/interop.wasm" 2>/dev/null)" 
 test "${result}" = 0 || { echo "interop: check ${result} failed" >&2; exit 1; }
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/runs.o" "${test_dir}/abi/runs.rk"
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/interop.o" "${test_dir}/abi/interop.rk"
+
+# Process arguments use WASI's real command startup, including argv[argc].
+: "${RAKE_WASI_LIBC:?process startup checks need WASI libc from the development shell}"
+: "${RAKE_WASI_LIBC_DEV:?process startup checks need WASI headers from the development shell}"
+"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/arguments.c" "${test_dir}/abi/process_arguments.rk"
+for source in arguments argument-oracle; do
+  input="${tmp}/arguments.c"
+  if [[ "${source}" = argument-oracle ]]; then input="${test_dir}/abi/process_arguments.c"; fi
+  clang --target=wasm32-wasi -msimd128 -O2 -nostdlib \
+    -isystem "${RAKE_WASI_LIBC_DEV}/include" -L"${RAKE_WASI_LIBC}/lib" \
+    "${RAKE_WASI_LIBC}/lib/crt1-command.o" "${input}" -lc -o "${tmp}/${source}.wasm"
+done
+for case in empty words bytes; do
+  case "${case}" in
+    empty) args=() ;;
+    words) args=(alpha '' --flag) ;;
+    bytes) args=('λ' '雪' 'a b') ;;
+  esac
+  expected="$("${rakec}" --interpret "${test_dir}/abi/process_arguments.rk" -- "${args[@]}")"
+  actual=0; wasmtime run "${tmp}/arguments.wasm" "${args[@]}" || actual=$?
+  oracle=0; wasmtime run "${tmp}/argument-oracle.wasm" "${args[@]}" || oracle=$?
+  test "${actual}" = "${expected}" && test "${actual}" = "${oracle}" || {
+    echo "WASI arguments (${case}): compiled ${actual}, interpreter ${expected}, C ${oracle}" >&2; exit 1;
+  }
+done
 echo "run boundary test passed"

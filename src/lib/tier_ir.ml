@@ -127,6 +127,14 @@ type pass = By_value | Borrow | Borrow_mut
 
 type param = { pname : string; pty : ty; pass : pass }
 
+type entry_parameters = No_arguments | Process_arguments
+
+let entry_parameters = function
+  | [] -> Some No_arguments
+  | [ { pty = Sc SInt; pass = By_value; _ };
+      { pty = Ptr (Ptr (Sc SUint8)); pass = By_value; _ } ] -> Some Process_arguments
+  | _ -> None
+
 type slow_func = {
   fname : string; fparams : param list; fresult : ty; fbody : stmt list;
   floc : Ast.loc;

@@ -61,7 +61,7 @@ source
   -> tier checker                  runs and slow code in tier IR; each pure rack
                                    expression in a run goes through the crunch
                                    pipeline above
-  -> C emitter                     one C file with int main(void)
+  -> C emitter                     one C file with a C entry point
   -> clang for wasm32 with SIMD128
   -> object verifier               crunches, rakes and runs in the object
 ```
@@ -84,6 +84,12 @@ The platform compiler lowers explicit slow code and supplies the System V
 AMD64 or AAPCS64 C ABI. `test/native_slow_program_test.sh` compares scalar
 results with the interpreter and exercises header-backed struct layout and
 imports/exports with independent C on x86 and under AArch64 QEMU.
+
+A process entry with parameters gets a compiler-owned adapter for
+`int main(int argc, char **argv)`. The adapter copies the pointer array into
+typed byte-pointer storage without aliasing the runtime's `char **` object.
+The startup checks compare the interpreter with independently compiled C on
+every physical profile and through WASI's command startup.
 
 ## Profiles
 

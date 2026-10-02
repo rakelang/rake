@@ -12,7 +12,7 @@ Usage:
   rakec --emit-asm <file.rk>          Emit Rake-owned textual assembly
   rakec --emit-obj <file.rk>          Assemble Rake-owned code to an object
   rakec --verify-native <file.rk>     Verify and emit a Rake-owned object
-  rakec --interpret <file.rk>         Run main in Rake's executable semantics
+  rakec --interpret <file.rk> [-- args...]  Run main in Rake's executable semantics
   rakec --print-capabilities          Print the frontend semantic contract
   rakec --print-targets               Print available native profiles
   rakec --version                     Show version
@@ -35,7 +35,7 @@ aarch64-neon and wasm-simd128. Rake owns
 native SSA, instruction selection, no-spill allocation and assembly emission.
 On wasm-simd128 the emitted text is C with one wasm_simd128.h intrinsic per
 selected instruction, and a program with slow code or runs compiles to one C
-file with int main(void). External tools only assemble or compile Rake's text
+file with a C main entry point. External tools only assemble or compile Rake's text
 into an object file, which --verify-native then disassembles and checks.
 Native slow-only programs emit C and compile with the platform C compiler.
 Native mixed vector/slow programs and runs remain work in progress.
@@ -88,6 +88,7 @@ type opts = {
   mutable width : int option;
   mutable output : string option;
   mutable filename : string option;
+  mutable program_arguments : string list option;
   mutable addressing : Rake.Tier_c.addressing;
 }
 
@@ -194,6 +195,7 @@ let () =
           width = None;
           output = None;
           filename = None;
+          program_arguments = None;
           addressing = Rake.Tier_c.Barrier;
         }
       in
@@ -204,6 +206,7 @@ let () =
       in
       let rec parse = function
         | [] -> ()
+        | "--" :: rest -> opts.program_arguments <- Some rest
         | "--emit-tokens" :: rest ->
             select_mode Tokens "--emit-tokens";
             parse rest
@@ -264,6 +267,8 @@ let () =
             exit 1
       in
       parse arguments;
+      if opts.program_arguments <> None && opts.emit_mode <> Interpret then
+        fail "Error: arguments after -- require --interpret";
       let filename =
         match opts.filename with
         | Some filename -> filename
@@ -282,7 +287,8 @@ let () =
           let program = parse_program filename in
           let _ = typecheck program in
           let checked = tier_check filename program in
-          match Rake.Tier_interp.run_main checked with
+          match Rake.Tier_interp.run_main ~program_name:filename
+            ~arguments:(Option.value opts.program_arguments ~default:[]) checked with
           | Ok value -> Printf.printf "%Ld\n" value
           | Error message -> fail message)
       | Check ->

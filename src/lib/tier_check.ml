@@ -1424,8 +1424,10 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
       | DSlow (name, params, result, _) ->
           let result = match result with Some t -> ty_of ctx t | None -> Void in
           (match result with Array _ -> fail d.loc "a slow function returns arrays through a mut parameter" | View _ | Pack _ | Rack _ | Mask _ | Rack_array _ -> fail d.loc "%s can't be returned by slow code" (string_of_ty result) | _ -> ());
-          if name = "main" && (params <> [] || result <> Sc SInt) then fail d.loc "main is slow main() -> i32";
-          Hashtbl.replace ctx.slows name (slow_params ctx d.loc params, result)
+          let params = slow_params ctx d.loc params in
+          if name = "main" && (entry_parameters params = None || result <> Sc SInt) then
+            fail d.loc "main is slow main() -> i32 or slow main(argc: i32, argv: ptr ptr u8) -> i32";
+          Hashtbl.replace ctx.slows name (params, result)
       | DExtern (name, params, result, header) ->
           let eparams =
             List.map

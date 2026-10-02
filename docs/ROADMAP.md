@@ -22,8 +22,10 @@ loads and stores, masked tails with benign operands, stable C boundaries and
 runtime tests over empty, short, exact and tail counts. The object verifier
 will confirm vector memory operations and reject scalar cleanup loops.
 
-The C interface also needs unions, function pointers and callbacks, and
-`argc`/`argv` entry. We will check layouts, alignment, field offsets and
+The development compiler also accepts typed `argc`/`argv` entry, adapting the
+runtime's C pointer array without incompatible pointer aliasing. The C interface
+still needs unions, function pointers and callbacks. We will check layouts,
+alignment, field offsets and
 imported/exported calls against independently compiled C headers on x86-64
 and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
 that permission will never apply to rack work outside the block.

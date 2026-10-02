@@ -50,6 +50,11 @@ native pointers and a padded struct with a by-value result. The same checks
 run on x86 profiles and AArch64 under QEMU. These establish slow C lowering
 and ABI agreement, not native vector runs or mixed programs.
 
+The argument fixture runs through actual process startup and compares its
+byte-level result with independent C and the interpreter. It covers no extra
+arguments, empty strings, option-like strings and UTF-8 bytes. The WASI check
+in `test/abi_test.sh` exercises the same fixture with WASI libc and wasmtime.
+
 `tools/check_documentation_examples.sh` compiles every ` ```rake ` block in
 the README, the documentation and the website's pages. The pages own their
 examples, so a change to the language that breaks one fails here until the

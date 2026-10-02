@@ -15,6 +15,7 @@
       pkgs = nixpkgs.legacyPackages.${system};
       ocamlPackages = pkgs.ocamlPackages;
       aarch64Cross = pkgs.pkgsCross.aarch64-multiplatform;
+      wasiCross = pkgs.pkgsCross.wasi32;
     in {
       devShells.default = pkgs.mkShell {
         buildInputs = with ocamlPackages;
@@ -77,6 +78,9 @@
         RAKE_AARCH64_LIBC = "${aarch64Cross.glibc}";
         RAKE_AARCH64_LIBC_DEV = "${aarch64Cross.glibc.dev}";
         RAKE_AARCH64_LIBC_STATIC = "${aarch64Cross.glibc.static}";
+        RAKE_WASI_LIBC = "${wasiCross.wasilibc}";
+        RAKE_WASI_LIBC_DEV = "${wasiCross.wasilibc.dev}";
+        RAKE_WASM_CFLAGS = "-isystem ${wasiCross.wasilibc.dev}/include";
       };
     });
 }

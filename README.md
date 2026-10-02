@@ -57,10 +57,11 @@ multiply-add.
 The scalar fallback remains WIP (work in progress), and the compiler rejects
 code for it. Native runs, packs and mixed whole programs are also WIP. The
 unreleased development compiler can compile slow-only programs as native C
-and objects, with platform C imports and exports. This is not in the
+and objects, with platform C imports and exports and typed process arguments.
+This is not in the
 0.6.0-beta source tag. On
 `wasm-simd128`, a whole program becomes one C file
-with `int main(void)`, and every selected instruction is written as one
+with a C entry point, and every selected instruction is written as one
 `wasm_simd128.h` intrinsic.
 
 A whole program has vector runs and scalar slow code. Slow code never holds a

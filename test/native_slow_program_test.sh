@@ -7,6 +7,7 @@ ulimit -c 0
 test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "${test_dir}/.." && pwd)"
 rakec="${RAKEC:-${root}/_build/default/src/bin/main.exe}"
+argument_source="${test_dir}/abi/process_arguments.rk"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
@@ -48,6 +49,23 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/interop.o" "${test_dir}/abi/native_slow.rk"
   "${cc}" -O2 "${link_flags[@]}" "${test_dir}/abi/native_slow.c" "${tmp}/interop.o" -pthread -o "${tmp}/interop"
   "${runner[@]}" "${tmp}/interop"
+
+  "${rakec}" --emit-obj --target "${profile}" -o "${tmp}/arguments.o" "${argument_source}"
+  "${cc}" -O2 "${link_flags[@]}" "${tmp}/arguments.o" -o "${tmp}/arguments"
+  "${cc}" -O2 "${link_flags[@]}" "${test_dir}/abi/process_arguments.c" -o "${tmp}/argument-oracle"
+  for case in empty words bytes; do
+    case "${case}" in
+      empty) args=() ;;
+      words) args=(alpha '' --flag) ;;
+      bytes) args=('λ' '雪' 'a b') ;;
+    esac
+    expected="$("${rakec}" --interpret "${argument_source}" -- "${args[@]}")"
+    actual=0; "${runner[@]}" "${tmp}/arguments" "${args[@]}" || actual=$?
+    oracle=0; "${runner[@]}" "${tmp}/argument-oracle" "${args[@]}" || oracle=$?
+    test "${actual}" = "${expected}" && test "${actual}" = "${oracle}" || {
+      echo "${profile} arguments (${case}): compiled ${actual}, interpreter ${expected}, C ${oracle}" >&2; exit 1;
+    }
+  done
 done
 
 # These cases must retain their interpreter traps in the native C lowering.

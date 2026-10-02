@@ -7,6 +7,10 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- A process entry may take `argc: i32, argv: ptr ptr u8`. Native C and WASI
+  startup pass the count, zero-terminated byte strings and trailing null
+  pointer through a compiler-owned typed adapter. The interpreter accepts
+  arguments after `--` and uses the input path as `argv[0]`.
 - Native slow-only programs emit platform C and compile to x86-64 or
   AArch64 objects. Their public slow functions use the platform C ABI,
   with header-backed struct imports, pointer parameters and struct returns.

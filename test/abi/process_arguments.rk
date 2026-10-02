@@ -1,0 +1,24 @@
+~~ Exercise real C/WASI startup, not a launcher that calls the Rake function.
+~~ This helper also collides with the wrapper's preferred internal symbol.
+slow rake_process_main(value: i32) -> i32:
+  return value
+
+slow main(argc: i32, argv: ptr ptr u8) -> i32:
+  if argc < 1 or is_null(argv):
+    return 251
+  let program = argv[unchecked 0]
+  if is_null(program) or program[unchecked 0] = 0:
+    return 252
+  if not is_null(argv[unchecked argc]):
+    return 253
+  code: i32 := argc
+  for argument from 1 up to argc:
+    let text = argv[unchecked argument]
+    if is_null(text):
+      return 254
+    offset: i32 := 0
+    while text[unchecked offset] != 0:
+      code <- (code * 17 + i32(text[unchecked offset])) % 113
+      offset <- offset + 1
+    code <- (code + 31) % 113
+  return rake_process_main(code)

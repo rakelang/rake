@@ -12,11 +12,40 @@ Slow blocks are available in 0.5.0-beta and in the playground.
 
 A program with any slow, run, record, state, embed, const or extern
 definition is a whole program. On `wasm-simd128` it compiles to one C
-translation unit with `int main(void)`, which is what a C-only judge takes.
+translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
 `wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
 compiler also emits native C and objects for slow-only programs on x86-64
 and AArch64. It still rejects native runs and mixed vector/slow units.
+
+### Process arguments
+
+The development compiler after 0.6.0-beta accepts either `slow main() -> i32`
+or a process entry with an argument count and a pointer to byte strings:
+
+<!-- rake-check: run 1 -->
+```rake
+slow main(argc: i32, argv: ptr ptr u8) -> i32:
+  if is_null(argv[unchecked argc]):
+    return argc
+  return 255
+```
+
+`argc` includes the program at `argv[0]`. Each string ends with a zero byte,
+and `argv[argc]` is a null pointer. These are byte strings, so a UTF-8
+character may occupy several bytes. Pointer indexing is explicitly
+`unchecked`: the program must stay within the count and each string's end.
+
+The emitted entry has C's `int main(int argc, char **argv)` signature. A
+compiler-generated adapter copies the pointer array into typed `ptr u8`
+storage, sharing the original string bytes. The adapter frees that array when
+`main` returns, so don't retain its address beyond the call. This avoids
+reading a C `char **` object through an incompatible pointer type. Linking
+this entry requires the platform C runtime, or WASI libc on WebAssembly.
+
+For the interpreter, pass arguments after `--`, as in `rakec --interpret
+program.rk -- alpha --flag`. Its `argv[0]` is the input file path. The browser
+interpreter supplies `program` at `argv[0]` and no additional arguments.
 
 ## An example
 
