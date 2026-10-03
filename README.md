@@ -59,7 +59,7 @@ The scalar fallback remains WIP (work in progress), and the compiler rejects
 code for it. General native runs are also WIP. The unreleased development
 compiler compiles slow orchestration with register kernels as native C and
 objects. It embeds Rake's selected assembly, checks the kernels in the final
-object, and supports uniform `f32` parameters and `f32` results at the boundary
+object, and supports uniform `f32` parameters and `f32`, `bool` or `u32` results at the boundary
 from slow code. Other native scalar kernel boundaries remain WIP. Platform C
 imports and exports, header-backed unions, typed C callbacks and process
 arguments are supported too. SSE2, AVX2, AVX-512 and NEON also support

@@ -13,7 +13,8 @@ remain work in progress. This roadmap states what we intend to build next.
 The development compiler after 0.6.0-beta compiles slow orchestration and
 register kernels into one native object. Its C unit embeds Rake-selected
 assembly, and the final object's kernels pass the existing instruction
-verifier. Slow callers can use uniform `f32` parameters and `f32` results.
+verifier. Slow callers can use uniform `f32` parameters and `f32`, `bool` or
+`u32` results.
 Imported C structs use their header's layout, and public slow functions have
 the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`
 streams or update one column in a mutable input or destination stack,
@@ -99,13 +100,30 @@ Float reductions and scans now compile on NEON too. All four physical profiles
 preserve the specified left-to-right fold, including each binary32 rounding.
 The shared scalar oracle checks NaNs at every position and signed-zero extrema.
 
-Literal-index float extraction now compiles on all four physical profiles.
-Its lane bounds follow each profile's rack width. Independent C checks every
-lane's bits, scalar return values and reuse of the original rack.
+Literal-index float extraction and insertion now compile on all four
+physical profiles.
+Their lane bounds follow each profile's rack width. Independent C checks every
+lane's bits, scalar argument and return values, and reuse of the original rack.
+Insertion accepts a uniform argument, literal or extracted value. Native
+streams still reject both operations until tail participation is specified.
+
+Static float shuffles now compile on all four physical profiles. Their
+one- and two-input selections span the whole rack, including moves across
+AVX register subdivisions. Independent C checks permutations, repeated
+indices, exact bits and preservation of still-live inputs. Native stream
+shuffles remain work in progress until tail participation is specified.
+
+Mask reductions now compile on all four physical profiles. `all` and `any`
+produce a Boolean, and `bitmask` a bitset with one bit per float lane.
+Packed bitwise reductions retain their temporary values in vector registers,
+then cross the scalar C ABI through a checked terminal transfer. Independent
+C checks every lane-mask pattern and ordered comparisons containing quiet
+NaNs. Native scalar arithmetic over those results remains work in progress.
 
 We will bring the physical profiles up to the language's published operation
-set. The next work covers substantial maths, integer racks, shuffles, integer
-extraction and lane insertion, uniform conditionals and gather. A CPU profile
+set. The next work covers substantial maths, integer racks, integer shuffles,
+integer extraction and insertion, uniform conditionals and
+gather. A CPU profile
 will gain an operation only when its compiled result matches the interpreter
 and its object verifier proves the selected vector sequence.
 

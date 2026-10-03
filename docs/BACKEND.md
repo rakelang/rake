@@ -106,6 +106,33 @@ the whole destination register, with its low `f32` returned through the
 scalar ABI. No scalar arithmetic or memory temporary is introduced. Bounds
 follow the selected profile, and the allocator preserves a still-live source.
 
+Float insertion replaces one literal-index lane with a uniform's bits.
+SSE2 broadcasts the scalar and merges it through a literal one-lane mask.
+AVX2 uses `vbroadcastss` and immediate `vblendps`. AVX-512F uses
+`vbroadcastss` and a one-bit `k1` mask with `vmovaps`, without requiring
+AVX-512DQ, BW or VL. The x86 allocator counts the broadcast temporary and
+reuses only a dying input rack for the destination. NEON uses `ins` from
+the scalar argument's low lane, copying the input rack when it remains live.
+The insertion sequence is shared with scan accumulation on each architecture.
+
+Static float shuffles select a complete output rack from one or two input
+racks. SSE2 uses immediate `shufps`: two inputs need two permutations and a
+bitwise mask merge. AVX2 and AVX-512F use full-width `vpermps` with a literal
+index vector. Two inputs need two permutations and a vector blend. NEON
+uses four `dup` broadcasts and three `ins` transfers. These sequences
+preserve lane bits across register subdivisions, without scalar arithmetic
+or memory temporaries. The allocator counts every scratch register and
+keeps both inputs intact while a two-rack shuffle reads them.
+
+Mask reductions combine full-width lane groups with permutations and
+bitwise AND or OR. `all` and `any` finish with a vector mask that normalises
+the result to zero or one. `bitmask` first applies the lane weights
+`[1, 2, 4, 8, ...]`, then ORs the groups. Each sequence uses one allocated
+temporary vector register. A source-declared `bool` or `u32` result ends
+with `movd` or `vmovd` into `eax` on x86, or `umov` into `w0` on AArch64.
+The verifier accepts only that terminal result transfer, and still rejects
+intermediate scalar lane work.
+
 ## Whole programs
 
 ```text
@@ -148,7 +175,7 @@ explicit slow code -> scalar C and C ABI declarations ────────�
 
 This development path supports the limited SSE2, AVX2, AVX-512 and NEON stream traversal.
 General native runs remain work in progress. Slow callers can pass
-uniform `f32` arguments and receive `f32` results from register kernels.
+uniform `f32` arguments and receive `f32`, `bool` or `u32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
 AMD64 or AAPCS64 C ABI. It cannot rewrite the opaque kernel assembly, which
 the final-object verifier checks using Rake's selected instruction contract.
@@ -181,7 +208,8 @@ register, so the allocator tracks the pair as one. A uniform's use is a
 `vbroadcastss`. The profile needs AVX2 and FMA3.
 
 On `aarch64-neon`, an `f32s` rack is one 128-bit vector register. Arguments
-take `v0` to `v7` and the result returns in `v0`. The allocator uses the 24
+take `v0` to `v7` and rack and `f32` results return in `v0`. Mask reductions
+return their completed Boolean or bitset in `w0`. The allocator uses the 24
 registers that a call may clobber, `v0` to `v7` and `v16` to `v31`. GNU
 cross-binutils assemble and disassemble the object, and
 `test/neon_backend_test.sh` compares exact result bits under QEMU.
@@ -236,8 +264,9 @@ selection check above:
 
 - On SSE2, AVX2, AVX-512 and NEON: no calls, no stack, every rack in one
   whole register, no scalar arithmetic on rack lanes, cross-lane instructions
-  only in selected reductions, scans and extractions, and exactly the fused multiply-adds that the
-  compiler selected.
+  only in selected reductions, scans, extractions, insertions and shuffles,
+  and exactly the fused multiply-adds that the compiler selected.
+  Integer results have one checked terminal transfer into `eax` or `w0`.
 - For a `wasm-simd128` scratch or rake: only locals, constants and register
   instructions, with no calls, memory or branches.
 - For a `wasm-simd128` run: direct calls only to the helpers for its explicit

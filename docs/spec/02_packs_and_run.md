@@ -212,9 +212,9 @@ uniform `f32` arguments. One `f32s` traversal yields an `f32` stream from a
 read-only stack, or updates one column in its mutable input or destination.
 Its body loads one to four `f32` columns and combines immutable lane expressions,
 including calls to rakes and scratches. General loops, multiple column stores,
-widening, other parameter types, reductions and scans remain work in
-progress and fail compilation. Unused stored columns may have other scalar
-types.
+widening, other parameter types, reductions, scans, extraction, insertion and shuffles
+remain work in progress and fail compilation. Unused stored columns may have
+other scalar types.
 
 On Linux x86-64 the stream follows System V: the descriptor is in `rdi`, the
 count in `rsi`, and the output in `rdx`. It returns `void` under its source

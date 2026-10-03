@@ -31,6 +31,9 @@ type instruction =
   | Uniform_mask of { dst : vreg; value : bool; provenance : provenance }
   | Broadcastss of { dst : vreg; source : vreg; provenance : provenance }
   | Extract_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
+  | Insert_f32 of { dst : vreg; previous : vreg; inserted : vreg; lane : f32_lane; provenance : provenance }
+  | Shuffle_f32 of { dst : vreg; racks : vreg list; indices : int list; provenance : provenance }
+  | Reduce_mask of { dst : vreg; source : vreg; operation : Native_ir.mask_reduction; provenance : provenance }
   | Reduce_f32 of {
       dst : vreg;
       source : vreg;
@@ -103,6 +106,9 @@ let def = function
   | Uniform_mask { dst; _ }
   | Broadcastss { dst; _ }
   | Extract_f32 { dst; _ }
+  | Insert_f32 { dst; _ }
+  | Shuffle_f32 { dst; _ }
+  | Reduce_mask { dst; _ }
   | Reduce_f32 { dst; _ }
   | Scan_f32 { dst; _ }
   | Addps { dst; _ }
@@ -126,9 +132,12 @@ let operands = function
   | Uniform_f32 _ | Uniform_mask _ -> []
   | Broadcastss { source; _ }
   | Extract_f32 { source; _ }
+  | Reduce_mask { source; _ }
   | Reduce_f32 { source; _ }
   | Scan_f32 { source; _ }
   | Round_f32 { source; _ } -> [ source ]
+  | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
+  | Shuffle_f32 { racks; _ } -> racks
   | Addps { left; right; _ }
   | Subps { left; right; _ }
   | Mulps { left; right; _ }
@@ -147,6 +156,9 @@ let provenance = function
   | Uniform_mask { provenance; _ }
   | Broadcastss { provenance; _ }
   | Extract_f32 { provenance; _ }
+  | Insert_f32 { provenance; _ }
+  | Shuffle_f32 { provenance; _ }
+  | Reduce_mask { provenance; _ }
   | Reduce_f32 { provenance; _ }
   | Scan_f32 { provenance; _ }
   | Addps { provenance; _ }
@@ -177,6 +189,9 @@ let instruction_name = function
   | Uniform_mask _ -> "mask.constant"
   | Broadcastss _ -> "vbroadcastss.xmm"
   | Extract_f32 _ -> "extract.f32"
+  | Insert_f32 _ -> "insert.f32"
+  | Shuffle_f32 _ -> "shuffle.f32"
+  | Reduce_mask _ -> "reduce.mask"
   | Reduce_f32 _ -> "strict.reduce.f32"
   | Scan_f32 _ -> "strict.scan.f32"
   | Addps _ -> "vaddps"

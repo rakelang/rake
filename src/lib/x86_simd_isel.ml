@@ -98,12 +98,15 @@ let validate_deferred_constants function_name constants uses =
       match N.IntMap.find_opt id uses with
       | Some operations
         when operations <> []
-             && List.for_all (function N.Broadcast operand -> operand = id | _ -> false) operations ->
+             && List.for_all (function
+                  | N.Broadcast operand -> operand = id
+                  | N.Insert { inserted; _ } -> inserted = id
+                  | _ -> false) operations ->
           ()
       | _ ->
           fail function_name
             (Printf.sprintf
-               "scalar f32 value %%%d is only legal as the direct input to rack.broadcast; scalarization is forbidden"
+               "scalar f32 value %%%d is only legal as the direct input to rack.broadcast or rack.insert; scalarization is forbidden"
                id))
     constants
 
@@ -124,7 +127,7 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
-    | None | Some (N.Rack N.F32) | Some (N.Scalar N.F32) | Some N.Mask -> ()
+    | None | Some (N.Rack N.F32) | Some (N.Scalar (N.F32 | N.I1 | N.I32)) | Some N.Mask -> ()
     | Some typ ->
         fail func.name
           ("unsupported result type " ^ N.string_of_typ typ
@@ -149,14 +152,19 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
               ("operation requires a mask result, found " ^ N.string_of_typ typ)
       in
       match instruction.op with
-      | N.Const (N.Float32_bits _) -> None
+      | N.Const (N.Float32_bits bits) ->
+          let dst, _ = result func.name index instruction in
+          let uses = Option.value ~default:[] (N.IntMap.find_opt dst constant_uses) in
+          if List.exists (function N.Insert { inserted; _ } -> inserted = dst | _ -> false) uses then
+            Some (M.Uniform_f32 { dst; bits; provenance })
+          else None
       | N.Const (N.Int32 _) ->
           let id, _ = result func.name index instruction in
           (match N.IntMap.find_opt id constant_uses with
           | Some operations when operations <> []
-              && List.for_all (function N.Extract { lane; _ } -> lane = id | _ -> false) operations -> None
+              && List.for_all (function N.Extract { lane; _ } | N.Insert { lane; _ } -> lane = id | _ -> false) operations -> None
           | _ -> fail func.name ~instruction:index
-              "an i32 constant is only legal as a static extraction index in this vector selector")
+              "an i32 constant is only legal as a static extraction or insertion index in this vector selector")
       | N.Mask_const value ->
           let dst = mask_result () in
           Some (M.Uniform_mask { dst; value; provenance })
@@ -301,9 +309,13 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             fail func.name ~instruction:index "f32 reduction must produce scalar<f32>";
           ensure_operand_f32 func.name environment index source;
           Some (M.Reduce_f32 { dst; source; operation; provenance })
-      | N.Reduce ((N.Reduce_and | N.Reduce_or | N.Reduce_bitmask), _) ->
-          fail func.name ~instruction:index
-            "mask reductions are not implemented by the x86 SIMD f32 slice"
+      | N.Reduce (((N.Reduce_and | N.Reduce_or | N.Reduce_bitmask) as operation), source) ->
+          let dst, _ = result func.name index instruction in
+          ensure_mask func.name environment index source;
+          let operation = match operation with
+            | N.Reduce_and -> N.Mask_all | N.Reduce_or -> N.Mask_any
+            | N.Reduce_bitmask -> N.Mask_bits | _ -> assert false in
+          Some (M.Reduce_mask { dst; source; operation; provenance })
       | N.Scan (operation, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
@@ -319,9 +331,25 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
               Some (M.Extract_f32 { dst; source = rack; lane; provenance })
           | _ -> fail func.name ~instruction:index
               "extract requires a literal lane within the selected profile's rack")
-      | N.Shuffle _ | N.Insert _ ->
-          fail func.name ~instruction:index
-            "cross-lane operation is unavailable in the initial x86 SIMD selection contract"
+      | N.Insert { rack; inserted; lane } ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index rack;
+          if find_type func.name environment index inserted <> N.Scalar N.F32 then
+            fail func.name ~instruction:index "f32 insertion requires scalar<f32>";
+          (match N.IntMap.find_opt lane integer_constants with
+          | Some lane when lane >= 0l && lane < Int32.of_int (Target.info profile).f32_lanes ->
+              let lane = Option.get (M.f32_lane_of_int (Int32.to_int lane)) in
+              Some (M.Insert_f32 { dst; previous = rack; inserted; lane; provenance })
+          | _ -> fail func.name ~instruction:index
+              "insert requires a literal lane within the selected profile's rack")
+      | N.Shuffle { racks; indices } ->
+          let dst = rack_result () in
+          List.iter (ensure_operand_f32 func.name environment index) racks;
+          let lanes = (Target.info profile).f32_lanes in
+          if List.length indices <> lanes
+              || List.exists (fun lane -> lane < 0 || lane >= lanes * List.length racks) indices then
+            fail func.name ~instruction:index "shuffle indices must cover one rack and stay within its inputs";
+          Some (M.Shuffle_f32 { dst; racks; indices; provenance })
       | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index

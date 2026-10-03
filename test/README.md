@@ -57,7 +57,7 @@ locals, including 64-byte-aligned C records nested in arrays and Rake records,
 synchronous C callback re-entry and repeated calls. C checks the
 returned records and independently derived sums after each thread unwinds.
 Mixed-program fixtures check the final object's kernels,
-signed-zero transfer through the scalar C boundary, and x86 reductions against
+signed-zero transfer and Boolean/bitset returns through the scalar C boundary, and x86 reductions against
 both the selected-profile interpreter and hand-derived lane counts. Native
 general memory runs remain work in progress.
 
@@ -88,12 +88,30 @@ checks that allocation preserves a still-live input rack. Independent NEON
 object fixtures check source-authorised lane transfers while scalar arithmetic
 and stack use remain rejected.
 
-`test/native_extraction_test.sh` generates literal-index fixtures for every
-lane on all four physical profiles. Independent C checks the exact binary32
-bits through scalar returns and rebroadcasts, including signalling NaNs
-without floating-point exceptions. Composed arithmetic checks that extracting
-a lane preserves a still-live source rack. A one-past-the-end source checks
-the selected profile's bounds diagnostic.
+`test/native_lane_transfer_test.sh` generates extraction, insertion and shuffle
+fixtures for every lane on all four physical profiles. Independent C checks
+the exact binary32 bits through scalar arguments, returns and rebroadcasts,
+including signalling NaNs without floating-point exceptions.
+Composed arithmetic checks that extracting
+or inserting a lane preserves a still-live source rack and uniform argument.
+Replacement literals and values extracted from another lane agree bit for bit
+with the C oracle. One- and two-rack shuffles compare reverse, rotate, repeat,
+identity, interleave and mixed selections against independent index arithmetic,
+including moves across AVX register subdivisions. Composed expressions check
+both still-live inputs and a shuffle whose two arguments share a register.
+Malformed sources check the selected profile's index and width diagnostics.
+Independent assembled objects require authorization for permutations and
+literal index loads, while a rack store remains rejected even with that
+authorization. Native stream sources check refusal of lane transfers whose
+partial-rack participation is not yet defined.
+
+The same C oracle checks every possible float comparison mask at each
+physical width. `all`, `any` and `bitmask` agree with independently assembled
+scalar lane patterns, including inverted and composed masks. Quiet NaNs and
+signed zeros stay gaps without floating-point exceptions. Independently
+assembled verifier fixtures require the exact scalar result transfer at
+the terminal return, and reject wrong registers, wrong lanes, missing or
+intermediate transfers, and scalar arithmetic inside the kernel.
 
 The shared absolute-value oracle supplies explicit binary32 input and output
 bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.

@@ -15,7 +15,8 @@ type instruction =
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Mask_const of { dst : vreg; value : bool; provenance : provenance }
   | Broadcast_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
-  | Insert_f32_prefix of { dst : vreg; previous : vreg; prefix : vreg; lane : f32_lane; provenance : provenance }
+  | Insert_f32 of { dst : vreg; previous : vreg; inserted : vreg; lane : f32_lane; provenance : provenance }
+  | Reduce_mask of { dst : vreg; source : vreg; operation : Native_ir.mask_reduction; provenance : provenance }
   | Fadd of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fsub of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fmul of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -58,6 +59,7 @@ type func = {
   parameters : parameter list;
   instructions : instruction list;
   result : vreg option;
+  result_type : Native_ir.typ option;
   value_locations : (vreg * Native_ir.source_location) list;
 }
 
@@ -67,7 +69,8 @@ let def = function
   | Uniform_f32 { dst; _ }
   | Mask_const { dst; _ }
   | Broadcast_f32 { dst; _ }
-  | Insert_f32_prefix { dst; _ }
+  | Insert_f32 { dst; _ }
+  | Reduce_mask { dst; _ }
   | Fadd { dst; _ }
   | Fsub { dst; _ }
   | Fmul { dst; _ }
@@ -87,7 +90,8 @@ let def = function
 let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
   | Broadcast_f32 { source; _ } -> [ source ]
-  | Insert_f32_prefix { previous; prefix; _ } -> [ previous; prefix ]
+  | Reduce_mask { source; _ } -> [ source ]
+  | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
   | Fadd { left; right; _ }
   | Fsub { left; right; _ }
   | Fmul { left; right; _ }
@@ -107,7 +111,8 @@ let provenance = function
   | Uniform_f32 { provenance; _ }
   | Mask_const { provenance; _ }
   | Broadcast_f32 { provenance; _ }
-  | Insert_f32_prefix { provenance; _ }
+  | Insert_f32 { provenance; _ }
+  | Reduce_mask { provenance; _ }
   | Fadd { provenance; _ }
   | Fsub { provenance; _ }
   | Fmul { provenance; _ }
@@ -131,7 +136,8 @@ let instruction_name = function
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"
   | Broadcast_f32 _ -> "dup.lane.f32"
-  | Insert_f32_prefix _ -> "insert.prefix.f32"
+  | Insert_f32 _ -> "insert.f32"
+  | Reduce_mask _ -> "reduce.mask"
   | Fadd _ -> "fadd"
   | Fsub _ -> "fsub"
   | Fmul _ -> "fmul"

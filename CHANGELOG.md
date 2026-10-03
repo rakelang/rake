@@ -7,6 +7,29 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Float comparison masks support `all`, `any` and `bitmask` on all four
+  physical profiles. Full-width bitwise reductions use one checked temporary
+  vector register, then transfer the completed Boolean or bitset through the
+  scalar C return ABI. Native slow callers can receive `bool` and `u32`
+  results from uniform-`f32` kernels. Independent C checks every lane-mask
+  pattern and quiet-NaN gaps. Final-object fixtures reject intermediate or
+  incorrect scalar transfers and scalar arithmetic inside a kernel.
+
+- Static `f32s` shuffles compile on all four physical profiles, selecting
+  lanes from one or two racks across their full width. Register-only
+  sequences preserve exact lane bits, with scratch registers included in
+  the no-spill allocation check. Independent C checks permutations, repeated
+  indices, signalling NaNs and still-live inputs. Final-object fixtures
+  reject unselected permutations and memory stores. Native stream shuffles
+  remain work in progress pending their partial-rack contract.
+
+- Literal-index `f32s` insertion compiles on all four physical profiles.
+  It replaces one lane's bits from a uniform argument, literal or extracted
+  value, preserving every other lane. The scan pipeline shares its insertion
+  sequence. Independent C checks the mixed scalar/vector ABI, exact bits,
+  signalling NaNs and preservation of still-live inputs. Native streams still
+  reject extraction and insertion pending their tail participation contract.
+
 - Literal-index `f32s` extraction compiles on SSE2, AVX2, AVX-512F and NEON.
   The index bounds follow the selected profile's four, eight or sixteen lanes.
   Full-width vector transfers preserve the selected bits and return through

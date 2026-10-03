@@ -87,8 +87,8 @@ let compile_body ~profile program run traverse uniforms output ~tail =
      for tails. Do not accept them through expression expansion. *)
   if Native_backend.cross_lane_function_names allocated <> []
       || List.exists (fun (instruction : Native_ir.instruction) ->
-          match instruction.op with Native_ir.Extract _ -> true | _ -> false) func.body.instructions then
-    reject run.run_loc "native stream reductions, scans and extractions are work in progress";
+          match instruction.op with Native_ir.Extract _ | Native_ir.Insert _ | Native_ir.Shuffle _ -> true | _ -> false) func.body.instructions then
+    reject run.run_loc "native stream reductions, scans, extractions, insertions and shuffles are work in progress";
   allocated, !columns
 
 let run_traversal (run : run) =
@@ -255,7 +255,7 @@ let emit_x86_run ~profile program buffer (run : run) =
      Rewrite its private label prefix once, including their references. *)
   List.iter (fun (constant, constant_label) ->
     Printf.bprintf buffer ".p2align %d\n%s:\n" alignment constant_label;
-    let bits = match constant with X86_simd_asm.Splat_f32 b -> [ b ] | Vector_f32 bs -> bs in
+    let bits = match constant with X86_simd_asm.Splat_f32 b -> [ b ] | Vector_bits bs -> bs in
     List.iter (fun bits -> Printf.bprintf buffer "    .long 0x%08lx\n" bits) bits) pool.entries;
   if not avx512 then (
     Printf.bprintf buffer ".p2align %d\n%s:\n" alignment (label "masks");
@@ -339,7 +339,7 @@ let emit_neon_run program buffer (run : run) =
      extent, with identical alignment in isolated and mixed objects. *)
   List.iter (fun (bits, constant_label) ->
     Printf.bprintf buffer ".p2align 4\n%s:\n" constant_label;
-    for _ = 0 to 3 do Printf.bprintf buffer "    .long 0x%08lx\n" bits done) pool.entries;
+    List.iter (fun bits -> Printf.bprintf buffer "    .long 0x%08lx\n" bits) bits) pool.entries;
   Printf.bprintf buffer ".p2align 4\n%s:\n" (label "masks");
   for active = 0 to 3 do
     for lane = 0 to 3 do

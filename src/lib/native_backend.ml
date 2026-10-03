@@ -201,8 +201,11 @@ let cross_lane_function_names = function
               (fun (instruction : X86_simd_regalloc.instruction) ->
                 match instruction.operation with
                 | X86_simd_regalloc.Reduce_f32 _
+                | X86_simd_regalloc.Reduce_mask _
                 | X86_simd_regalloc.Scan_f32 _
-                | X86_simd_regalloc.Extract_f32 _ -> true
+                | X86_simd_regalloc.Extract_f32 _
+                | X86_simd_regalloc.Insert_f32 _
+                | X86_simd_regalloc.Shuffle_f32 _ -> true
                 | _ -> false)
               func.instructions
           then Some func.name
@@ -213,9 +216,20 @@ let cross_lane_function_names = function
         if List.exists (fun (instruction : Aarch64_neon_regalloc.instruction) ->
           match instruction.operation with
           | Aarch64_neon_regalloc.Broadcast_f32 { lane; _ } -> lane <> Aarch64_neon_mir.Lane0
-          | Aarch64_neon_regalloc.Insert_f32_prefix _ -> true
+          | Aarch64_neon_regalloc.Insert_f32 _ | Aarch64_neon_regalloc.Reduce_mask _ -> true
           | _ -> false) func.instructions
         then Some func.name else None) allocated
+  | Wasm _ -> []
+
+let integer_result_function_names =
+  let is_integer = function
+    | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32)) -> true
+    | _ -> false in
+  function
+  | X86 (_, allocated) -> List.filter_map (fun (func : X86_simd_regalloc.func) ->
+      if is_integer func.result_type then Some func.name else None) allocated
+  | Neon allocated -> List.filter_map (fun (func : Aarch64_neon_regalloc.func) ->
+      if is_integer func.result_type then Some func.name else None) allocated
   | Wasm _ -> []
 
 let verify_allocated_object ~source ~(config : Target.config) allocated object_bytes =
@@ -230,6 +244,7 @@ let verify_allocated_object ~source ~(config : Target.config) allocated object_b
     match
       Native_verify.verify ~profile:config.profile ~source ~functions
         ~cross_lane_functions
+        ~integer_result_functions:(integer_result_function_names allocated)
         ~expected_fma_count:(fma_count allocated) object_bytes
     with
     | Ok () -> Ok object_bytes

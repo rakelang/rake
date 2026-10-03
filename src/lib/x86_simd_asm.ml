@@ -13,7 +13,7 @@ let format_error error =
   Printf.sprintf "%s: %s: %s" (Native_ir.format_source_location error.loc)
     error.function_name error.message
 
-type constant = Splat_f32 of int32 | Vector_f32 of int32 list
+type constant = Splat_f32 of int32 | Vector_bits of int32 list
 
 type pool = {
   mutable entries : (constant * string) list;
@@ -39,6 +39,9 @@ let registers = function
   | A.Uniform_mask { dst; _ } -> [ dst ]
   | A.Broadcastss { dst; source } -> [ dst; source ]
   | A.Extract_f32 { dst; source; _ } -> [ dst; source ]
+  | A.Insert_f32 { dst; previous; inserted; broadcast; _ } -> [ dst; previous; inserted; broadcast ]
+  | A.Shuffle_f32 { dst; racks; scratch; _ } -> dst :: racks @ scratch
+  | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
   | A.Reduce_f32 { dst; source; scratch; _ }
   | A.Scan_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Round_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
@@ -92,8 +95,14 @@ let validate_function profile (func : A.func) =
           | [] -> Ok ()
           | ({ A.operation; loc; _ } : A.instruction) :: rest -> (
               match operation with
-              | A.Extract_f32 { lane; _ } when M.f32_lane_index lane >= (Target.info profile).f32_lanes ->
-                  Error { function_name = func.name; loc; message = "extraction lane is outside the selected profile's rack" }
+              | A.Extract_f32 { lane; _ } | A.Insert_f32 { lane; _ }
+                  when M.f32_lane_index lane >= (Target.info profile).f32_lanes ->
+                  Error { function_name = func.name; loc; message = "lane transfer is outside the selected profile's rack" }
+              | A.Shuffle_f32 { racks; indices; _ }
+                  when let lanes = (Target.info profile).f32_lanes in
+                    List.length indices <> lanes || List.length racks < 1 || List.length racks > 2
+                    || List.exists (fun lane -> lane < 0 || lane >= lanes * List.length racks) indices ->
+                  Error { function_name = func.name; loc; message = "shuffle is outside the selected profile's rack" }
               | _ -> match List.find_opt (fun register -> register < 0 || register >= Target.x86_register_count profile) (registers operation) with
               | None -> check rest
               | Some register ->
@@ -138,7 +147,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
   let load_splat dst bits =
     if bits = Int32.zero then logical "xorps" dst dst dst
     else if sse then (
-      let label = intern pool (Vector_f32 (List.init lanes (fun _ -> bits))) in
+      let label = intern pool (Vector_bits (List.init lanes (fun _ -> bits))) in
       emit "movaps %s, %s PTR [rip + %s]" (ymm dst) memory label)
     else (
       let label = intern pool (Splat_f32 bits) in
@@ -213,6 +222,22 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
     | `Add -> binary "addps" dst dst right
     | `Mul -> binary "mulps" dst dst right
   in
+  let insert_broadcast_lane dst previous inserted lane =
+    if sse then (
+      let mask = intern pool (Vector_bits (List.init lanes (fun index -> if index = lane then -1l else 0l))) in
+      move dst previous;
+      move 15 inserted;
+      emit "xorps xmm15, %s" (ymm dst);
+      emit "andps xmm15, XMMWORD PTR [rip + %s]" mask;
+      emit "xorps %s, xmm15" (ymm dst))
+    else if avx512 then (
+      move dst previous;
+      emit "kxnorw k1, k1, k1";
+      emit "kshiftlw k1, k1, 15";
+      emit "kshiftrw k1, k1, %d" (15 - lane);
+      emit "vmovaps %s{k1}, %s" (ymm dst) (ymm inserted))
+    else emit "vblendps %s, %s, %s, 0x%02x" (ymm dst) (ymm previous) (ymm inserted) (1 lsl lane)
+  in
   let strict_combine operation prefix lane temporaries =
     match temporaries with
     | [ comparison; candidate; zero; left_zero; right_zero ] ->
@@ -249,6 +274,70 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       if sse then (move dst source; emit "shufps %s, %s, 0x00" (ymm dst) (ymm dst))
       else emit "vbroadcastss %s, xmm%d" (ymm dst) source
   | A.Extract_f32 { dst; source; lane } -> splat_lane dst source (M.f32_lane_index lane)
+  | A.Insert_f32 { dst; previous; inserted; lane; broadcast } ->
+      if sse then (move broadcast inserted; emit "shufps %s, %s, 0x00" (ymm broadcast) (ymm broadcast))
+      else emit "vbroadcastss %s, xmm%d" (ymm broadcast) inserted;
+      insert_broadcast_lane dst previous broadcast (M.f32_lane_index lane)
+  | A.Shuffle_f32 { dst; racks; indices; scratch } ->
+      let mask_bits = List.map (fun index -> if index >= lanes then -1l else 0l) indices in
+      let load_indices register =
+        let label = intern pool (Vector_bits (List.map (fun index -> Int32.of_int (index mod lanes)) indices)) in
+        emit "vmovaps %s, %s PTR [rip + %s]" (ymm register) memory label in
+      let permute destination source =
+        if sse then (
+          let immediate = List.mapi (fun lane input -> (input mod lanes) lsl (2 * lane)) indices
+            |> List.fold_left (lor) 0 in
+          move destination source;
+          emit "shufps %s, %s, 0x%02x" (ymm destination) (ymm destination) immediate)
+        else emit "vpermps %s, %s, %s" (ymm destination) (ymm (List.hd scratch)) (ymm source) in
+      if not sse then load_indices (List.hd scratch);
+      permute dst (List.hd racks);
+      (match racks with
+      | [ _ ] -> ()
+      | [ _; right ] ->
+          let other = if sse then List.hd scratch else List.nth scratch 1 in
+          permute other right;
+          if sse then (
+            let mask = intern pool (Vector_bits mask_bits) in
+            move 15 other;
+            emit "xorps xmm15, %s" (ymm dst);
+            emit "andps xmm15, XMMWORD PTR [rip + %s]" mask;
+            emit "xorps %s, xmm15" (ymm dst))
+          else if avx512 then (
+            let mask = intern pool (Vector_bits mask_bits) in
+            let mask_register = List.hd scratch in
+            emit "vmovaps %s, ZMMWORD PTR [rip + %s]" (ymm mask_register) mask;
+            blend dst mask_register other dst)
+          else (
+            let mask = List.mapi (fun lane index -> if index >= lanes then 1 lsl lane else 0) indices
+              |> List.fold_left (lor) 0 in
+            emit "vblendps %s, %s, %s, 0x%02x" (ymm dst) (ymm dst) (ymm other) mask)
+      | _ -> invalid_arg "float shuffle requires one or two racks")
+  | A.Reduce_mask { dst; source; operation; scratch } ->
+      move dst source;
+      if operation = Native_ir.Mask_bits then (
+        let weights = intern pool (Vector_bits (List.init lanes (fun lane -> Int32.shift_left 1l lane))) in
+        emit "%smovaps %s, %s PTR [rip + %s]" (if sse then "" else "v") (ymm scratch) memory weights;
+        logical "andps" dst dst scratch);
+      let combine () = logical
+        (if operation = Native_ir.Mask_all then "andps" else "orps") dst dst scratch in
+      (* Associative bit operations can use a butterfly reduction. Every
+         stage still operates on the full profile-width vector register. *)
+      if avx512 then List.iter (fun immediate ->
+        emit "vshuff32x4 %s, %s, %s, 0x%02x" (ymm scratch) (ymm dst) (ymm dst) immediate;
+        combine ()) [ 0x4e; 0xb1 ]
+      else if not sse then (
+        emit "vperm2f128 %s, %s, %s, 0x01" (ymm scratch) (ymm dst) (ymm dst);
+        combine ());
+      List.iter (fun immediate ->
+        if sse then (
+          move scratch dst;
+          emit "shufps %s, %s, 0x%02x" (ymm scratch) (ymm scratch) immediate)
+        else emit "vpermilps %s, %s, 0x%02x" (ymm scratch) (ymm dst) immediate;
+        combine ()) [ 0x4e; 0xb1 ];
+      if operation <> Native_ir.Mask_bits then (
+        load_splat scratch 1l;
+        logical "andps" dst dst scratch)
   | A.Reduce_f32 { dst; source; operation; scratch } ->
       splat_lane dst source 0;
       let lane_register, strict_temporaries =
@@ -281,18 +370,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
         | Native_ir.Scan_mul -> simple_combine `Mul prefix lane_register
         | Native_ir.Scan_min -> strict_combine `Min prefix lane_register strict_temporaries
         | Native_ir.Scan_max -> strict_combine `Max prefix lane_register strict_temporaries);
-        if sse then (
-          let mask = intern pool (Vector_f32 (List.init lanes (fun index -> if index = lane then -1l else 0l))) in
-          move 15 prefix;
-          emit "xorps xmm15, %s" (ymm dst);
-          emit "andps xmm15, XMMWORD PTR [rip + %s]" mask;
-          emit "xorps %s, xmm15" (ymm dst))
-        else if avx512 then (
-          emit "kxnorw k1, k1, k1";
-          emit "kshiftlw k1, k1, 15";
-          emit "kshiftrw k1, k1, %d" (15 - lane);
-          emit "vmovaps %s{k1}, %s" (ymm dst) (ymm prefix))
-        else emit "vblendps %s, %s, %s, 0x%02x" (ymm dst) (ymm dst) (ymm prefix) (1 lsl lane)
+        insert_broadcast_lane dst dst prefix lane
       done
   | A.Addps { dst; left; right } ->
       binary "addps" dst left right
@@ -308,11 +386,11 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
         dst right scratch
   | A.Sqrtps { dst; source } -> emit "%ssqrtps %s, %s" (if sse then "" else "v") (ymm dst) (ymm source)
   | A.Negps { dst; source } ->
-      let sign = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.min_int))) in
+      let sign = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.min_int))) in
       if sse then (move dst source; emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) sign)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpxord" else "vxorps") (ymm dst) (ymm source) memory sign
   | A.Absps { dst; source } ->
-      let magnitude = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.max_int))) in
+      let magnitude = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.max_int))) in
       if sse then (move dst source; emit "andps %s, XMMWORD PTR [rip + %s]" (ymm dst) magnitude)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpandd" else "vandps") (ymm dst) (ymm source) memory magnitude
   | A.Round_f32 { dst; source; mode; scratch } ->
@@ -371,7 +449,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
   | A.Mask_xorps { dst; left; right } ->
       logical "xorps" dst left right
   | A.Mask_notps { dst; source } ->
-      let ones = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.minus_one))) in
+      let ones = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.minus_one))) in
       if sse then (move dst source; emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) ones)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpxord" else "vxorps") (ymm dst) (ymm source) memory ones
   | A.Moveaps { dst; source } -> move dst source
@@ -380,6 +458,10 @@ let emit_function profile pool buffer (func : A.func) =
   Printf.bprintf buffer ".p2align 4\n.globl %s\n.hidden %s\n.type %s, @function\n%s:\n"
     func.name func.name func.name func.name;
   List.iter (emit_instruction profile pool buffer) func.instructions;
+  (match func.result_type with
+  | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32)) ->
+      Printf.bprintf buffer "    %smovd eax, xmm0\n" (if profile = Target.X86_sse2 then "" else "v")
+  | _ -> ());
   Buffer.add_string buffer "    ret\n";
   Printf.bprintf buffer ".size %s, .-%s\n\n" func.name func.name
 
@@ -388,7 +470,7 @@ let emit_constant buffer (constant, label) =
   | Splat_f32 bits ->
       Buffer.add_string buffer ".section .rodata.cst4,\"aM\",@progbits,4\n.p2align 2\n";
       Printf.bprintf buffer "%s:\n    .long 0x%08lx\n" label bits
-  | Vector_f32 bits ->
+  | Vector_bits bits ->
       let bytes = List.length bits * 4 in
       Printf.bprintf buffer ".section .rodata.cst%d,\"aM\",@progbits,%d\n.p2align %d\n"
         bytes bytes (if bytes = 16 then 4 else if bytes = 32 then 5 else 6);

@@ -41,6 +41,8 @@ type reduction =
   | Reduce_add | Reduce_mul | Reduce_min | Reduce_max | Reduce_and | Reduce_or
   | Reduce_bitmask  (** one bit per mask lane, lane zero in bit zero *)
 
+type mask_reduction = Mask_all | Mask_any | Mask_bits
+
 type scan = Scan_add | Scan_mul | Scan_min | Scan_max
 
 type call_effect = Pure | Read | Write | Read_write

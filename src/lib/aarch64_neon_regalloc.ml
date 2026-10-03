@@ -14,7 +14,13 @@ type operation =
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Mask_const of { dst : vector_register; value : bool }
   | Broadcast_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
-  | Insert_f32_prefix of { dst : vector_register; prefix : vector_register; lane : M.f32_lane }
+  | Insert_f32 of { dst : vector_register; inserted : vector_register; lane : M.f32_lane }
+  | Reduce_mask of {
+      dst : vector_register;
+      source : vector_register;
+      operation : Native_ir.mask_reduction;
+      scratch : vector_register;
+    }
   | Fadd of { dst : vector_register; left : vector_register; right : vector_register }
   | Fsub of { dst : vector_register; left : vector_register; right : vector_register }
   | Fmul of { dst : vector_register; left : vector_register; right : vector_register }
@@ -66,6 +72,7 @@ type func = {
   loc : Native_ir.source_location;
   instructions : instruction list;
   result : vector_register option;
+  result_type : Native_ir.typ option;
   maximum_live : int;
 }
 
@@ -160,8 +167,8 @@ let allocate_function ?parameter_assignment func =
     let emit loc provenance operation =
       emitted_rev := { operation; loc; provenance } :: !emitted_rev
     in
-    let fail_pressure instruction =
-      let required = I.cardinal !allocation + 1 in
+    let fail_pressure ?(additional = 1) instruction =
+      let required = I.cardinal !allocation + additional in
       let provenance = M.provenance instruction in
       let fused = provenance.fused <> None || live_is_fused provenances !allocation in
       let loc = M.value_location func (M.def instruction) in
@@ -225,6 +232,7 @@ let allocate_function ?parameter_assignment func =
               loc = func.loc;
               instructions = List.rev emitted_rev;
               result;
+              result_type = func.result_type;
               maximum_live = !maximum_live;
             }
       | instruction :: rest ->
@@ -236,7 +244,7 @@ let allocate_function ?parameter_assignment func =
             match instruction with
             | M.Uniform_f32 _ | M.Mask_const _ -> []
             | M.Broadcast_f32 { source; _ } -> [ source ]
-            | M.Insert_f32_prefix { previous; _ } -> [ previous ]
+            | M.Insert_f32 { previous; _ } -> [ previous ]
             | M.Fma { addend; _ } -> [ addend ]
             | M.Select { mask; if_false; if_true; _ } -> [ mask; if_false; if_true ]
             | _ -> operands
@@ -245,15 +253,27 @@ let allocate_function ?parameter_assignment func =
           | Error _ as error -> error
           | Ok (dst, reused) ->
               let p = physical in
+              let scratch_count = match instruction with M.Reduce_mask _ -> 1 | _ -> 0 in
+              let occupied = occupied !allocation in
+              let scratch = List.filter (fun register ->
+                register <> dst && not (S.mem register occupied)) allocatable_registers
+                |> List.filteri (fun index _ -> index < scratch_count) in
+              if List.length scratch <> scratch_count then
+                fail_pressure ~additional:(scratch_count + if reused = None then 1 else 0) instruction
+              else (
+              maximum_live := max !maximum_live
+                (I.cardinal !allocation + (if reused = None then 1 else 0) + scratch_count);
               (match instruction with
               | M.Uniform_f32 { bits; _ } -> emit loc provenance (Uniform_f32 { dst; bits })
               | M.Mask_const { value; _ } -> emit loc provenance (Mask_const { dst; value })
               | M.Broadcast_f32 { source; lane; _ } ->
                   emit loc provenance (Broadcast_f32 { dst; source = p source; lane })
-              | M.Insert_f32_prefix { previous; prefix; lane; _ } ->
+              | M.Insert_f32 { previous; inserted; lane; _ } ->
                   if reused <> Some previous then
                     emit loc provenance (Move { dst; source = p previous });
-                  emit loc provenance (Insert_f32_prefix { dst; prefix = p prefix; lane })
+                  emit loc provenance (Insert_f32 { dst; inserted = p inserted; lane })
+              | M.Reduce_mask { source; operation; _ } ->
+                  emit loc provenance (Reduce_mask { dst; source = p source; operation; scratch = List.hd scratch })
               | M.Fadd { left; right; _ } -> emit loc provenance (Fadd { dst; left = p left; right = p right })
               | M.Fsub { left; right; _ } -> emit loc provenance (Fsub { dst; left = p left; right = p right })
               | M.Fmul { left; right; _ } -> emit loc provenance (Fmul { dst; left = p left; right = p right })
@@ -290,7 +310,7 @@ let allocate_function ?parameter_assignment func =
                     emit loc provenance
                       (Bit { dst_false = dst; if_true = p if_true; mask = p mask })));
               finish_instruction index instruction dst reused;
-              allocate (index + 1) rest)
+              allocate (index + 1) rest))
     in
     allocate 0 func.instructions
 

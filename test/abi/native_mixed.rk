@@ -7,9 +7,24 @@ scratch native_scale(values: f32s, <factor: f32>, offsets: f32s) -> f32s:
   | shifted <| scaled + offsets
   shifted
 
+scratch native_all_positive(<value: f32>) -> bool:
+  all(<value> > <0.0>)
+
+scratch native_any_positive(<value: f32>) -> bool:
+  any(<value> > <0.0>)
+
+scratch native_positive_bits(<value: f32>) -> u32:
+  bitmask(<value> > <0.0>)
+
 slow main() -> i32:
   let original: f32 = -0.0
   let carried = native_identity(<original>)
   if bitcast(u32, carried) != bitcast(u32, original):
     return 1
+  if not native_all_positive(<1.0>) or native_all_positive(<-1.0>):
+    return 2
+  if not native_any_positive(<1.0>) or native_any_positive(<-1.0>):
+    return 2
+  if native_positive_bits(<-1.0>) != 0 or bit_and(native_positive_bits(<1.0>), 15) != 15:
+    return 2
   return i32(native_identity(<3.5>))

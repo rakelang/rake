@@ -12,6 +12,7 @@ rather than operators, so they are easy to find in code and to read aloud.
 | `maximum(x)` | `f32s` | `f32` | strict maximum |
 | `all(m)` | mask | `bool` | and |
 | `any(m)` | mask | `bool` | or |
+| `bitmask(m)` | mask | `u32` | one bit per lane |
 | `scan_sum(x)` | `f32s` | `f32s` | binary32 addition |
 | `scan_product(x)` | `f32s` | `f32s` | binary32 multiplication |
 | `scan_minimum(x)` | `f32s` | `f32s` | strict minimum |
@@ -48,7 +49,7 @@ slow main() -> i32:
 
 ## Lane order
 
-For a rack `x` of `N` lanes:
+For an arithmetic rack `x` of `N` lanes:
 
 ```text
 p[0] = x[0]
@@ -60,6 +61,10 @@ every scan is inclusive. The fold always runs from lane 0 upwards. No
 implementation may use a tree, reassociate, contract, or keep a wider
 intermediate, so each addition and multiplication rounds to binary32 in turn.
 A rack always has lanes, so there is no empty case and no identity value.
+
+Mask reductions use associative bitwise operations, so their implementation
+may combine lane groups in a tree. `all` and `any` give the same truth value
+in any order. `bitmask` preserves each lane's bit position.
 
 ## Strict minimum and maximum
 
@@ -82,18 +87,17 @@ under a mask. They are rejected in a `through` block and in a traversal,
 where the tail's mask would apply. They are also outside fused bindings: a
 reduction leaves the rack, and a scan orders its lanes.
 
-| Profile | Reductions and scans | `all`, `any` |
+| Profile | Reductions and scans | `all`, `any`, `bitmask` on float masks |
 | --- | :-: | :-: |
-| `x86-sse2` | yes | WIP* |
-| `x86-avx2` | yes | WIP* |
-| `x86-avx512` | yes | WIP* |
-| `aarch64-neon` | yes | WIP* |
+| `x86-sse2` | yes | yes |
+| `x86-avx2` | yes | yes |
+| `x86-avx512` | yes | yes |
+| `aarch64-neon` | yes | yes |
 | `wasm-simd128` | yes | yes |
 
-*WIP: work in progress. The compiler rejects these operations on these profiles.*
-
 NEON reductions and scans are available in the development compiler after
-0.6.0-beta. The tagged compiler still rejects them.
+0.6.0-beta. Native mask reductions are also development features after that
+tag. The tagged compiler still rejects them.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -114,6 +118,15 @@ For strict extrema, `fmin` or `fmax` supplies the numerical result, followed
 by a quiet comparison and selection of `0x7fc00000` if it is NaN.
 The allocator accounts for these intermediate registers, and the object
 verifier permits their lane transfers only in selected cross-lane functions.
+
+Native mask reductions use two packed permutation-and-combine stages on
+SSE2 and NEON, three on AVX2, or four on AVX-512F. `all` combines with AND,
+and `any` with OR, then converts the result to zero or one with a vector
+mask. `bitmask` first assigns each true lane its bit weight, then combines
+the weights with OR. One temporary vector register is included in the
+no-spill allocation check. Only the completed result crosses into the C
+integer return register. Independent C checks every possible lane mask at
+each physical width, including complement and composed masks.
 
 On `wasm-simd128`, each of a reduction's three steps moves lane `i`
 to lane 0 with one `i8x16.shuffle` and combines it with the running value. A

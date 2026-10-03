@@ -102,13 +102,16 @@ let validate_deferred_constants function_name constants uses =
       | Some operations
         when operations <> []
              && List.for_all
-                  (function N.Broadcast operand -> operand = id | _ -> false)
+                  (function
+                    | N.Broadcast operand -> operand = id
+                    | N.Insert { inserted; _ } -> inserted = id
+                    | _ -> false)
                   operations ->
           ()
       | _ ->
           fail function_name
             (Printf.sprintf
-               "scalar f32 value %%%d is only legal as the direct input to rack.broadcast; scalarization is forbidden"
+               "scalar f32 value %%%d is only legal as the direct input to rack.broadcast or rack.insert; scalarization is forbidden"
                id))
     constants
 
@@ -141,7 +144,7 @@ let select_function (func : N.func) =
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
-    | None | Some (N.Rack N.F32) | Some (N.Scalar N.F32) | Some N.Mask -> ()
+    | None | Some (N.Rack N.F32) | Some (N.Scalar (N.F32 | N.I1 | N.I32)) | Some N.Mask -> ()
     | Some typ ->
         fail func.name
           ("unsupported result type " ^ N.string_of_typ typ
@@ -185,7 +188,7 @@ let select_function (func : N.func) =
             let accumulated = if not scan then previous else if rest = [] then dst else fresh loc in
             [ M.Broadcast_f32 { dst = lane; source; lane = lane_index; provenance } ]
             @ combine prefix lane combined
-            @ (if scan then [ M.Insert_f32_prefix { dst = accumulated; previous; prefix = combined; lane = lane_index; provenance } ] else [])
+            @ (if scan then [ M.Insert_f32 { dst = accumulated; previous; inserted = combined; lane = lane_index; provenance } ] else [])
             @ steps combined accumulated rest
       in
       [ M.Broadcast_f32 { dst = initial; source; lane = M.Lane0; provenance } ]
@@ -207,14 +210,19 @@ let select_function (func : N.func) =
               ("operation requires a mask result, found " ^ N.string_of_typ typ)
       in
       match instruction.op with
-      | N.Const (N.Float32_bits _) -> []
+      | N.Const (N.Float32_bits bits) ->
+          let dst, _ = result func.name index instruction in
+          let uses = Option.value ~default:[] (N.IntMap.find_opt dst constant_uses) in
+          if List.exists (function N.Insert { inserted; _ } -> inserted = dst | _ -> false) uses then
+            [ M.Uniform_f32 { dst; bits; provenance } ]
+          else []
       | N.Const (N.Int32 _) ->
           let id, _ = result func.name index instruction in
           (match N.IntMap.find_opt id constant_uses with
           | Some operations when operations <> []
-              && List.for_all (function N.Extract { lane; _ } -> lane = id | _ -> false) operations -> []
+              && List.for_all (function N.Extract { lane; _ } | N.Insert { lane; _ } -> lane = id | _ -> false) operations -> []
           | _ -> fail func.name ~instruction:index
-              "an i32 constant is only legal as a static extraction index in this vector selector")
+              "an i32 constant is only legal as a static extraction or insertion index in this vector selector")
       | N.Const literal ->
           fail func.name ~instruction:index
             ("scalar constant " ^ N.string_of_literal literal
@@ -360,6 +368,13 @@ let select_function (func : N.func) =
           let dst, _ = result func.name index instruction in
           ensure_operand_f32 func.name environment index source;
           fold_rack ~scan:false operation ~dst ~source ~loc:instruction.loc ~provenance
+      | N.Reduce (((N.Reduce_and | N.Reduce_or | N.Reduce_bitmask) as operation), source) ->
+          let dst, _ = result func.name index instruction in
+          ensure_mask func.name environment index source;
+          let operation = match operation with
+            | N.Reduce_and -> N.Mask_all | N.Reduce_or -> N.Mask_any
+            | N.Reduce_bitmask -> N.Mask_bits | _ -> assert false in
+          [ M.Reduce_mask { dst; source; operation; provenance } ]
       | N.Scan (operation, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
@@ -390,9 +405,42 @@ let select_function (func : N.func) =
             | _ -> fail func.name ~instruction:index
                 "extract requires a literal lane within the four-lane NEON rack" in
           [ M.Broadcast_f32 { dst; source = rack; lane; provenance } ]
-      | N.Shuffle _ | N.Reduce _ | N.Insert _ ->
-          fail func.name ~instruction:index
-            "cross-lane operation is unavailable in the initial NEON selection contract"
+      | N.Insert { rack; inserted; lane } ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index rack;
+          if find_type func.name environment index inserted <> N.Scalar N.F32 then
+            fail func.name ~instruction:index "f32 insertion requires scalar<f32>";
+          let lane = match N.IntMap.find_opt lane integer_constants with
+            | Some 0l -> M.Lane0 | Some 1l -> M.Lane1
+            | Some 2l -> M.Lane2 | Some 3l -> M.Lane3
+            | _ -> fail func.name ~instruction:index
+                "insert requires a literal lane within the four-lane NEON rack" in
+          [ M.Insert_f32 { dst; previous = rack; inserted; lane; provenance } ]
+      | N.Shuffle { racks; indices } ->
+          let dst = rack_result () in
+          List.iter (ensure_operand_f32 func.name environment index) racks;
+          if List.length indices <> 4
+              || List.exists (fun lane -> lane < 0 || lane >= 4 * List.length racks) indices then
+            fail func.name ~instruction:index "shuffle indices must cover four lanes and stay within its inputs";
+          let selected lane =
+            let input = List.nth indices lane in
+            let element = match input mod 4 with
+              | 0 -> M.Lane0 | 1 -> M.Lane1 | 2 -> M.Lane2 | _ -> M.Lane3 in
+            List.nth racks (input / 4), element in
+          let initial = fresh instruction.loc in
+          let source, lane = selected 0 in
+          let rec steps previous = function
+            | [] -> []
+            | output_lane :: rest ->
+                let index = M.f32_lane_index output_lane in
+                let source, lane = selected index in
+                let picked = fresh instruction.loc in
+                let accumulated = if rest = [] then dst else fresh instruction.loc in
+                [ M.Broadcast_f32 { dst = picked; source; lane; provenance };
+                  M.Insert_f32 { dst = accumulated; previous; inserted = picked; lane = output_lane; provenance } ]
+                @ steps accumulated rest in
+          [ M.Broadcast_f32 { dst = initial; source; lane; provenance } ]
+          @ steps initial [ M.Lane1; M.Lane2; M.Lane3 ]
       | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
@@ -415,6 +463,7 @@ let select_function (func : N.func) =
             func.parameters;
         instructions;
         result;
+        result_type = func.result;
         value_locations =
           List.rev_append !internal_locations
             (List.filter_map

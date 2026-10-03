@@ -1,4 +1,0 @@
-~~ Pure lane insertion is expression syntax, distinct from location binding.
-scratch replace_lane values <replacement> -> result:
-  let result = values@3 := <replacement>
-  result

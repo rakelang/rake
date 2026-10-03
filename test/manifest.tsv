@@ -42,7 +42,6 @@ test/reject/fused_reduction.rk	reject	x86-avx2	8	frontend	reject	Fused binding c
 examples/future/demo.rk	future	-	-	design	excluded	Uses unavailable single definitions
 examples/future/broadcasting.rk	future	-	-	design	excluded	Uses proposed angle-bracket literal syntax and implicit results
 examples/future/field_access.rk	future	-	-	design	excluded	Uses unavailable single definitions
-examples/future/lane_insertion.rk	future	-	-	design	excluded	Uses unavailable lane insertion
 examples/future/reductions.rk	future	-	-	design	excluded	Uses unavailable reductions and scans
 examples/future/rearrangements.rk	future	-	-	design	excluded	Uses unavailable static lane rearrangements
 test/program/math.rk	program	wasm-simd128	4	program	differential	-

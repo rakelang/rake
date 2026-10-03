@@ -13,7 +13,7 @@ let format_error error =
   Printf.sprintf "%s: %s: %s" (Native_ir.format_source_location error.loc)
     error.function_name error.message
 
-type pool = { mutable entries : (int32 * string) list; mutable next_label : int }
+type pool = { mutable entries : (int32 list * string) list; mutable next_label : int }
 let create_pool () = { entries = []; next_label = 0 }
 
 let intern pool bits =
@@ -34,7 +34,8 @@ let registers = function
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Mask_const { dst; _ } -> [ dst ]
   | A.Broadcast_f32 { dst; source; _ } -> [ dst; source ]
-  | A.Insert_f32_prefix { dst; prefix; _ } -> [ dst; prefix ]
+  | A.Insert_f32 { dst; inserted; _ } -> [ dst; inserted ]
+  | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
   | A.Fadd { dst; left; right }
   | A.Fsub { dst; left; right }
   | A.Fmul { dst; left; right }
@@ -109,14 +110,27 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
   | A.Uniform_f32 { dst; bits } ->
       if bits = Int32.zero then emit "movi %s, #0" (lanes_f32 dst)
       else
-        let label = intern pool bits in
+        let label = intern pool (List.init 4 (fun _ -> bits)) in
         emit "ldr %s, %s" (q dst) label
   | A.Mask_const { dst; value } ->
       emit "movi %s, #0x%02x" (lanes_bits dst) (if value then 0xff else 0)
   | A.Broadcast_f32 { dst; source; lane } ->
       emit "dup %s, %s.s[%d]" (lanes_f32 dst) (vector source) (M.f32_lane_index lane)
-  | A.Insert_f32_prefix { dst; prefix; lane } ->
-      emit "ins %s.s[%d], %s.s[0]" (vector dst) (M.f32_lane_index lane) (vector prefix)
+  | A.Insert_f32 { dst; inserted; lane } ->
+      emit "ins %s.s[%d], %s.s[0]" (vector dst) (M.f32_lane_index lane) (vector inserted)
+  | A.Reduce_mask { dst; source; operation; scratch } ->
+      if dst <> source then emit "mov %s, %s" (lanes_bits dst) (lanes_bits source);
+      if operation = Native_ir.Mask_bits then (
+        let weights = intern pool [ 1l; 2l; 4l; 8l ] in
+        emit "ldr %s, %s" (q scratch) weights;
+        emit "and %s, %s, %s" (lanes_bits dst) (lanes_bits dst) (lanes_bits scratch));
+      List.iter (fun bytes ->
+        emit "ext %s, %s, %s, #%d" (lanes_bits scratch) (lanes_bits dst) (lanes_bits dst) bytes;
+        emit "%s %s, %s, %s" (if operation = Native_ir.Mask_all then "and" else "orr")
+          (lanes_bits dst) (lanes_bits dst) (lanes_bits scratch)) [ 8; 4 ];
+      if operation <> Native_ir.Mask_bits then (
+        emit "movi %s, #1" (lanes_f32 scratch);
+        emit "and %s, %s, %s" (lanes_bits dst) (lanes_bits dst) (lanes_bits scratch))
   | A.Fadd { dst; left; right } ->
       emit "fadd %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fsub { dst; left; right } ->
@@ -168,6 +182,9 @@ let emit_function pool buffer (func : A.func) =
     ".p2align 4\n.globl %s\n.hidden %s\n.type %s, %%function\n%s:\n"
     func.name func.name func.name func.name;
   List.iter (emit_instruction pool buffer) func.instructions;
+  (match func.result_type with
+  | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32)) -> Buffer.add_string buffer "    umov w0, v0.s[0]\n"
+  | _ -> ());
   Buffer.add_string buffer "    ret\n";
   Printf.bprintf buffer ".size %s, .-%s\n\n" func.name func.name
 
@@ -175,9 +192,7 @@ let emit_constant buffer (bits, label) =
   Buffer.add_string buffer
     ".section .rodata.cst16,\"aM\",%progbits,16\n.p2align 4\n";
   Printf.bprintf buffer "%s:\n" label;
-  for _ = 0 to 3 do
-    Printf.bprintf buffer "    .long 0x%08lx\n" bits
-  done
+  List.iter (fun bits -> Printf.bprintf buffer "    .long 0x%08lx\n" bits) bits
 
 let emit (module_ : A.func list) =
   let rec validate = function

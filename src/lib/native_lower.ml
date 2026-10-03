@@ -645,8 +645,15 @@ let rec lower_expr state provenance (expr : expr) =
       in
       let* racks = lower_racks [] rack_exprs in
       (match racks with
-       | (_, (Ir.Rack _ as typ)) :: rest when List.for_all (fun (_, other) -> other = typ) rest ->
-           Ok (emit state expr.loc provenance typ
+       | (_, (Ir.Rack element as typ)) :: rest when List.for_all (fun (_, other) -> other = typ) rest ->
+           let lanes = (Target.info state.profile).f32_lanes * 4 / element_bytes element in
+           let available = lanes * List.length racks in
+           if List.length indices <> lanes then
+             errorf expr.loc "a shuffle needs %d indices on %s, got %d"
+               lanes (Target.profile_name state.profile) (List.length indices)
+           else if List.exists (fun index -> index < 0 || index >= available) indices then
+             errorf expr.loc "shuffle index is outside its %d input lanes" available
+           else Ok (emit state expr.loc provenance typ
                  (Ir.Shuffle { racks = List.map fst racks; indices }))
        | _ -> error expr.loc "shuffle requires one rack or two equal racks")
   | EShift _ -> error expr.loc "lane shifts are not supported by native scratch lowering"

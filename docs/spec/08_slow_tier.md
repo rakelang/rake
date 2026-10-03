@@ -23,7 +23,7 @@ runs remain work in progress.
 ### Native kernel calls
 
 On the development compiler, a native register kernel called from slow code
-takes uniform `f32` parameters and returns `f32`. Rake selects and allocates
+takes uniform `f32` parameters and returns `f32`, `bool` or `u32`. Rake selects and allocates
 the kernel's instructions. The generated C contains its opaque assembly,
 and the final object is checked against the selected profile. The platform C
 compiler lowers the slow caller and supplies the scalar calling convention.
@@ -42,6 +42,23 @@ This example preserves the value across the boundary and returns `3`. A
 kernel may also broadcast its uniforms and reduce a rack where the selected
 profile supports those operations. The reference interpreter uses the chosen
 profile's rack width when `--target` is supplied.
+
+Mask reductions can also return through this boundary:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch all_positive(<value: f32>) -> bool:
+  all(<value> > <0.0>)
+
+slow main() -> i32:
+  if all_positive(<3.5>):
+    return 1
+  return 0
+```
+
+The kernel broadcasts the scalar across its rack, compares all lanes, and
+returns one Boolean. The comparison and reduction remain vector work. Slow
+code receives C `bool` and can branch on it.
 
 ### Process arguments
 

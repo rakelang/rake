@@ -242,7 +242,7 @@ let allowed_avx2 = function
   | "vcmpunordps"
   | "vblendvps" | "vandps" | "vorps" | "vmovaps" | "ret" | "retq" ->
       true
-  | "vperm2f128" | "vpermilps" | "vblendps" | "vroundps" -> true
+  | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" | "vroundps" -> true
   | "vpxor" | "vpcmpeqd" -> true
   | _ -> false
 
@@ -267,7 +267,7 @@ let is_alignment_padding decoded =
   | _ -> false
 
 let cross_lane_mnemonic = function
-  | "vperm2f128" | "vpermilps" | "vblendps" -> true
+  | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" -> true
   | _ -> false
 
 let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
@@ -282,8 +282,10 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if
     contains operands "["
     && not
-         ((mnemonic = "vbroadcastss" || mnemonic = "vxorps" || mnemonic = "vandps")
-         && contains operands "rip")
+         ((mnemonic = "vbroadcastss" || mnemonic = "vxorps" || mnemonic = "vandps"
+           || (mnemonic = "vmovaps" && allow_cross_lane))
+         && contains operands "rip"
+         && not (contains (List.hd (String.split_on_char ',' operands)) "["))
   then
     error ~source ~function_name ~obligation:"no rack memory"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
@@ -298,7 +300,7 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
       (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if cross_lane_mnemonic mnemonic && not allow_cross_lane then
     error ~source ~function_name ~obligation:"source-authorized cross-lane operation"
-      (Printf.sprintf "encountered %s outside a source-authorized reduction, scan or extraction" mnemonic)
+      (Printf.sprintf "encountered %s outside a source-authorized cross-lane operation" mnemonic)
   else if not (allowed_avx2 mnemonic) then
     let obligation =
       if String.starts_with ~prefix:"f" mnemonic
@@ -332,7 +334,7 @@ let allowed_avx512f = function
   | "vfmadd213ps" | "vfmadd231ps" | "vcmpps" | "vcmpeq_oqps"
   | "vcmpneq_oqps" | "vcmplt_oqps" | "vcmple_oqps" | "vcmpeqps"
   | "vcmpunordps" | "vptestmd" | "vblendmps" | "vmovaps"
-  | "vshuff32x4" | "vpermilps" | "kxnorw" | "kshiftlw" | "kshiftrw"
+  | "vshuff32x4" | "vpermilps" | "vpermps" | "kxnorw" | "kshiftlw" | "kshiftrw"
   | "ret" | "retq" -> true
   | _ -> false
 
@@ -346,11 +348,12 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
     contains operands "rip"
     && not (contains (List.hd (String.split_on_char ',' operands)) "[")
     && (if sse then List.mem mnemonic [ "movaps"; "xorps"; "andps" ]
-        else List.mem mnemonic [ "vbroadcastss"; "vpxord"; "vpandd" ])
+        else List.mem mnemonic [ "vbroadcastss"; "vpxord"; "vpandd" ]
+          || (mnemonic = "vmovaps" && allow_cross_lane))
   in
   let cross_lane =
     if sse then mnemonic = "shufps" && not (String.ends_with ~suffix:",0x0" operands)
-    else List.mem mnemonic [ "vshuff32x4"; "vpermilps"; "kxnorw"; "kshiftlw"; "kshiftrw" ]
+    else List.mem mnemonic [ "vshuff32x4"; "vpermilps"; "vpermps"; "kxnorw"; "kshiftlw"; "kshiftrw" ]
   in
   if String.starts_with ~prefix:"call" mnemonic then fail "no calls"
   else if contains operands "rsp" || contains operands "rbp" then fail "no stack use"
@@ -366,7 +369,7 @@ let allowed_neon = function
   | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv" | "fmin" | "fmax"
   | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "orr"
   | "frintm" | "frintp" | "frintz" | "frintn"
-  | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ret" -> true
+  | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ext" | "ret" -> true
   | _ -> false
 
 let neon_callee_saved_vector operands =
@@ -385,11 +388,16 @@ let valid_neon_dup ~allow_cross_lane operands =
      ^ (if allow_cross_lane then "[0-3]" else "0") ^ "\\]$")
     operands
 
-let valid_neon_prefix_insert operands =
-  regexp_contains "^v[0-9]+\\.s\\[[1-3]\\],[ \\t]*v[0-9]+\\.s\\[0\\]$" operands
+let valid_neon_insert operands =
+  regexp_contains "^v[0-9]+\\.s\\[[0-3]\\],[ \\t]*v[0-9]+\\.s\\[0\\]$" operands
 
 let valid_neon_literal_load operands =
   regexp_contains "^q[0-9]+,[ \\t]*[0-9a-f]+[ \\t]*<[^>]+>$" operands
+
+let valid_neon_mask_fold operands =
+  regexp_contains
+    "^v[0-9]+\\.16b,[ \\t]*\\(v[0-9]+\\.16b\\),[ \\t]*\\1,[ \\t]*#\\(4\\|8\\|0x4\\|0x8\\)$"
+    operands
 
 let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   let mnemonic = decoded.mnemonic in
@@ -407,6 +415,9 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if neon_general_register operands then
     error ~source ~function_name ~obligation:"no scalarized lane control"
       (Printf.sprintf "encountered general register in %s %s" mnemonic operands)
+  else if mnemonic = "ext" && not (allow_cross_lane && valid_neon_mask_fold operands) then
+    error ~source ~function_name ~obligation:"source-authorized mask fold"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if mnemonic = "ldr" && not (valid_neon_literal_load operands) then
     error ~source ~function_name ~obligation:"literal rack loads only"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
@@ -416,7 +427,7 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
          mnemonic operands)
   else if contains operands ".s[" && not (
     (mnemonic = "dup" && valid_neon_dup ~allow_cross_lane operands)
-    || (mnemonic = "mov" && allow_cross_lane && valid_neon_prefix_insert operands)) then
+    || (mnemonic = "mov" && allow_cross_lane && valid_neon_insert operands)) then
     error ~source ~function_name ~obligation:"no lane extraction"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if neon_scalar_register operands then
@@ -446,7 +457,15 @@ let verify_instruction ~profile ~allow_cross_lane ~source ~function_name decoded
         (Printf.sprintf "profile '%s' has no object verifier"
            (Target.profile_name profile))
 
-let verify_function ~profile ~allow_cross_lane ~source ~function_name instructions =
+let valid_integer_result_transfer profile decoded =
+  let operands = Str.global_replace (Str.regexp "[ \\t]+") "" decoded.operands in
+  match profile with
+  | Target.X86_sse2 -> decoded.mnemonic = "movd" && operands = "eax,xmm0"
+  | Target.X86_avx2 | Target.X86_avx512 -> decoded.mnemonic = "vmovd" && operands = "eax,xmm0"
+  | Target.Aarch64_neon -> List.mem decoded.mnemonic [ "mov"; "umov" ] && operands = "w0,v0.s[0]"
+  | _ -> false
+
+let verify_function ~profile ~allow_cross_lane ~integer_result ~source ~function_name instructions =
   let rec loop saw_ret fma_count = function
     | [] ->
         if not saw_ret then
@@ -458,6 +477,13 @@ let verify_function ~profile ~allow_cross_lane ~source ~function_name instructio
     | decoded :: _ when saw_ret ->
         error ~source ~function_name ~obligation:"terminal return"
           (Printf.sprintf "encountered %s after ret" decoded.mnemonic)
+    | decoded :: { mnemonic = ("ret" | "retq"); operands = "" } :: rest when integer_result ->
+        if valid_integer_result_transfer profile decoded then loop true fma_count rest
+        else error ~source ~function_name ~obligation:"integer result boundary"
+          "expected the low 32 bits of vector register 0 in the C integer return register immediately before ret"
+    | { mnemonic = ("ret" | "retq"); _ } :: _ when integer_result ->
+        error ~source ~function_name ~obligation:"integer result boundary"
+          "missing the terminal vector-to-integer result transfer"
     | decoded :: rest -> (
         match verify_instruction ~profile ~allow_cross_lane ~source ~function_name decoded with
         | Error _ as result -> result
@@ -470,7 +496,7 @@ let verify_function ~profile ~allow_cross_lane ~source ~function_name instructio
   loop false 0 instructions
 
 let verify ?(profile = Target.X86_avx2) ?expected_fma_count
-    ?(cross_lane_functions = []) ~source ~functions object_bytes =
+    ?(cross_lane_functions = []) ?(integer_result_functions = []) ~source ~functions object_bytes =
   let object_ = Filename.temp_file "rake-native-verify-" ".o" in
   let output = Filename.temp_file "rake-native-verify-" ".objdump" in
   let files = [ object_; output ] in
@@ -503,6 +529,7 @@ let verify ?(profile = Target.X86_avx2) ?expected_fma_count
                       match
                         verify_function ~profile
                           ~allow_cross_lane:(List.mem function_name cross_lane_functions)
+                          ~integer_result:(List.mem function_name integer_result_functions)
                           ~source ~function_name instructions
                       with
                       | Error _ as result -> result

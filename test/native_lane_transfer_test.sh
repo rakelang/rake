@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Compare cross-lane operations with independent C bits and register ABIs.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+rakec="${RAKEC:-${root}/_build/default/src/bin/main.exe}"
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
+    case "$profile" in
+        x86-sse2) lanes=4; flags=(-msse2 -mno-avx) ;;
+        x86-avx2) lanes=8; flags=(-mavx2 -mfma) ;;
+        x86-avx512) lanes=16; flags=(-mavx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl) ;;
+        aarch64-neon) lanes=4; flags=() ;;
+    esac
+    source="${tmp}/${profile}.rk"
+    for ((lane=0; lane<lanes; ++lane)); do
+        printf 'scratch extract_lane_%d(values: f32s) -> f32:\n  extract(values, %d)\n\n' "$lane" "$lane"
+        printf 'scratch broadcast_lane_%d(values: f32s) -> f32s:\n  let <picked: f32> = extract(values, %d)\n  <picked>\n\n' "$lane" "$lane"
+        printf 'scratch keep_source_lane_%d(values: f32s) -> f32s:\n  let <picked: f32> = extract(values, %d)\n  values + <picked>\n\n' "$lane" "$lane"
+        printf 'scratch insert_lane_%d(values: f32s, <replacement: f32>) -> f32s:\n  insert(values, %d, <replacement>)\n\n' "$lane" "$lane"
+        printf 'scratch insert_constant_lane_%d(values: f32s) -> f32s:\n  insert(values, %d, <-0.0>)\n\n' "$lane" "$lane"
+        printf 'scratch insert_keep_source_lane_%d(values: f32s, <replacement: f32>) -> f32s:\n  let changed = insert(values, %d, <replacement>)\n  changed + values\n\n' "$lane" "$lane"
+        printf 'scratch insert_keep_scalar_lane_%d(values: f32s, <replacement: f32>) -> f32s:\n  let changed = insert(values, %d, <replacement>)\n  changed + <replacement>\n\n' "$lane" "$lane"
+        printf 'scratch relocate_lane_%d(values: f32s) -> f32s:\n  let <picked: f32> = extract(values, %d)\n  insert(values, %d, <picked>)\n\n' "$lane" "$(((lane + 1) % lanes))" "$lane"
+    done > "$source"
+    printf 'scratch mask_all(values: f32s) -> bool:\n  all(values > <0.0>)\n\nscratch mask_any(values: f32s) -> bool:\n  any(values > <0.0>)\n\nscratch mask_bits(values: f32s) -> u32:\n  bitmask(values > <0.0>)\n\nscratch mask_gap_bits(values: f32s) -> u32:\n  bitmask(not (values > <0.0>))\n\nscratch mask_composed(values: f32s) -> u32:\n  let positive = values > <0.0>\n  let combined = positive or (values = <0.0>)\n  bitmask(combined and positive)\n\n' >> "$source"
+    for pattern in reverse rotate repeat identity weave mixed right; do
+        indices=()
+        for ((lane=0; lane<lanes; ++lane)); do
+            case "$pattern" in
+                reverse) selected=$((lanes - 1 - lane)) ;;
+                rotate) selected=$(((lane + 1) % lanes)) ;;
+                repeat) selected=$((lanes - 1)) ;;
+                identity) selected=$lane ;;
+                weave) selected=$((lane / 2 + (lane % 2) * lanes)) ;;
+                mixed) selected=$(((7 * lane + 3) % (2 * lanes))) ;;
+                right) selected=$((2 * lanes - 1 - lane)) ;;
+            esac
+            indices+=("$selected")
+        done
+        joined="$(IFS=,; printf '%s' "${indices[*]}")"
+        if [[ "$pattern" == weave || "$pattern" == mixed || "$pattern" == right ]]; then
+            printf 'scratch shuffle_%s(a: f32s, b: f32s) -> f32s:\n  shuffle(a, b, [%s])\n\n' "$pattern" "$joined" >> "$source"
+        else
+            printf 'scratch shuffle_%s(a: f32s) -> f32s:\n  shuffle(a, [%s])\n\n' "$pattern" "$joined" >> "$source"
+        fi
+        if [[ "$pattern" == mixed ]]; then
+            printf 'scratch shuffle_keep_inputs(a: f32s, b: f32s) -> f32s:\n  let changed = shuffle(a, b, [%s])\n  changed + a + b\n\n' "$joined" >> "$source"
+            printf 'scratch shuffle_same_input(a: f32s) -> f32s:\n  shuffle(a, a, [%s])\n\n' "$joined" >> "$source"
+        fi
+    done
+    "$rakec" --verify-native --target "$profile" -o "${tmp}/${profile}.o" "$source"
+    if [[ "$profile" == aarch64-neon ]]; then
+        aarch64-unknown-linux-gnu-gcc -O1 -static -ffp-contract=off -DLANES="$lanes" \
+            -isystem "${RAKE_AARCH64_LIBC_DEV}/include" \
+            -B"${RAKE_AARCH64_LIBC}/lib" -L"${RAKE_AARCH64_LIBC_STATIC}/lib" \
+            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" -lm -o "${tmp}/${profile}"
+        qemu-aarch64 "${tmp}/${profile}"
+    else
+        cc -O1 -ffp-contract=off "${flags[@]}" -DLANES="$lanes" \
+            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" -lm -o "${tmp}/${profile}"
+        if [[ "$profile" == x86-avx512 ]] && ! grep -qw avx512f /proc/cpuinfo; then
+            if [[ -z "${RAKE_SDE:-}" ]]; then
+                echo "AVX-512 lane-transfer runtime requires AVX-512F or RAKE_SDE" >&2
+                exit 1
+            fi
+            "$RAKE_SDE" -skx -- "${tmp}/${profile}"
+        else
+            "${tmp}/${profile}"
+        fi
+    fi
+    for operation in extract insert; do
+        if [[ "$operation" == extract ]]; then
+            printf 'scratch outside(values: f32s) -> f32:\n  extract(values, %d)\n' "$lanes" > "${tmp}/outside.rk"
+        else
+            printf 'scratch outside(values: f32s) -> f32s:\n  insert(values, %d, <1.0>)\n' "$lanes" > "${tmp}/outside.rk"
+        fi
+        if "$rakec" --emit-asm --target "$profile" "${tmp}/outside.rk" > "${tmp}/outside.log" 2>&1; then
+            echo "$profile accepted $operation outside its physical rack" >&2
+            exit 1
+        fi
+        grep -Fq "outside a ${lanes}-lane rack" "${tmp}/outside.log"
+    done
+    # Register insertion has no defined native stream-tail participation yet.
+    printf 'pack Values {\n  f32: value;\n}\nrun replace_first(input: stack Values, <count: i32>) -> f32:\n  for row in input using f32s up to <count>:\n    yield insert(row.value, 0, <1.0>)\n' > "${tmp}/stream.rk"
+    if "$rakec" --emit-asm --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
+        echo "$profile accepted insertion without a native stream-tail contract" >&2
+        exit 1
+    fi
+    grep -Fq 'native stream reductions, scans, extractions, insertions and shuffles are work in progress' "${tmp}/stream.log"
+    printf 'scratch malformed(a: f32s) -> f32s:\n  shuffle(a, [0])\n' > "${tmp}/malformed.rk"
+    if "$rakec" --emit-asm --target "$profile" "${tmp}/malformed.rk" > "${tmp}/malformed.log" 2>&1; then
+        echo "$profile accepted a short shuffle index list" >&2
+        exit 1
+    fi
+    grep -Fq "${tmp}/malformed.rk:2:" "${tmp}/malformed.log"
+    grep -Fq "a shuffle needs $lanes indices" "${tmp}/malformed.log"
+    indices=()
+    for ((lane=0; lane<lanes; ++lane)); do indices+=("$lanes"); done
+    joined="$(IFS=,; printf '%s' "${indices[*]}")"
+    printf 'scratch outside(a: f32s) -> f32s:\n  shuffle(a, [%s])\n' "$joined" > "${tmp}/outside.rk"
+    if "$rakec" --emit-asm --target "$profile" "${tmp}/outside.rk" > "${tmp}/outside.log" 2>&1; then
+        echo "$profile accepted an out-of-range shuffle index" >&2
+        exit 1
+    fi
+    grep -Fq "${tmp}/outside.rk:2:" "${tmp}/outside.log"
+    grep -Fq "shuffle index is outside its $lanes input lanes" "${tmp}/outside.log"
+    indices=()
+    for ((lane=0; lane<lanes; ++lane)); do indices+=("0"); done
+    joined="$(IFS=,; printf '%s' "${indices[*]}")"
+    printf 'pack Values {\n  f32: value;\n}\nrun shuffle_rows(input: stack Values, <count: i32>) -> f32:\n  for row in input using f32s up to <count>:\n    yield shuffle(row.value, [%s])\n' "$joined" > "${tmp}/stream.rk"
+    if "$rakec" --emit-asm --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
+        echo "$profile accepted shuffle without a native stream-tail contract" >&2
+        exit 1
+    fi
+    grep -Fq 'native stream reductions, scans, extractions, insertions and shuffles are work in progress' "${tmp}/stream.log"
+done

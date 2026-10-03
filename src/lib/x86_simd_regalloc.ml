@@ -11,6 +11,25 @@ type operation =
   | Uniform_mask of { dst : vector_register; value : bool }
   | Broadcastss of { dst : vector_register; source : vector_register }
   | Extract_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
+  | Insert_f32 of {
+      dst : vector_register;
+      previous : vector_register;
+      inserted : vector_register;
+      lane : M.f32_lane;
+      broadcast : vector_register;
+    }
+  | Shuffle_f32 of {
+      dst : vector_register;
+      racks : vector_register list;
+      indices : int list;
+      scratch : vector_register list;
+    }
+  | Reduce_mask of {
+      dst : vector_register;
+      source : vector_register;
+      operation : Native_ir.mask_reduction;
+      scratch : vector_register;
+    }
   | Reduce_f32 of {
       dst : vector_register;
       source : vector_register;
@@ -255,6 +274,10 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
             match instruction with
             | M.Uniform_f32 _ | M.Uniform_mask _ -> []
             | M.Broadcastss { source; _ } -> [ source ]
+            | M.Insert_f32 { previous; _ } -> [ previous ]
+            (* Two permutations still need both original racks. *)
+            | M.Shuffle_f32 { racks = [ source ]; _ } -> [ source ]
+            | M.Shuffle_f32 _ -> []
             | M.Reduce_f32 _ | M.Scan_f32 _ -> []
             (* SSE2's final merge still needs the original input. *)
             | M.Round_f32 _ when profile = Target.X86_sse2 -> []
@@ -273,6 +296,11 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               let p = physical in
               let scratch_count =
                 match instruction with
+                | M.Insert_f32 _ -> 1
+                | M.Reduce_mask _ -> 1
+                | M.Shuffle_f32 { racks; _ } ->
+                    (if profile = Target.X86_sse2 then 0 else 1)
+                    + (if List.length racks = 2 then 1 else 0)
                 | M.Cmpps { predicate = M.Ole; _ } when profile = Target.X86_sse2 -> 1
                 | M.Extreme_f32 _ -> 5
                 | M.Round_f32 _ when profile = Target.X86_sse2 -> 5
@@ -312,6 +340,12 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                   emit loc provenance (Broadcastss { dst; source = p source })
               | M.Extract_f32 { source; lane; _ } ->
                   emit loc provenance (Extract_f32 { dst; source = p source; lane })
+              | M.Insert_f32 { previous; inserted; lane; _ } ->
+                  emit loc provenance (Insert_f32 { dst; previous = p previous; inserted = p inserted; lane; broadcast = List.hd scratch })
+              | M.Shuffle_f32 { racks; indices; _ } ->
+                  emit loc provenance (Shuffle_f32 { dst; racks = List.map p racks; indices; scratch })
+              | M.Reduce_mask { source; operation; _ } ->
+                  emit loc provenance (Reduce_mask { dst; source = p source; operation; scratch = List.hd scratch })
               | M.Reduce_f32 { source; operation; _ } ->
                   emit loc provenance
                     (Reduce_f32 { dst; source = p source; operation; scratch })

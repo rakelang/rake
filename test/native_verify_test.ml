@@ -216,6 +216,89 @@ exact_stream:
     (Rake.Native_verify.verify ~source:"cross-lane-verifier-fixture"
        ~functions:[ "strict_scan" ] ~cross_lane_functions:[ "strict_scan" ]
        cross_lane);
+  (* Independently assembled return transfers may cross the scalar C ABI
+     only at the terminal boundary of a source-declared integer result. *)
+  List.iter (fun (profile, prefix, zero, transfer, wrong_transfer, scalar) ->
+    let fixture body = Printf.sprintf
+      "%s\n.text\n.globl mask_result\nmask_result:\n%s\n    ret\n" prefix body in
+    let check body =
+      let source = "mask-result-verifier-fixture" in
+      Rake.Native_verify.verify ~profile ~source ~functions:[ "mask_result" ]
+        ~integer_result_functions:[ "mask_result" ]
+        (assemble ~profile ~source (fixture body)) in
+    expect_ok (check (zero ^ "\n" ^ transfer));
+    expect_obligation "integer result boundary" (check (zero ^ "\n" ^ wrong_transfer));
+    expect_obligation "integer result boundary" (check zero);
+    let expect_rejected = function
+      | Error _ -> () | Ok () -> failwith "scalar mask-result path passed verification" in
+    expect_rejected (check (transfer ^ "\n" ^ zero ^ "\n" ^ transfer));
+    expect_rejected (check (zero ^ "\n" ^ scalar ^ "\n" ^ transfer));
+    expect_rejected (Rake.Native_verify.verify ~profile ~source:"unauthorized-result-transfer"
+      ~functions:[ "mask_result" ]
+      (assemble ~profile ~source:"unauthorized-result-transfer" (fixture (zero ^ "\n" ^ transfer)))))
+    [ Rake.Target.X86_sse2, ".intel_syntax noprefix", "    pxor xmm0, xmm0",
+        "    movd eax, xmm0", "    movd eax, xmm1", "    inc eax";
+      Rake.Target.X86_avx2, ".intel_syntax noprefix", "    vpxor ymm0, ymm0, ymm0",
+        "    vmovd eax, xmm0", "    vmovd edx, xmm0", "    inc eax";
+      Rake.Target.X86_avx512, ".intel_syntax noprefix", "    vpxord zmm0, zmm0, zmm0",
+        "    vmovd eax, xmm0", "    vmovd eax, xmm1", "    inc eax";
+      Rake.Target.Aarch64_neon, ".arch armv8-a+simd", "    movi v0.4s, #0",
+        "    umov w0, v0.s[0]", "    umov w0, v0.s[1]", "    add w0, w0, #1" ];
+  let mask_fold_source = "neon-mask-fold-fixture" in
+  let mask_fold body = assemble ~profile:Rake.Target.Aarch64_neon ~source:mask_fold_source
+    (".arch armv8-a+simd\n.text\n.globl mask_fold\nmask_fold:\n    " ^ body ^ "\n    ret\n") in
+  let check_fold ?(authorized = true) body = Rake.Native_verify.verify
+    ~profile:Rake.Target.Aarch64_neon ~source:mask_fold_source ~functions:[ "mask_fold" ]
+    ~cross_lane_functions:(if authorized then [ "mask_fold" ] else []) (mask_fold body) in
+  expect_ok (check_fold "ext v1.16b, v0.16b, v0.16b, #8");
+  expect_obligation "source-authorized mask fold" (check_fold ~authorized:false "ext v1.16b, v0.16b, v0.16b, #8");
+  expect_obligation "source-authorized mask fold" (check_fold "ext v1.16b, v0.16b, v0.16b, #2");
+  expect_obligation "source-authorized mask fold" (check_fold "ext v1.16b, v0.16b, v2.16b, #8");
+  (* Independently assembled permutation bytes require source authorization.
+     An authorized literal read must never authorize a rack store. *)
+  List.iter (fun (profile, register, memory, bytes) ->
+    let assembly = Printf.sprintf {|
+.intel_syntax noprefix
+.text
+.globl shuffle_kernel
+.type shuffle_kernel, @function
+shuffle_kernel:
+    vpermps %s0, %s1, %s0
+    ret
+.size shuffle_kernel, .-shuffle_kernel
+.globl shuffle_literal
+.type shuffle_literal, @function
+shuffle_literal:
+    vmovaps %s1, %s PTR [rip + shuffle_indices]
+    vpermps %s0, %s1, %s0
+    ret
+.size shuffle_literal, .-shuffle_literal
+.globl shuffle_store
+.type shuffle_store, @function
+shuffle_store:
+    vmovaps %s PTR [rip + shuffle_indices], %s0
+    ret
+.size shuffle_store, .-shuffle_store
+.data
+.p2align 6
+shuffle_indices:
+    .zero %d
+.section .note.GNU-stack,"",@progbits
+|} register register register register memory register register register memory register bytes in
+    let source = "shuffle-verifier-fixture" in
+    let object_code = assemble ~profile ~source assembly in
+    let check ?(authorized = false) function_name =
+      Rake.Native_verify.verify ~profile ~source ~functions:[ function_name ]
+        ~cross_lane_functions:(if authorized then [ function_name ] else []) object_code in
+    expect_obligation "source-authorized cross-lane operation" (check "shuffle_kernel");
+    expect_ok (check ~authorized:true "shuffle_kernel");
+    let memory_obligation = if profile = Rake.Target.X86_avx2
+      then "no rack memory" else "literal rack loads only" in
+    expect_obligation memory_obligation (check "shuffle_literal");
+    expect_ok (check ~authorized:true "shuffle_literal");
+    expect_obligation memory_obligation (check ~authorized:true "shuffle_store"))
+    [ Rake.Target.X86_avx2, "ymm", "YMMWORD", 32;
+      Rake.Target.X86_avx512, "zmm", "ZMMWORD", 64 ];
   let neon_profile = Rake.Target.Aarch64_neon in
   let neon_valid =
     assemble ~profile:neon_profile ~source:"neon-valid-verifier-fixture"
@@ -262,4 +345,35 @@ neon_prefix:
   expect_ok
     (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-prefix-fixture"
       ~functions:[ "neon_prefix" ] ~cross_lane_functions:[ "neon_prefix" ] neon_prefix);
+  let neon_insert = assemble ~profile:neon_profile ~source:"neon-insert-fixture" {|
+.arch armv8-a+simd
+.text
+.globl neon_insert
+.type neon_insert, %function
+neon_insert:
+    ins v0.s[0], v1.s[0]
+    ret
+.size neon_insert, .-neon_insert
+.section .note.GNU-stack,"",%progbits
+|} in
+  expect_obligation "no lane extraction"
+    (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-insert-fixture"
+      ~functions:[ "neon_insert" ] neon_insert);
+  expect_ok
+    (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-insert-fixture"
+      ~functions:[ "neon_insert" ] ~cross_lane_functions:[ "neon_insert" ] neon_insert);
+  let neon_unselected_lane = assemble ~profile:neon_profile ~source:"neon-unselected-lane-fixture" {|
+.arch armv8-a+simd
+.text
+.globl neon_unselected_lane
+.type neon_unselected_lane, %function
+neon_unselected_lane:
+    ins v0.s[0], v1.s[1]
+    ret
+.size neon_unselected_lane, .-neon_unselected_lane
+.section .note.GNU-stack,"",%progbits
+|} in
+  expect_obligation "no lane extraction"
+    (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-unselected-lane-fixture"
+      ~functions:[ "neon_unselected_lane" ] ~cross_lane_functions:[ "neon_unselected_lane" ] neon_unselected_lane);
   print_endline "native object-code verification test passed"
