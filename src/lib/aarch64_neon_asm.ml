@@ -31,7 +31,7 @@ let lanes_f32 register = vector register ^ ".4s"
 let lanes_bits register = vector register ^ ".16b"
 
 let registers = function
-  | A.Convert_i32_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
+  | A.Convert_word_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Integer_parameter { dst; _ } -> [ dst ]
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Mask_const { dst; _ } -> [ dst ]
@@ -198,9 +198,11 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "fmax %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fsqrt { dst; source } ->
       emit "fsqrt %s, %s" (lanes_f32 dst) (lanes_f32 source)
-  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.I32_to_f32; _ } ->
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.I32_to_f32; _ } ->
       emit "scvtf %s, %s" (lanes_f32 dst) (lanes_f32 source)
-  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.F32_to_i32; scratch } ->
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.U32_to_f32; _ } ->
+      emit "ucvtf %s, %s" (lanes_f32 dst) (lanes_f32 source)
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.F32_to_i32; scratch } ->
       (match scratch with
       | [ low; high; safe; constant ] ->
           let splat bits =

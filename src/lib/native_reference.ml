@@ -916,6 +916,7 @@ let rec eval_expr ~lanes env (expr : expr) =
         let* x = eval_expr ~lanes env x in
         (match x with
          | I32_rack xs -> Ok (F32_rack (Array.map (fun x -> f32 (Float.of_int x)) xs))
+         | U32_rack xs -> Ok (F32_rack (Array.map (fun x -> f32 (Int64.to_float x)) xs))
          | value -> error expr.loc (Operand_kind_mismatch { operation = "to_f32"; left = value_kind value; right = None }))
     | ECall ("to_i32", [ x ]) ->
         let* x = eval_expr ~lanes env x in

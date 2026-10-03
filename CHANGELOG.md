@@ -7,6 +7,15 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- `to_f32` accepts `u32s` on all five CPU profiles, in register kernels and
+  streams. SSE2 and AVX2 convert two exactly represented 16-bit halves
+  before one rounded addition. AVX-512F, NEON and WebAssembly select
+  unsigned vector conversion instructions. The integer-bit oracle checks
+  rounding across bit 31, retained inputs, masked exceptions, compact
+  widening and guarded stream tails. Generated WebAssembly C explicitly
+  discards unused ABI parameters, including unneeded tail masks, so strict
+  unused-parameter warnings remain enabled.
+
 - Signed `to_f32` and `to_i32` compile on SSE2, AVX2, AVX-512F and NEON,
   in register kernels and streams. Packed operations preserve nearest-even
   rounding, saturating float-to-integer results and NaN-to-zero conversion.

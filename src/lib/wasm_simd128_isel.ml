@@ -242,7 +242,9 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     | N.Narrow (left, right), N.Rack N.I16 -> emit_in_order [ left; right ] @ [ Operation "i16x8.narrow_i32x4_s" ]
     | N.Widen { operand; high }, N.Rack N.I16 ->
         emit operand @ [ Operation (if high then "i16x8.extend_high_i8x16_u" else "i16x8.extend_low_i8x16_u") ]
-    | N.Convert { operand; element = N.F32 }, N.Rack N.F32 -> emit operand @ [ Operation "f32x4.convert_i32x4_s" ]
+    | N.Convert { operand; element = N.F32 }, N.Rack N.F32 ->
+        emit operand @ [ Operation (if type_of operand = N.Rack N.U32
+          then "f32x4.convert_i32x4_u" else "f32x4.convert_i32x4_s") ]
     | N.Convert { operand; element = N.I32 }, N.Rack N.I32 ->
         (* trunc_sat alone rounds toward zero; nearest first gives Rake's round to nearest, ties to even. *)
         emit operand @ [ Operation "f32x4.nearest"; Operation "i32x4.trunc_sat_f32x4_s" ]

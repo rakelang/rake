@@ -1,6 +1,7 @@
 pack ConversionSamples {
   i32: words;
   f32: values;
+  u32: unsigned_words;
 }
 
 run rounded_floats(input: stack ConversionSamples, <count: i32>) -> i32:
@@ -11,13 +12,18 @@ run rounded_words(input: stack ConversionSamples, <count: i32>) -> f32:
   for row in input using f32s up to <count>:
     yield to_f32(row.words)
 
+run rounded_unsigned_words(input: stack ConversionSamples, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield to_f32(row.unsigned_words)
+
 slow main() -> i32:
   words: [7]i32 := [0, 1, -1, 16777217, 16777219, 2147483647, -2147483648]
   values: [7]f32 := [2.5, -2.5, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0, 2147483648.0, -2147483648.0]
   integers: [7]i32 := [0; 7]
   floats: [7]f32 := [0.0; 7]
-  rounded_floats(stack ConversionSamples { words: words, values: values }, <7>, integers)
-  rounded_words(stack ConversionSamples { words: words, values: values }, <7>, floats)
+  unsigned_words: [7]u32 := [0, 1, 65535, 65536, 16777217, 2147483649, 4294967295]
+  rounded_floats(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, integers)
+  rounded_words(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, floats)
   if integers[0] != 2 or integers[1] != -2 or integers[2] != 0:
     return 1
   if integers[3] != 2147483647 or integers[4] != -2147483648:
@@ -28,4 +34,9 @@ slow main() -> i32:
     return 4
   if floats[5] != 2147483648.0 or floats[6] != -2147483648.0:
     return 5
+  rounded_unsigned_words(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, floats)
+  if floats[0] != 0.0 or floats[1] != 1.0 or floats[2] != 65535.0 or floats[3] != 65536.0:
+    return 6
+  if floats[4] != 16777216.0 or floats[5] != 2147483648.0 or floats[6] != 4294967296.0:
+    return 7
   return 171

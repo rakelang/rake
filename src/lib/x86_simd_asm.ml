@@ -35,7 +35,7 @@ let vector_register profile register =
   Printf.sprintf "%s%d" (Option.get (Target.info profile).mir_register_class) register
 
 let registers = function
-  | A.Convert_i32_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
+  | A.Convert_word_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Integer_parameter { dst; _ } -> [ dst ]
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Uniform_mask { dst; _ } -> [ dst ]
@@ -517,9 +517,25 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       let magnitude = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.max_int))) in
       if sse then (move dst source; emit "andps %s, XMMWORD PTR [rip + %s]" (ymm dst) magnitude)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpandd" else "vandps") (ymm dst) (ymm source) memory magnitude
-  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.I32_to_f32; _ } ->
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.I32_to_f32; _ } ->
       emit "%scvtdq2ps %s, %s" (if sse then "" else "v") (ymm dst) (ymm source)
-  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.F32_to_i32; scratch } ->
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.U32_to_f32; scratch } ->
+      if avx512 then emit "vcvtudq2ps %s, %s" (ymm dst) (ymm source)
+      else (match scratch with
+        | [ low; high; constant ] ->
+            (* Both 16-bit halves convert exactly. The final addition is the
+               only rounding, unlike a sign-bit offset that can double-round. *)
+            load_splat constant 0x0000ffffl;
+            logical "andps" low source constant;
+            if sse then (move high source; emit "psrld %s, 16" (ymm high))
+            else emit "vpsrld %s, %s, 16" (ymm high) (ymm source);
+            emit "%scvtdq2ps %s, %s" (if sse then "" else "v") (ymm low) (ymm low);
+            emit "%scvtdq2ps %s, %s" (if sse then "" else "v") (ymm high) (ymm high);
+            load_splat constant 0x47800000l;
+            binary "mulps" high high constant;
+            binary "addps" dst high low
+        | _ -> invalid_arg "unsigned x86 conversion requires three temporary registers")
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.F32_to_i32; scratch } ->
       (match scratch with
       | [ low; high; safe; constant ] ->
           (* Keep NaNs and overflow away from CVTPS2DQ. Packed masks restore

@@ -48,8 +48,9 @@ Lessons start on WebAssembly when they contain a whole program. WebAssembly
 covers general memory runs. SSE2, AVX2, AVX-512 and NEON
 also compile `f32`, `i32` and `u32` stream traversals and single-column stack updates.
 Stored byte and 16-bit columns can be explicitly widened into signed or
-unsigned 32-bit racks. `to_f32` and `to_i32` convert between signed 32-bit
-integer and float racks, including in streams. General native memory runs
+unsigned 32-bit racks. `to_f32` converts signed or unsigned integer racks to
+floats, and `to_i32` converts floats to signed integers, including in streams.
+General native memory runs
 give the compiler's work-in-progress diagnostic. Updates
 can use a separate destination stack with a different record layout. Every result and
 lane trace comes from Rake's interpreter, using the selected profile's `f32`
@@ -381,7 +382,7 @@ pack Particles {
 
 run advance(particles: stack Particles, <count: i64>, <dt: f32>) -> f32:
   for particle in particles using f32s up to <count>:
-    let age = to_f32(bitcast(i32s, widen(particle.age)))
+    let age = to_f32(widen(particle.age))
     yield particle.position + particle.velocity * <dt> / (age + <1.0>)
 
 slow main() -> i32:
@@ -406,8 +407,8 @@ This lesson starts on WebAssembly, with four records per rack. It also
 compiles on SSE2 and NEON with four, AVX2 with eight, or AVX-512 with sixteen.
 On AVX2 and AVX-512, both counts above fit in one partial rack. Select a
 profile to inspect that difference. `widen` extends each byte age to an
-unsigned 32-bit lane, `bitcast` retains those bits as signed integers, and
-`to_f32` converts the values to floats for the calculation.
+unsigned 32-bit lane, then `to_f32` converts that unsigned value to a float
+for the calculation.
 
 ## 10. A whole program
 

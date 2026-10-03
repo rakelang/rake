@@ -231,12 +231,18 @@ vector register. Neither case performs a numerical conversion.
 Signed `i32s` to `f32s` conversion selects `cvtdq2ps` on SSE2,
 full-width `vcvtdq2ps` on AVX2 and AVX-512F, or `scvtf .4s` on NEON.
 These preserve the rack width and use the caller's nearest-even rounding.
+Unsigned `u32s` to `f32s` uses `vcvtudq2ps` on AVX-512F and
+`ucvtf .4s` on NEON. SSE2 and AVX2 convert the low and high 16-bit
+halves with their packed signed instruction, multiply the high half by
+65,536 and add them. Both halves and the multiplication are exact, so the
+addition supplies the one nearest-even rounding. Three allocated vector
+temporaries hold the halves and a constant. The input may remain live.
 The reverse conversion sanitises NaNs to zero, checks the signed range with
 packed masks, and converts the remaining values with `cvtps2dq`,
 `vcvtps2dq` or `fcvtns .4s`. Vector selections restore the saturated
 endpoints. Four allocated temporary vector registers hold its masks and
 safe values, and spills still cause rejection. Inside `through`, inactive
-integer or float operands become zero before either conversion, including
+integer or float operands become zero before conversion, including
 in partial streams. The final-object verifier checks full-width conversion
 operands and rejects scalar or narrowed forms. Independent C bit arithmetic
 checks rounding and saturation separately from these instructions.

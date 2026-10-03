@@ -94,7 +94,7 @@ pack Samples {
 
 run weigh(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
   for chunk in input using f32s up to <count>:
-    let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
+    let quality = to_f32(widen(chunk.quality))
     yield chunk.value * <scale> + quality
 
 run running_sum(x: []f32, out: mut []f32, <n: i32>):

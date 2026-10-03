@@ -119,6 +119,7 @@ let intrinsic text =
       | "i16x8.extend_low_i8x16_u" -> call 1 "wasm_u16x8_extend_low_u8x16"
       | "i16x8.extend_high_i8x16_u" -> call 1 "wasm_u16x8_extend_high_u8x16"
       | "f32x4.convert_i32x4_s" -> call 1 "wasm_f32x4_convert_i32x4"
+      | "f32x4.convert_i32x4_u" -> call 1 "wasm_f32x4_convert_u32x4"
       | "f32x4.nearest" -> call 1 "wasm_f32x4_nearest"
       | "i32x4.trunc_sat_f32x4_s" -> call 1 "wasm_i32x4_trunc_sat_f32x4"
       | "f32x4.ne" -> call 2 "wasm_f32x4_ne"
@@ -235,9 +236,22 @@ let emit_function (func : I.func) =
       (fun (parameter : I.parameter) -> c_type parameter.parameter_class ^ " " ^ parameter.parameter_name)
       func.parameters
   in
-  Printf.sprintf "RAKE_WASM_LINKAGE %s %s(%s)\n{\n    %s result;\n%s    return result;\n}\n"
+  (* Keep the selected ABI even when an operation needs no tail mask. *)
+  let unused_parameters =
+    List.mapi
+      (fun index (parameter : I.parameter) ->
+        if List.exists
+          (function I.Local_get (I.Parameter_local used) -> used = index | _ -> false)
+          func.instructions
+        then ""
+        else "    (void)" ^ parameter.parameter_name ^ ";\n")
+      func.parameters
+    |> String.concat ""
+  in
+  Printf.sprintf "RAKE_WASM_LINKAGE %s %s(%s)\n{\n%s    %s result;\n%s    return result;\n}\n"
     (c_type func.result_class) func.name
     (if parameters = [] then "void" else String.concat ", " parameters)
+    unused_parameters
     (c_type func.result_class)
     (String.concat "" (List.rev_map (fun statement -> "    " ^ statement ^ "\n") !statements))
 

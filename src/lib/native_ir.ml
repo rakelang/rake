@@ -88,7 +88,8 @@ type op =
   | Widen of { operand : value; high : bool }
       (** The low or high half of a u8 rack, zero-extended to an i16 rack. *)
   | Convert of { operand : value; element : element }
-      (** An i32 rack to f32, or an f32 rack to i32 rounded to nearest, ties to even, and saturated. *)
+      (** Signed or unsigned i32 lanes to f32, or f32 to saturated signed
+          i32 lanes. Numerical rounding is nearest, ties to even. *)
   | Shift of { operand : value; count : value; shift : shift }
       (** Each lane of an integer rack shifted by the i32 scalar [count], taken modulo the lane's bits. *)
   | Reinterpret of { operand : value; element : element }
@@ -345,9 +346,8 @@ let check_fused_contiguity verifier context (instructions : instruction list) =
     inactive lane can't raise anything and needs no sanitising. *)
 let floating_point_exceptions = ref true
 
-(** Equal-width numerical conversions. Neither permits an unsigned input
-    reinterpretation or a change in rack participation. *)
-type signed_word_conversion = I32_to_f32 | F32_to_i32
+(** Equal-width numerical conversions preserve signedness and participation. *)
+type word_conversion = I32_to_f32 | U32_to_f32 | F32_to_i32
 
 let rec verify_instruction verifier context environment (instruction : instruction) =
   List.iter
@@ -431,8 +431,9 @@ let rec verify_instruction verifier context environment (instruction : instructi
       check_result verifier context instruction (Some (Rack I16))
   | Convert { operand; element } ->
       (match (lookup operand, element) with
-      | Some (Rack I32), F32 | Some (Rack F32), I32 -> check_result verifier context instruction (Some (Rack element))
-      | _ -> complain verifier context "convert turns an i32 rack into f32 or an f32 rack into i32")
+      | Some (Rack (I32 | U32)), F32 | Some (Rack F32), I32 ->
+          check_result verifier context instruction (Some (Rack element))
+      | _ -> complain verifier context "convert turns an i32/u32 rack into f32 or an f32 rack into i32")
   | Fma (a, b, c) ->
       let types = List.filter_map lookup [ a; b; c ] in
       require_same verifier context "fma" types;
@@ -628,9 +629,9 @@ and verify_block verifier context ~expected_result ~yielding environment block =
               (match IntMap.find_opt operand definitions with
               | Some (Sanitize { mask = operand_mask; benign; _ }) when operand_mask = mask ->
                   (match IntMap.find_opt benign definitions with
-                  | Some (Rack_splat (Int32 0l)) -> ()
-                  | _ -> complain verifier context "masked i32-to-f32 conversion requires benign integer zero")
-              | _ -> complain verifier context "masked i32-to-f32 conversion requires sanitized participation")
+                  | Some (Rack_splat (Int32 0l | Uint32 0l)) -> ()
+                  | _ -> complain verifier context "masked integer-to-f32 conversion requires benign integer zero")
+              | _ -> complain verifier context "masked integer-to-f32 conversion requires sanitized participation")
           | _ -> assert false)
       | Some _ when (match instruction.op with Load _ | Store _ | Gather _ | Scatter _ -> false | op -> not (!floating_point_exceptions && float_operands (operands op))) -> ()
       | Some mask ->

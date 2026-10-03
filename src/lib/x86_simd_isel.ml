@@ -424,12 +424,14 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           Some (M.Shuffle_word { dst; racks; indices; provenance })
       | N.Convert { operand; element = N.F32 } ->
           let dst = rack_result () in
-          ensure_operand_i32 func.name environment index operand;
-          Some (M.Convert_i32_f32 { dst; source = operand; conversion = N.I32_to_f32; provenance })
+          let conversion = match find_type func.name environment index operand with
+            | N.Rack N.I32 -> N.I32_to_f32 | N.Rack N.U32 -> N.U32_to_f32
+            | _ -> fail func.name ~instruction:index "float conversion requires a signed or unsigned 32-bit rack" in
+          Some (M.Convert_word_f32 { dst; source = operand; conversion; provenance })
       | N.Convert { operand; element = N.I32 } ->
           let dst = word_rack_result () in
           ensure_operand_f32 func.name environment index operand;
-          Some (M.Convert_i32_f32 { dst; source = operand; conversion = N.F32_to_i32; provenance })
+          Some (M.Convert_word_f32 { dst; source = operand; conversion = N.F32_to_i32; provenance })
       | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index operand;

@@ -52,10 +52,10 @@ let check_conversion_instruction_boundaries () =
       Rake.Target.X86_avx2, ".intel_syntax noprefix",
         "    vcvtdq2ps ymm0, ymm0", "    vcvtdq2ps xmm0, xmm0";
       Rake.Target.X86_avx512, ".intel_syntax noprefix",
-        "    vcvtdq2ps zmm0, zmm0", "    vcvtdq2ps ymm0, ymm0";
+        "    vcvtdq2ps zmm0, zmm0\n    vcvtudq2ps zmm0, zmm0", "    vcvtudq2ps ymm0, ymm0";
       Rake.Target.Aarch64_neon, ".arch armv8-a+simd",
-        "    scvtf v0.4s, v0.4s\n    fcvtns v0.4s, v0.4s",
-        "    scvtf v0.2s, v0.2s" ]
+        "    scvtf v0.4s, v0.4s\n    ucvtf v0.4s, v0.4s\n    fcvtns v0.4s, v0.4s",
+        "    ucvtf v0.2s, v0.2s" ]
 
 let valid =
   {|

@@ -33,3 +33,14 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   "${runner[@]}" "$tmp/conversion"
   printf '%s conversion C oracle passed\n' "$profile"
 done
+for addressing in barrier plain; do
+  "$rakec" --emit-asm --target wasm-simd128 --wasm-addressing "$addressing" \
+    -o "$tmp/conversions.c" "$root/test/abi/native_conversions.rk"
+  clang --target=wasm32 -msimd128 -O2 -ffreestanding -nostdlib -Wall -Wextra -Werror \
+    -DRAKE_WASM_LINKAGE= -Wno-unused-function -Wl,--no-entry -Wl,--export=test \
+    "$tmp/conversions.c" "$root/test/abi/conversion.c" -o "$tmp/conversions.wasm"
+  test "$(wasmtime run --invoke test "$tmp/conversions.wasm" 2>/dev/null)" = 0
+  "$rakec" --verify-native --target wasm-simd128 --wasm-addressing "$addressing" \
+    -o "$tmp/conversions-wasm.o" "$root/test/abi/native_conversions.rk"
+  printf 'wasm-simd128 (%s) unsigned conversion C oracle passed\n' "$addressing"
+done

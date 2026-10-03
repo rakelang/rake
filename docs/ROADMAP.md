@@ -203,12 +203,18 @@ bitcasts keep the rack's bits and selected profile width. Independent C
 checks all four compact types, updates and destinations against guarded
 arrays. WebAssembly verifies its packed widening in both addressing modes,
 with source bounds required for narrower comparisons or extending multiplies.
-Signed `i32s`/`f32s` numerical conversion now compiles on every physical
-profile, in register kernels and streams. An independent integer-bit oracle
+Signed `i32s`/`f32s` numerical conversion and unsigned `u32s` to `f32s`
+now compile on every physical profile, in register kernels and streams.
+An independent integer-bit oracle
 checks nearest-even rounding, saturation, infinities and NaNs. Masked calls
 check inactive-lane exceptions, and stream arrays end at guard pages.
-We will extend the remaining column and output widths and unsigned numerical
-conversions, then define participation for cross-lane operations before
+The unsigned conversion also passes the bit oracle on WebAssembly in both
+addressing modes. SSE2 and AVX2 use exactly converted 16-bit halves before
+their final rounded addition. AVX-512F and NEON use unsigned vector
+conversion instructions. Guard-page checks include compact unsigned
+columns and exact input/output aliasing.
+We will extend the remaining column and output widths and float-to-unsigned
+conversion, then define participation for cross-lane operations before
 admitting them in tails.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,

@@ -1,9 +1,7 @@
 /* Binary32 and two's-complement oracles use integer arithmetic, independent
    of SIMD conversions and the host's floating-point conversion instructions. */
-static uint32_t expected_signed_to_float(uint32_t word)
+static uint32_t expected_unsigned_to_float(uint32_t magnitude)
 {
-    const uint32_t sign = word & 0x80000000u;
-    uint32_t magnitude = sign ? 0u - word : word;
     if (!magnitude) return 0;
     unsigned exponent = 0;
     for (uint32_t rest = magnitude; rest > 1; rest >>= 1) ++exponent;
@@ -17,7 +15,13 @@ static uint32_t expected_signed_to_float(uint32_t word)
         significand += discarded > halfway || (discarded == halfway && (significand & 1));
         if (significand == 0x1000000u) { significand >>= 1; ++exponent; }
     }
-    return sign | ((exponent + 127) << 23) | (significand & 0x7fffffu);
+    return ((exponent + 127) << 23) | (significand & 0x7fffffu);
+}
+
+static uint32_t expected_signed_to_float(uint32_t word)
+{
+    const uint32_t sign = word & 0x80000000u;
+    return sign | expected_unsigned_to_float(sign ? 0u - word : word);
 }
 
 static uint32_t expected_float_to_signed(uint32_t bits)

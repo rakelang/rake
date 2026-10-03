@@ -27,7 +27,7 @@ let f32_lane_of_int = function
   | _ -> None
 
 type instruction =
-  | Convert_i32_f32 of { dst : vreg; source : vreg; conversion : Native_ir.signed_word_conversion; provenance : provenance }
+  | Convert_word_f32 of { dst : vreg; source : vreg; conversion : Native_ir.word_conversion; provenance : provenance }
   | Copy_word of { dst : vreg; source : vreg; provenance : provenance }
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Uniform_mask of { dst : vreg; value : bool; provenance : provenance }
@@ -114,7 +114,7 @@ type func = {
 type t = func list
 
 let def = function
-  | Convert_i32_f32 { dst; _ }
+  | Convert_word_f32 { dst; _ }
   | Copy_word { dst; _ }
   | Uniform_f32 { dst; _ }
   | Uniform_mask { dst; _ }
@@ -154,7 +154,7 @@ let def = function
 
 let operands = function
   | Uniform_f32 _ | Uniform_mask _ -> []
-  | Convert_i32_f32 { source; _ }
+  | Convert_word_f32 { source; _ }
   | Copy_word { source; _ }
   | Broadcastss { source; _ }
   | Broadcast_bool { source; _ }
@@ -186,7 +186,7 @@ let operands = function
   | Blendvps { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
 
 let provenance = function
-  | Convert_i32_f32 { provenance; _ }
+  | Convert_word_f32 { provenance; _ }
   | Copy_word { provenance; _ }
   | Uniform_f32 { provenance; _ }
   | Uniform_mask { provenance; _ }
@@ -231,8 +231,9 @@ let value_location func value =
   Option.value (List.assoc_opt value func.value_locations) ~default:func.loc
 
 let instruction_name = function
-  | Convert_i32_f32 { conversion = Native_ir.I32_to_f32; _ } -> "convert.i32.f32"
-  | Convert_i32_f32 { conversion = Native_ir.F32_to_i32; _ } -> "nearest.saturate.f32.i32"
+  | Convert_word_f32 { conversion = Native_ir.I32_to_f32; _ } -> "convert.i32.f32"
+  | Convert_word_f32 { conversion = Native_ir.U32_to_f32; _ } -> "convert.u32.f32"
+  | Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> "nearest.saturate.f32.i32"
   | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "vbroadcastss"
   | Uniform_mask _ -> "mask.constant"

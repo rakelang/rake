@@ -153,7 +153,7 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | `if` on a direct comparison of marked uniforms | yes | yes |
 | static one- and two-rack `shuffle` | yes | yes |
 | `bitcast` between `i32s` and `u32s` | yes | yes |
-| `to_f32` (`i32s` to `f32s`) | yes | WIP* |
+| `to_f32` (`i32s` or `u32s` to `f32s`) | yes | yes |
 | runtime shift counts, extraction and insertion | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
@@ -289,7 +289,7 @@ Conversions between integer and float racks:
   lanes then `b`'s, each saturated to the 16-bit range.
 - `widen_low(x)` and `widen_high(x)` take the low or high eight lanes of a
   `u8s` rack, zero-extended to an `i16s` rack.
-- `to_f32(x)` converts an `i32s` rack to `f32s`, rounding to nearest with
+- `to_f32(x)` converts an `i32s` or `u32s` rack to `f32s`, rounding to nearest with
   ties to even.
 - `to_i32(x)` converts an `f32s` rack to `i32s`, rounding to nearest with ties
   to even and saturating to the 32-bit range. NaN becomes zero.
@@ -301,7 +301,12 @@ reuses the same `v128` bits without a numerical conversion instruction.
 
 `to_f32` and `to_i32` also compile on all four physical CPU profiles,
 in register kernels and the native stream subset. They preserve the lane
-count. `to_f32` uses a packed signed-integer conversion. `to_i32` combines
+count. Signed `to_f32` uses a packed integer conversion. Unsigned conversion
+uses a full-width unsigned instruction on AVX-512F and NEON. On SSE2 and
+AVX2 it converts each lane's two 16-bit halves exactly, scales the high
+half by 65,536 and adds the low half. Only that addition rounds. The
+sequence uses three temporary vector registers, included in allocation
+pressure. `to_i32` combines
 packed comparisons, conversion and selections to preserve the saturation
 and NaN rules above. It requires four temporary vector registers in addition
 to its input and result, included in the no-spill allocation check.
@@ -310,11 +315,14 @@ by substituting zero before conversion. Active signalling NaNs can raise
 invalid-operation exceptions, and an active conversion can raise inexact.
 The caller's floating-point environment follows the
 [native rounding contract](#floating-point-values).
-Unsigned numerical conversion remains WIP*.
+Float-to-unsigned conversion remains WIP*.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 scratch signed_floats(values: i32s) -> f32s:
+  to_f32(values)
+
+scratch unsigned_floats(values: u32s) -> f32s:
   to_f32(values)
 
 scratch rounded_integers(values: f32s) -> i32s:

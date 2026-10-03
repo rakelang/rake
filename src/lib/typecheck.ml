@@ -601,13 +601,14 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall (("widen_low" | "widen_high" | "to_f32" | "to_i32") as name, [x]) ->
       require_feature env expr.loc Capabilities.Integer_rack_conversion;
+      let actual = infer_expr env x in
       let operand, result =
         match name with
         | "widen_low" | "widen_high" -> (Rack SUint8, Rack SInt16)
+        | "to_f32" when actual = Rack SUint -> (Rack SUint, Rack SFloat)
         | "to_f32" -> (Rack SInt, Rack SFloat)
         | _ -> (Rack SFloat, Rack SInt)
       in
-      let actual = infer_expr env x in
       if actual <> operand then
         type_errorf x.loc "%s requires a %s rack, got %s" name (show_concise operand) (show_concise actual);
       result
