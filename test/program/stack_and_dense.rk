@@ -8,6 +8,11 @@ run scale_values(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
     let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
     yield chunk.value * <scale> + quality
 
+run choose_scale(input: stack Samples, <count: i32>, <mode: i32>, <scale: f32>, <enabled: bool>) -> f32:
+  for chunk in input using f32s up to <count>:
+    let value = chunk.value
+    yield if <enabled> then (if <mode> < <0> then value * <scale> else value) else <0.0>
+
 ~~ out[g] = sum over p of dot(pair p, weights row p, group g), for groups of 4 outputs
 run dense(bits: []i32, weights: []i16, out: mut []i32, <pairs: i32>, <groups: i32>):
   for <first: i32> from <0> up to <groups> by <2>:
@@ -35,6 +40,19 @@ slow main() -> i32:
   qualities: [7]u8 := [1, 1, 2, 2, 3, 3, 4]
   out: [7]f32 := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   scale_values(stack Samples { value: values, quality: qualities }, <7>, <0.5>, out)
+  chosen: [7]f32 := [-1.0; 7]
+  ~~ Scalar expected results cover every partial rack and both uniform choices.
+  for n from 0 up to 8:
+    for choice from 0 up to 4:
+      let mode = if choice < 2 then -1 else 1
+      let enabled = choice % 2 = 0
+      for i from 0 up to 7:
+        chosen[i] <- -1.0
+      choose_scale(stack Samples { value: values, quality: qualities }, <n>, <mode>, <2.0>, <enabled>, chosen)
+      for i from 0 up to 7:
+        let expected = if i >= n then -1.0 else (if enabled then (if mode < 0 then values[i] * 2.0 else values[i]) else 0.0)
+        if chosen[i] != expected:
+          return 1
   calls <- calls + 1
   bits: [4]i32 := [65537, 131074, 196611, 262148]
   weights: [64]i16 := [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8]

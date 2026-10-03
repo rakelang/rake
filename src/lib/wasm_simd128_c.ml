@@ -164,8 +164,8 @@ let intrinsic text =
       | "i32x4.all_true" -> call 1 "wasm_i32x4_all_true"
       | "i64x2.all_true" -> call 1 "wasm_i64x2_all_true"
       | "v128.any_true" -> call 1 "wasm_v128_any_true"
-      | "select" -> (3, fun args -> Printf.sprintf "(%s ? %s : %s)" (List.nth args 2) (List.nth args 0) (List.nth args 1))
       | "i32.or" -> (2, fun args -> Printf.sprintf "(%s | %s)" (List.nth args 0) (List.nth args 1))
+      | "i32.sub" -> (2, fun args -> Printf.sprintf "((uint32_t)%s - (uint32_t)%s)" (List.nth args 0) (List.nth args 1))
       | ("i32.lt_u" | "i32.le_u" | "i32.gt_u" | "i32.ge_u") as op ->
           let operator = match op with "i32.lt_u" -> "<" | "i32.le_u" -> "<=" | "i32.gt_u" -> ">" | _ -> ">=" in
           (2, fun args -> Printf.sprintf "((uint32_t)%s %s (uint32_t)%s)" (List.nth args 0) operator (List.nth args 1))

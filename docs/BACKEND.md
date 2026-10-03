@@ -329,6 +329,11 @@ one used more than once is kept in a local. The output is C, one
 `wasm_simd128.h` intrinsic for each selected instruction, because some wasm32
 toolchains accept only C and reject `v128` operands to inline assembly.
 
+A uniform choice broadcasts its Boolean as an all-bits mask before vector
+bit-selection. That keeps the choice on a rack through a partial store.
+The final-object verifier rejects extra lane extractions or scalar lowering
+introduced by the C compiler.
+
 The promise is the same as on a physical target: outside a `slow` block, rack
 work uses vector instructions wherever the selected profile implements the
 operation. A run may also contain the uniform address, loop and bounds work
@@ -356,7 +361,11 @@ A separate destination stack may have a different record layout. Column
 updates load every input rack before writing the result.
 The count may be `i32` or `i64`. The former is sign-extended to the native
 address width at entry, before signed count guards or pointer access.
-Up to eight uniform `f32` arguments use the platform C register slots.
+Up to eight uniform `f32`, `i32`, `u32` or `bool` arguments use the platform
+C register slots. Integer arguments share their counter with descriptors,
+the count and the stream output pointer, while floats use a separate counter.
+The complete boundary is rejected when either counter exceeds its register
+capacity.
 The traversal copies them into preserved caller-clobbered vector registers,
 and their allocator lifetimes extend across iterations. That prevents an
 argument from being overwritten after its last use in the first rack.

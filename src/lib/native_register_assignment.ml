@@ -11,8 +11,6 @@ let resolve ~available ~argument_count ~integer_argument_count ~classes assigned
   let vector_count = List.fold_left (fun count -> function Vector -> count + 1 | Integer32 | Boolean -> count) 0 classes in
   let integer_count = parameter_count - vector_count in
   match assigned with
-  | Some _ when integer_count > 0 ->
-      Error "native traversals do not yet take integer or Boolean uniform arguments"
   | None when vector_count > argument_count ->
       Error (Printf.sprintf
         "native calling convention requires %d vector arguments but provides %d register slots; stack arguments are forbidden"

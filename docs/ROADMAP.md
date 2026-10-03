@@ -19,8 +19,9 @@ Imported C structs use their header's layout, and public slow functions have
 the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`
 streams or update one column in a mutable input or destination stack,
 with full and partial racks,
-final-byte verification and independent C/guard-page checks. Traversals also take up to eight uniform `f32`
-arguments, preserved in registers across racks. General native runs and
+final-byte verification and independent C/guard-page checks. Traversals also take up to eight uniform
+`f32`, `i32`, `u32` or `bool` arguments, preserved in registers across racks
+within the platform's C register limits. General native runs and
 the remaining scalar kernel boundaries are still
 work in progress.
 
@@ -130,8 +131,8 @@ Their broadcasts expand the value bit into vector masks. C `bool` arguments
 use the integer argument slots, with unused upper bits discarded at entry.
 Independent C checks exact choices, every reduced lane mask, fused expressions
 and protected roots nested inside through masks. Deliberately set upper
-argument bits check the C ABI boundary. Boolean stream arguments remain work
-in progress.
+argument bits check the C ABI boundary. Float streams also accept Boolean
+uniforms, with guard-page checks for nested protected branches and tails.
 
 We will bring the physical profiles up to the language's published operation
 set. The development compiler now supports 32-bit integer wrapping add/subtract/multiply
@@ -187,7 +188,10 @@ comparisons now choose a whole rack through vector comparison and selection.
 Independent C checks all six signed and unsigned predicates, literals on
 either side, retained inputs and nesting within a through mask. The
 untaken floating-point branches retain their inactive-operand protection.
-Native integer stream arguments remain work in progress.
+Float streams also accept integer uniforms. Mixed-type C calls check their
+independent integer and float register counters, the output pointer's slot,
+all eight persistent arguments, in-place updates and separate destinations.
+Streams over integer columns remain work in progress.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
 integer extraction and insertion, the remaining scalar expressions and

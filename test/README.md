@@ -31,6 +31,12 @@ differential, the whole-program differential and the C boundary of runs:
 nix develop --command bash -c 'dune build && bash test/full_tests.sh'
 ```
 
+The whole-program stream fixture compares nested integer and Boolean uniform
+choices with scalar expected values over full and partial WebAssembly racks.
+It checks every remainder and that each call leaves the output beyond its
+count unchanged. Final-object verification also checks that the choices stay
+on racks before partial stores.
+
 `tools/release_gate.sh` runs every check, including the OCaml unit tests
 (`dune runtest`), the AArch64 differential under QEMU, the capability
 evidence in `capability_evidence.tsv`, the parser differential and the
@@ -71,7 +77,12 @@ comparisons choose signed roots, checking both arms
 and quiet-NaN conditions over guarded tails without exceptions from untaken
 work. C and Rake callers exercise the condition, including in-place output.
 An eight-argument case checks argument-register preservation over multiple racks and in-place
-output. Mutable descriptors check a column update through C and Rake callers,
+output. Mixed `f32`/`i32`/`u32`/`bool` arguments check the independent C register
+counters and the output pointer's position. Signed and unsigned boundaries,
+deliberately set unused Boolean bits and nested protected roots are checked
+against scalar C over every guarded count. A six-uniform mixed-type update
+checks persistent slots, and a separate destination checks descriptor layout.
+Mutable descriptors check a column update through C and Rake callers,
 an unread destination column, unchanged independent columns and null unused
 pointers. C and Rake callers use a separate output descriptor with a different
 record layout. C checks null unused pointers and exact aliasing with an input

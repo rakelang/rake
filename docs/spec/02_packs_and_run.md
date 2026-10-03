@@ -208,19 +208,21 @@ mutable stacks and rack parameters, in both addressing modes.
 
 The unreleased development compiler supports an input stack and an `i32` or
 `i64` count, optionally followed by a mutable destination stack, then up to eight
-uniform `f32` arguments. One `f32s` traversal yields an `f32` stream from a
+uniform `f32`, `i32`, `u32` or `bool` arguments within the C register limits.
+One `f32s` traversal yields an `f32` stream from a
 read-only stack, or updates one column in its mutable input or destination.
 Its body loads one to four `f32` columns and combines immutable lane expressions,
 including calls to rakes and scratches. General loops, multiple column stores,
-widening, other parameter types, reductions, scans, extraction, insertion and shuffles
+widening, other scalar parameter types, reductions, scans, extraction, insertion and shuffles
 remain work in progress and fail compilation. Unused stored columns may have
 other scalar types.
 
 On Linux x86-64 the stream follows System V: the descriptor is in `rdi`, the
-count in `rsi`, and the output in `rdx`. It returns `void` under its source
+count in `rsi`, and, when there are no integer uniforms, the output in `rdx`.
+It returns `void` under its source
 identifier, uses no stack frame and calls nothing. The AVX profiles execute
 `vzeroupper` before returning. On AArch64 it follows AAPCS64, with the
-descriptor in `x0`, count in `x1` and output in `x2`:
+descriptor in `x0`, count in `x1` and, without integer uniforms, output in `x2`:
 
 ```c
 void roots(
@@ -254,8 +256,39 @@ The floating-point arguments arrive in `xmm0` through `xmm7` on x86, or
 `s0` through `s7` on AArch64. Rake preserves them in caller-clobbered registers
 before loading the first rack, and the allocator keeps them live through
 every iteration. Register pressure still causes a compilation error. The
-stream never spills an argument to memory or accepts a ninth argument on
-the C stack.
+stream never spills an argument to memory or accepts stack arguments.
+
+Integer and Boolean uniforms advance the integer argument counter separately
+from floats. The descriptor and count consume two slots. A separate mutable
+destination consumes another, while a stream's output pointer comes after
+the uniforms. Consequently an x86 stream can take three integer or Boolean
+uniforms, an in-place update four, and an AArch64 stream five or an in-place
+update six. The eight-uniform limit also applies to mixed types. Compilation
+fails when either register counter or the vector allocator runs out of space.
+Booleans retain only their value bit, so unspecified upper C argument bits
+cannot affect a choice. Uniform comparisons and Boolean conditions use the
+same vector masks in full racks and tails.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Values {
+  f32: value;
+}
+
+run choose_scale(input: stack Values, <count: i32>, <mode: i32>, <scale: f32>, <enabled: bool>) -> f32:
+  for row in input using f32s up to <count>:
+    let value = row.value
+    yield if <enabled> then (if <mode> < <0> then value * <scale> else value) else <0.0>
+```
+
+Its C declaration preserves that order. On x86, `mode` is in `edx`, `scale`
+in `xmm0`, `enabled` in `ecx` and the output pointer in `r8`. On AArch64 the
+corresponding slots are `w2`, `s0`, `w3` and `x4`:
+
+```c
+void choose_scale(const struct rake_stack_Values_v1 *input, int32_t count,
+    int32_t mode, float scale, bool enabled, float *result);
+```
 
 To update a column in place, make the input stack mutable and finish the
 traversal with a column assignment. This run has no stream result or separate
@@ -284,7 +317,7 @@ A column update may also write an input column that the expression never
 reads. A C caller may leave the stack's unused pointers null.
 
 A separate destination stack can have a different record layout. Its
-descriptor follows the count, before the floating-point uniforms:
+descriptor follows the count, before the uniforms:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake

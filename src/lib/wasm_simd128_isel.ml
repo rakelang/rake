@@ -341,7 +341,11 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
         in
         emit_in_order [ left; right ] @ [ Operation (prefix ^ name) ]
     | N.Select { condition; if_true; if_false }, N.Rack _ when type_of condition = N.Scalar N.I1 ->
-        emit_in_order [ if_true; if_false; condition ] @ [ Operation "select" ]
+        (* Keep the choice on the rack. A scalar select lets Clang move it
+           after the partial store's lane extraction when only one lane is
+           active. Broadcast the Boolean's all-bits mask instead. *)
+        emit_in_order [ if_true; if_false ] @ [ I32_const 0l ] @ emit condition
+        @ [ Operation "i32.sub"; Operation "i32x4.splat"; Operation "v128.bitselect" ]
     | N.Extract { rack; lane }, N.Scalar element -> (
         match IntMap.find_opt lane definitions with
         | Some (N.Const (N.Int32 index), _) ->

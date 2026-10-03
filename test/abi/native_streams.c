@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <fenv.h>
+#include <stdbool.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,6 +36,12 @@ extern void three_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void four_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void weighted_roots(const rake_stack_Paired_v1 *, int64_t, float, float, float, float *);
 extern void signed_roots(const rake_stack_Paired_v1 *, int64_t, float, float *);
+extern void integer_roots(const rake_stack_Paired_v1 *, int32_t,
+    int32_t, float, uint32_t, bool, float, float *);
+extern void integer_update(const rake_mut_stack_Paired_v1 *, int64_t,
+    int32_t, float, float, uint32_t, float, bool);
+extern void integer_destination(const rake_stack_Paired_v1 *, int64_t,
+    const rake_mut_stack_Roots_v1 *, int32_t, float, uint32_t, bool);
 extern void eight_uniforms(const rake_stack_Paired_v1 *, int64_t,
     float, float, float, float, float, float, float, float, float *);
 extern void update_first(const rake_mut_stack_Paired_v1 *, int32_t, float, float);
@@ -48,6 +55,8 @@ extern int rake_stream_program_main(void);
    unspecified. Exercise that ABI property independently of GCC's usual
    zero-extending argument moves, for both positive and negative counts. */
 extern void paired_roots_dirty_count(const rake_stack_Paired_v1 *, int32_t, float *);
+extern void integer_roots_dirty_bool(const rake_stack_Paired_v1 *, int32_t,
+    int32_t, float, uint32_t, bool, float, float *);
 #if defined(__x86_64__)
 __asm__(".text\n"
     ".globl paired_roots_dirty_count\n"
@@ -57,7 +66,14 @@ __asm__(".text\n"
     "movabs $0x5a5a5a5a00000000, %rax\n"
     "or %rax, %rsi\n"
     "jmp paired_roots\n"
-    ".size paired_roots_dirty_count, .-paired_roots_dirty_count\n");
+    ".size paired_roots_dirty_count, .-paired_roots_dirty_count\n"
+    ".globl integer_roots_dirty_bool\n"
+    ".type integer_roots_dirty_bool, @function\n"
+    "integer_roots_dirty_bool:\n"
+    "movzbl %r8b, %r8d\n"
+    "or $0x5a5a0100, %r8d\n"
+    "jmp integer_roots\n"
+    ".size integer_roots_dirty_bool, .-integer_roots_dirty_bool\n");
 #elif defined(__aarch64__)
 __asm__(".text\n"
     ".globl paired_roots_dirty_count\n"
@@ -67,7 +83,15 @@ __asm__(".text\n"
     "movz x9, #0x5a5a, lsl #32\n"
     "orr x1, x1, x9\n"
     "b paired_roots\n"
-    ".size paired_roots_dirty_count, .-paired_roots_dirty_count\n");
+    ".size paired_roots_dirty_count, .-paired_roots_dirty_count\n"
+    ".globl integer_roots_dirty_bool\n"
+    ".type integer_roots_dirty_bool, %function\n"
+    "integer_roots_dirty_bool:\n"
+    "and w4, w4, #1\n"
+    "orr w4, w4, #0x100\n"
+    "movk w4, #0x5a5a, lsl #16\n"
+    "b integer_roots\n"
+    ".size integer_roots_dirty_bool, .-integer_roots_dirty_bool\n");
 #else
 #error Native traversal oracle requires AMD64 or AAPCS64
 #endif
@@ -302,6 +326,54 @@ int main(void)
                 if (bits(columns[0][i]) != bits(expected)) abort();
             }
         }
+        const int32_t signed_modes[] = { INT32_MIN, -1, 0, INT32_MAX };
+        const uint32_t pivots[] = { 0, 0x7fffffffu, 0x80000000u, UINT32_MAX };
+        for (size_t scenario = 0; scenario < 32; ++scenario) {
+            const bool positive = (scenario & 1) != 0;
+            const int32_t mode = signed_modes[(scenario >> 1) & 3];
+            const uint32_t pivot = pivots[(scenario >> 3) & 3];
+            for (size_t i = 0; i < count; ++i) {
+                const float magnitude = (float)((i + 1) * (i + 1));
+                columns[0][i] = positive ? magnitude : -magnitude;
+                columns[1][i] = (float)((i + 2) * (i + 2));
+                expected_pair[i] = positive
+                    ? (float)(mode < 0 || pivot >= 0x80000000u ? i + 1 : i + 2) * scale + bias
+                    : -(float)(i + 1);
+            }
+            feclearexcept(FE_ALL_EXCEPT);
+            integer_roots_dirty_bool(&stack, (int32_t)count,
+                mode, scale, pivot, positive, bias, columns[4]);
+            if (fetestexcept(FE_ALL_EXCEPT)) abort();
+            for (size_t i = 0; i < count; ++i)
+                if (bits(columns[4][i]) != bits(expected_pair[i])) abort();
+            integer_roots(&stack, (int32_t)count,
+                mode, scale, pivot, positive, bias, columns[0]);
+            for (size_t i = 0; i < count; ++i)
+                if (bits(columns[0][i]) != bits(expected_pair[i])) abort();
+            /* Six persistent slots, interleaved C argument classes,
+               and a separately shaped destination exercise distinct ABIs. */
+            for (size_t i = 0; i < count; ++i) {
+                columns[0][i] = (float)(i + 1);
+                expected_pair[i] = columns[0][i];
+                if (positive && mode < 0 && pivot >= 0x80000000u) {
+                    expected_pair[i] += 1.0f;
+                    expected_pair[i] += 2.0f;
+                    expected_pair[i] += 3.0f;
+                }
+            }
+            integer_update(&mutable_stack, (int64_t)count,
+                mode, 1.0f, 2.0f, pivot, 3.0f, positive);
+            for (size_t i = 0; i < count; ++i) {
+                if (bits(columns[0][i]) != bits(expected_pair[i])) abort();
+                if (positive && mode < 0 && pivot >= 0x80000000u)
+                    expected_pair[i] *= scale;
+            }
+            destination.value = columns[4];
+            integer_destination(&stack, (int64_t)count, &destination,
+                mode, scale, pivot, positive);
+            for (size_t i = 0; i < count; ++i)
+                if (bits(columns[4][i]) != bits(expected_pair[i])) abort();
+        }
     }
     paired_roots(NULL, 0, NULL);
     absolute_rows(NULL, 0, NULL);
@@ -327,6 +399,10 @@ int main(void)
     weighted_roots(NULL, -1, NAN, NAN, NAN, NULL);
     signed_roots(NULL, 0, NAN, NULL);
     signed_roots(NULL, -1, NAN, NULL);
+    integer_roots(NULL, 0, INT32_MIN, NAN, UINT32_MAX, true, NAN, NULL);
+    integer_roots_dirty_bool(NULL, -1, INT32_MIN, NAN, UINT32_MAX, true, NAN, NULL);
+    integer_update(NULL, -1, INT32_MIN, NAN, NAN, UINT32_MAX, NAN, true);
+    integer_destination(NULL, 0, NULL, INT32_MIN, NAN, UINT32_MAX, true);
     update_first(NULL, 0, NAN, NAN);
     update_fourth(NULL, -1);
     update_second(NULL, -1, NAN, NAN);

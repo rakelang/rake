@@ -74,6 +74,23 @@ run signed_roots(input: stack Paired, <count: i64>, <mode: f32>) -> f32:
   for row in input using f32s up to <count>:
     yield if <mode> >= <0.0> then sqrt(row.first) else -sqrt(-row.first)
 
+run integer_roots(input: stack Paired, <count: i32>, <mode: i32>, <scale: f32>, <pivot: u32>, <positive: bool>, <bias: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    let first = row.first
+    let second = row.second
+    let chosen = if <mode> < <0> then first else (if <pivot> >= <2147483648> then first else second)
+    yield if <positive> then sqrt(chosen) * <scale> + <bias> else -sqrt(-first)
+
+run integer_update(input: mut stack Paired, <count: i64>, <mode: i32>, <a: f32>, <b: f32>, <pivot: u32>, <c: f32>, <enabled: bool>):
+  for row in input using f32s up to <count>:
+    let value = row.first
+    input.first <- if <enabled> then (if <mode> < <0> then (if <pivot> >= <2147483648> then (value + <a>) + <b> + <c> else value) else value) else value
+
+run integer_destination(input: stack Paired, <count: i64>, result: mut stack Roots, <mode: i32>, <scale: f32>, <pivot: u32>, <enabled: bool>):
+  for row in input using f32s up to <count>:
+    let value = row.first
+    result.value <- if <enabled> then (if <mode> < <0> then (if <pivot> >= <2147483648> then value * <scale> else value) else value) else value
+
 run eight_uniforms(input: stack Paired, <count: i64>, <a: f32>, <b: f32>, <c: f32>, <d: f32>, <e: f32>, <f: f32>, <g: f32>, <h: f32>) -> f32:
   for row in input using f32s up to <count>:
     let columns = ((row.first + row.second) + row.third) + row.fourth
@@ -124,5 +141,14 @@ slow main() -> i32:
     return 1
   signed_roots(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, positives)
   if positives[0] != 2.0 or positives[8] != 2.0:
+    return 1
+  integer_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, <-2147483648>, <2.0>, <4294967295>, <true>, <3.0>, result)
+  if result[1] != 11.0 or result[8] != 17.0:
+    return 1
+  integer_update(stack Paired { first: positives, second: positives, third: positives, fourth: positives, tag: writable_tags }, <9>, <-2147483648>, <1.0>, <2.0>, <4294967295>, <3.0>, <true>)
+  if positives[0] != 8.0 or positives[8] != 8.0:
+    return 1
+  integer_destination(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, stack Roots { tag: writable_tags, value: result }, <-2147483648>, <2.0>, <4294967295>, <true>)
+  if result[0] != 16.0 or result[8] != 16.0:
     return 1
   return pair + weighted + combined + updated + written + magnitude_sum

@@ -32,17 +32,19 @@ let rec expand bindings (expression : Ast.expr) : Ast.expr =
   in
   { expression with v }
 
-(* Uniform conditions are hoisted by the run checker. Restore only the
-   checked, direct f32 comparison so the common lowerer selects its vector
+(* Uniform conditions are hoisted by the run checker. Restore the
+   checked, direct comparison or Boolean so the common lowerer selects its vector
    mask, including the outer tail's participation. Other scalar work stays
    outside the supported native traversal subset. *)
-let uniform_comparison_expression uniforms (value : expr) =
+let uniform_condition_expression uniforms (value : expr) =
   let operand (value : expr) : Ast.expr =
     let v = match value.ty, value.k with
-      | Sc Types.SFloat, Var name when List.mem name uniforms -> Ast.EScalarVar name
+      | Sc scalar, Var name when List.assoc_opt name uniforms = Some scalar -> Ast.EScalarVar name
       | Sc Types.SFloat, Float number -> Ast.EFloat number
+      | Sc (Types.SInt | Types.SUint), Int number -> Ast.EInt number
+      | Sc Types.SBool, Bool value -> Ast.EBool value
       | _ -> reject value.loc
-          "native stream uniform comparisons take f32 parameters or literals; other scalar expressions are work in progress" in
+          "native stream uniform conditions take f32/i32/u32/bool parameters or literals; other scalar expressions are work in progress" in
     { Ast.v; loc = value.loc } in
   match value.ty, value.k with
   | Sc Types.SBool, Compare (comparison, left, right) ->
@@ -50,8 +52,33 @@ let uniform_comparison_expression uniforms (value : expr) =
         | Lt -> Ast.Lt | Le -> Ast.Le | Gt -> Ast.Gt
         | Ge -> Ast.Ge | Eq -> Ast.Eq | Ne -> Ast.Ne in
       { Ast.v = Ast.EBinop (operand left, comparison, operand right); loc = value.loc }
+  | Sc Types.SBool, (Var _ | Bool _) -> operand value
   | _ -> reject value.loc
-      "native stream uniform work currently supports direct f32 comparisons; other scalar expressions are work in progress"
+      "native stream uniform work supports direct f32/i32/u32 comparisons and Booleans; other scalar expressions are work in progress"
+
+let uniform_type = function
+  | Types.SFloat -> Native_ir.Scalar Native_ir.F32
+  | Types.SInt -> Native_ir.Scalar Native_ir.I32
+  | Types.SUint -> Native_ir.Scalar Native_ir.U32
+  | Types.SBool -> Native_ir.Scalar Native_ir.I1
+  | _ -> invalid_arg "unsupported native stream uniform type"
+
+(* Stack descriptors, counts and the stream result consume integer slots.
+   Floating-point arguments advance a separate ABI counter. *)
+let uniform_arguments ~profile run uniforms output =
+  let integer = ref (List.fold_left (fun count -> function
+    | Run_stack _ -> count + 1 | _ -> count) 1 run.run_params) in
+  let floating = ref 0 in
+  let arguments = List.map (fun (name, scalar) ->
+    let counter = if scalar = Types.SFloat then floating else integer in
+    let slot = !counter in
+    incr counter;
+    name, scalar, slot) uniforms in
+  let output_slot = if output = Stream then (let slot = !integer in incr integer; Some slot) else None in
+  let capacity = if Target.is_x86 profile then 6 else 8 in
+  if !integer > capacity then
+    reject run.run_loc "native stream C boundary needs %d integer register slots but this profile provides %d; stack arguments are work in progress" !integer capacity;
+  arguments, output_slot
 
 let uniform_register profile index =
   let first = match profile with
@@ -74,7 +101,7 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     | R_pure (name, Mask _, expression, false) ->
         bindings := (name, expand !bindings expression) :: !bindings
     | R_uniform (name, value) ->
-        bindings := (name, uniform_comparison_expression uniforms value) :: !bindings
+        bindings := (name, uniform_condition_expression uniforms value) :: !bindings
     | R_yield name when output = Stream -> result := List.assoc_opt name !bindings
     | R_output (owner, field, name) when output = Column (owner, field) ->
         result := List.assoc_opt name !bindings
@@ -84,7 +111,7 @@ let compile_body ~profile program run traverse uniforms output ~tail =
   if List.length !columns = 0 || List.length !columns > 4 then
     reject run.run_loc "native streams currently load one to four f32 columns";
   let parameters = List.map (fun (name, _) -> name, Native_ir.Rack Native_ir.F32) !columns
-    @ List.map (fun name -> name, Native_ir.Scalar Native_ir.F32) uniforms in
+    @ List.map (fun (name, scalar) -> name, uniform_type scalar) uniforms in
   let mask = if tail then Some "$native_tail" else None in
   let parameters = match mask with None -> parameters | Some name -> parameters @ [ name, Native_ir.Mask ] in
   let parameter_assignment =
@@ -129,13 +156,13 @@ let run_traversal (run : run) =
           | None, Some destination, { r = R_output (owner, field, _); _ } :: _ when owner = destination -> Column (owner, field)
           | _ -> reject run.run_loc "native traversals end with one f32 stream yield or one f32 column update in a mutable stack; other outputs are work in progress" in
         if List.length uniforms > 8 then
-          reject run.run_loc "native streams accept at most eight uniform f32 arguments in C register slots; stack arguments are work in progress";
+          reject run.run_loc "native streams accept at most eight uniform arguments; stack arguments are work in progress";
         let uniforms = List.map (function
-          | Run_uniform (name, Types.SFloat) -> name
-          | _ -> reject run.run_loc "native stream arguments after the count must be uniform f32 values; other arguments are work in progress") uniforms in
+          | Run_uniform (name, ((Types.SFloat | Types.SInt | Types.SUint | Types.SBool) as scalar)) -> name, scalar
+          | _ -> reject run.run_loc "native stream arguments after the count must be uniform f32/i32/u32/bool values; other arguments are work in progress") uniforms in
         let count_width = if count_type = Types.SInt then Count32 else Count64 in
         t, count_width, uniforms, output
-    | _ -> reject run.run_loc "native traversals currently support one f32 traversal with an input stack, an i32 or i64 count, an optional mutable destination stack and uniform f32 arguments; general native runs are work in progress"
+    | _ -> reject run.run_loc "native traversals currently support one f32 traversal with an input stack, an i32 or i64 count, an optional mutable destination stack and uniform f32/i32/u32/bool arguments; general native runs are work in progress"
 
 let column_offset schema field =
   let rec offset n = function
@@ -159,6 +186,7 @@ let emit_x86_run ~profile program buffer (run : run) =
   let memory = if sse2 then "XMMWORD" else if avx512 then "ZMMWORD" else "YMMWORD" in
   let move = if sse2 then "movups" else "vmovups" in
   let traverse, count_width, uniforms, output = run_traversal run in
+  let arguments, output_slot = uniform_arguments ~profile run uniforms output in
   let full, columns = compile_body ~profile program run traverse uniforms output ~tail:false in
   let tail, tail_columns = compile_body ~profile program run traverse uniforms output ~tail:true in
   let x86_function = function
@@ -189,10 +217,18 @@ let emit_x86_run ~profile program buffer (run : run) =
   emit "jle %s" (label "return");
   (* Copy backwards because SSE2's final ABI input, xmm7, is also its first
      preserved slot. These arguments stay live in the allocator across racks. *)
-  List.mapi (fun index _ -> index) uniforms |> List.rev |> List.iter (fun index ->
+  List.mapi (fun index argument -> index, argument) arguments |> List.rev |> List.iter (fun (index, (_, scalar, slot)) ->
     let destination = uniform_register profile index in
-    if avx512 then emit "vbroadcastss zmm%d, xmm%d" destination index
-    else emit "%s xmm%d, xmm%d" (if sse2 then "movaps" else "vmovaps") destination index);
+    if scalar = Types.SFloat then (
+      if avx512 then emit "vbroadcastss zmm%d, xmm%d" destination slot
+      else emit "%s xmm%d, xmm%d" (if sse2 then "movaps" else "vmovaps") destination slot));
+  List.iteri (fun index (_, scalar, slot) ->
+    if scalar <> Types.SFloat then
+      emit "%smovd xmm%d, %s" (if sse2 then "" else "v") (uniform_register profile index)
+        (List.nth [ "edi"; "esi"; "edx"; "ecx"; "r8d"; "r9d" ] slot)) arguments;
+  Option.iter (fun slot ->
+    let source = List.nth [ "rdi"; "rsi"; "rdx"; "rcx"; "r8"; "r9" ] slot in
+    if source <> "rdx" then emit "mov rdx, %s" source) output_slot;
   List.iteri (fun index (_, field) ->
     emit "mov %s, QWORD PTR [rdi + %d]" pointers.(index) (column_offset schema field)) columns;
   (match output with
@@ -293,6 +329,7 @@ let emit_x86_run ~profile program buffer (run : run) =
 let emit_neon_run program buffer (run : run) =
   let profile = Target.Aarch64_neon in
   let traverse, count_width, uniforms, output = run_traversal run in
+  let arguments, output_slot = uniform_arguments ~profile run uniforms output in
   let full, columns = compile_body ~profile program run traverse uniforms output ~tail:false in
   let tail, tail_columns = compile_body ~profile program run traverse uniforms output ~tail:true in
   if columns <> tail_columns then assert false;
@@ -310,8 +347,11 @@ let emit_neon_run program buffer (run : run) =
   (match count_width with Count32 -> emit "sxtw x1, w1" | Count64 -> ());
   emit "cmp x1, #0";
   emit "b.le %s" (label "return");
-  List.iteri (fun index _ ->
-    emit "dup v%d.4s, v%d.s[0]" (uniform_register profile index) index) uniforms;
+  List.iteri (fun index (_, scalar, slot) ->
+    if scalar = Types.SFloat then
+      emit "dup v%d.4s, v%d.s[0]" (uniform_register profile index) slot
+    else emit "fmov s%d, w%d" (uniform_register profile index) slot) arguments;
+  Option.iter (fun slot -> if slot <> 2 then emit "mov x2, x%d" slot) output_slot;
   List.iteri (fun index (_, field) ->
     let displacement = column_offset schema field in
     if displacement > 32760 then

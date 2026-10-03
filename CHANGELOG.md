@@ -7,6 +7,21 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- WebAssembly uniform choices broadcast a Boolean mask and select rack bits.
+  This retains the rack choice through partial stores. Clang previously moved
+  scalar choices after a one-lane extraction, which the strict object verifier
+  rejected. Scalar expected values check both nested choices and every tail
+  remainder, including unchanged output beyond the count.
+
+- Native float streams take `i32`, `u32` and `bool` uniforms alongside
+  floats. Integer arguments, descriptors, counts and output pointers follow
+  their C register counter independently of float arguments. Direct uniform
+  comparisons and Boolean choices retain protected full-rack and tail
+  semantics. Independent C checks interleaved argument types, signed and
+  unsigned boundaries, unused Boolean argument bits, eight persistent
+  uniforms, in-place updates and separate destinations ending at guard pages.
+  Stack arguments and streams over integer columns remain work in progress.
+
 - Boolean uniforms choose whole racks on all four physical profiles, including
   results of `all` and `any`. A packed broadcast and sign extension turn the
   Boolean into a lane mask, with the usual protection for untaken floating-point
@@ -14,8 +29,7 @@ only when the compiler implements it and the tests cover it.
   slots and retain only its value bit. Independent C checks both choices,
   every reduced lane mask, fused expressions and nested through masks.
   Assembly callers deliberately set unused upper argument bits. Slow callers
-  check Boolean arguments, literals, results and inlined calls. Boolean stream
-  arguments remain work in progress.
+  check Boolean arguments, literals, results and inlined calls.
   Marked literals `<true>` and `<false>` are Boolean uniforms, including
   forms with spaces inside the brackets. The lexer previously treated the
   compact forms as variable references, unlike the Tree-sitter grammar.
@@ -40,8 +54,8 @@ only when the compiler implements it and the tests cover it.
   explicitly typed rack bindings broadcast their uniforms. Native scalar
   integer constants stay in vector registers until the C return transfer.
   Executable semantics and WebAssembly checks cover unsigned boundary bits
-  and wrapping uniform arithmetic. Integer stream
-  arguments and runtime shift counts remain work in progress.
+  and wrapping uniform arithmetic. Streams over integer columns and runtime
+  shift counts remain work in progress.
 
 - `u32s` `min` and `max` compile on SSE2, AVX2, AVX-512F, NEON and
   WebAssembly. SSE2 compares sign-bit-biased copies, then selects the
