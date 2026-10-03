@@ -37,11 +37,10 @@ offsets and imported/exported calls against independently compiled C headers on 
 and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
 that permission will never apply to rack work outside the block.
 
-We will extend large-local frame placement to header-backed aggregates using
-their C-defined size and alignment. The current estimate excludes C-owned
-records, including those nested in arrays or Rake records, so they may still
-occupy host stacks. This needs independent small-stack and alignment checks
-before those locals gain the arena's protection.
+Slow-local frames now use C-defined size and alignment, including
+header-backed aggregates nested in arrays or Rake records. Small frames stay
+on the host stack, while larger frames use the bounded arena. We will extend
+the independent C ABI checks as new foreign types and platforms are added.
 
 WebAssembly will continue to honour the virtual machine's abstraction. Rake
 selects vector instructions, but leaves physical register allocation to the

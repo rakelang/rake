@@ -276,11 +276,15 @@ let int_literal s value =
   | SInt when value = -2147483648L -> "(-2147483647 - 1)"
   | _ -> Printf.sprintf "%Ld" value
 
-let rec is_zero (e : expr) =
+let rec is_zero u (e : expr) =
   match e.k with
   | Int 0L | Bool false -> true
   | Float f -> f = 0.0 && not (Float.sign_bit f)
-  | Array_lit items -> List.for_all is_zero items
+  | Array_lit items -> List.for_all (is_zero u) items
+  | Record_lit (name, fields) ->
+      let record = List.find (fun r -> r.rname = name) u.program.records in
+      (match record.rlayout with C_union _ -> false | Rake_struct | C_struct _ ->
+        List.for_all (fun (_, value) -> is_zero u value) fields)
   | _ -> false
 
 let condition text =
@@ -434,7 +438,7 @@ let rec expr u scope (e : expr) : string =
       ) else
         Printf.sprintf "((%s){ %s })" (record_c u name)
           (String.concat ", " (List.map (fun (f, v) -> Printf.sprintf ".%s = %s" f (go v)) fields))
-  | Array_lit items when List.for_all is_zero items -> Printf.sprintf "((%s){0})" (ctype u e.ty)
+  | Array_lit items when List.for_all (is_zero u) items -> Printf.sprintf "((%s){0})" (ctype u e.ty)
   | Array_lit items ->
       Printf.sprintf "((%s){ { %s } })" (ctype u e.ty) (String.concat ", " (List.map go items))
   | Stack_lit _ -> fail e.loc "a pack is built at the run call it is passed to"
@@ -625,7 +629,7 @@ and stmt u scope indent (s : stmt) =
       Hashtbl.replace scope.places name Borrowed;
       let setup = Printf.sprintf "%s%s *const %s = &rake_locals->%s;\n" pad (ctype u ty) (local name) field in
       let initialise = match value, initial with
-        | Some v, Some text when not (is_zero v) -> Printf.sprintf "%s*%s = %s;\n" pad (local name) text
+        | Some v, Some text when not (is_zero u v) -> Printf.sprintf "%s*%s = %s;\n" pad (local name) text
         | _ -> Printf.sprintf "%s__builtin_memset(%s, 0, sizeof *%s);\n" pad (local name) (local name)
       in
       setup ^ initialise
@@ -663,11 +667,11 @@ and stmt u scope indent (s : stmt) =
         pad pad t i (go upto) step pad pad t i (go from) i i next (block u scope (indent + 8) body) pad pad
   | Break -> pad ^ "break;\n"
   | Continue -> pad ^ "continue;\n"
-  | Return None when scope.framed -> pad ^ "rake_frame_leave(rake_locals);\n" ^ pad ^ "return;\n"
+  | Return None when scope.framed -> pad ^ "if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n" ^ pad ^ "return;\n"
   | Return None -> pad ^ "return;\n"
   | Return (Some v) when scope.framed ->
       (* The value may read the frame: take it before leaving. *)
-      Printf.sprintf "%s{\n%s    const %s rake_result = %s;\n%s    rake_frame_leave(rake_locals);\n%s    return rake_result;\n%s}\n"
+      Printf.sprintf "%s{\n%s    const %s rake_result = %s;\n%s    if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n%s    return rake_result;\n%s}\n"
         pad pad (ctype u v.ty) (go v) pad pad pad
   | Return (Some v) -> Printf.sprintf "%sreturn %s;\n" pad (go v)
 
@@ -761,7 +765,7 @@ let rec initializer_ ?(raw_array_field = false) u (e : expr) =
       let record = List.find (fun r -> r.rname = name) u.program.records in
       "{ " ^ String.concat ", " (List.map (fun (f, v) ->
         Printf.sprintf ".%s = %s" f (initializer_ ~raw_array_field:(record.rlayout <> Rake_struct) u v)) fields) ^ " }"
-  | Array_lit items when List.for_all is_zero items -> "{0}"
+  | Array_lit items when List.for_all (is_zero u) items -> "{0}"
   | Array_lit items ->
       let values = String.concat ", " (List.map (initializer_ ~raw_array_field u) items) in
       if raw_array_field then "{ " ^ values ^ " }" else "{ { " ^ values ^ " } }"
@@ -1519,19 +1523,6 @@ let run_function u (run : run) =
 
 (* ─── The unit ──────────────────────────────────────────────────────── *)
 
-(** The C bytes of a slow aggregate, near enough to decide where it lives;
-    extern records, whose layout C owns, count as small. *)
-let rec approximate_size u = function
-  | Sc s -> bytes s
-  | Array (n, t) -> n * approximate_size u t
-  | Record name -> (
-      match List.find_opt (fun r -> r.rname = name) u.program.records with
-      | Some { rlayout = Rake_struct; rfields; _ } -> List.fold_left (fun acc (_, t) -> acc + max 4 (approximate_size u t)) 0 rfields
-      | _ -> 0)
-  | Ptr _ | Function_pointer _ -> (match u.execution_target with WebAssembly -> 4 | Native_program _ -> 8)
-  | View _ -> (match u.execution_target with WebAssembly -> 8 | Native_program _ -> 16)
-  | _ -> 0
-
 let frame_threshold = 256
 
 (** Large slow aggregates use a bounded arena. WebAssembly reserves it in
@@ -1552,18 +1543,21 @@ let frame_helpers u =
 #ifndef RAKE_FRAME_BYTES
 #define RAKE_FRAME_BYTES (4u << 20)
 #endif
-%sstatic inline void *rake_frame_enter(size_t size)
+%sstatic inline void *rake_frame_enter(size_t size, size_t alignment, size_t *mark)
 {
     const size_t available = (size_t)RAKE_FRAME_BYTES - rake_frame_top;
-    if (size > available || ((16u - size %% 16u) %% 16u) > available - size) __builtin_trap();
-    size += (16u - size %% 16u) %% 16u;
-%s    void *const frame = rake_frames + rake_frame_top;
-    rake_frame_top += size;
+    if (size > available || alignment == 0 || (alignment & (alignment - 1)) != 0) __builtin_trap();
+%s    const uintptr_t address = (uintptr_t)(rake_frames + rake_frame_top);
+    const size_t padding = (alignment - address %% alignment) %% alignment;
+    if (padding > available - size) __builtin_trap();
+    *mark = rake_frame_top;
+    void *const frame = rake_frames + rake_frame_top + padding;
+    rake_frame_top += padding + size;
     return frame;
 }
-static inline void rake_frame_leave(void *frame)
+static inline void rake_frame_leave(size_t mark)
 {
-    rake_frame_top = (size_t)((uint8_t *)frame - rake_frames);
+    rake_frame_top = mark;
 %s}
 |} storage allocate release)
 
@@ -1599,9 +1593,9 @@ let slow_function u (f : slow_func) =
         (ctype u f.fresult) (slow_symbol u f.fname)
         (if params = [] then "void" else String.concat ", " params)
   in
-  (* Aggregates larger than this live in Rake's frame stack rather than C's:
-     the judge links with wasm-ld's 64 KiB stack after static data, which a
-     few kilobyte-sized arrays overflow into, silently. *)
+  (* C determines the aggregate frame's size and alignment, including foreign
+     layouts and padding. Small frames stay on the host stack; large ones use
+     the bounded arena. This avoids guessing foreign sizes in the emitter. *)
   let rec framed_expr (e : expr) =
     match e.k with
     | Block (body, value) -> framed_decls body @ Option.fold ~none:[] ~some:framed_expr value
@@ -1617,7 +1611,7 @@ let slow_function u (f : slow_func) =
     List.concat_map (fun s ->
       match s.s with
       | Decl (_, ty, value, _) ->
-          (if is_aggregate ty && approximate_size u ty > frame_threshold then [ (s, ty) ] else [])
+          (if is_aggregate ty then [ (s, ty) ] else [])
           @ Option.fold ~none:[] ~some:framed_expr value
       | Eval e | Return (Some e) -> framed_expr e
       | Assign (a, b) -> framed_expr a @ framed_expr b
@@ -1643,9 +1637,18 @@ let slow_function u (f : slow_func) =
       let body = block u scope 4 f.fbody in
       let ends_in_return = match List.rev f.fbody with { s = Return _; _ } :: _ -> true | _ -> false in
       ( signature,
-        Printf.sprintf "%s\n{\n    %s *const rake_locals = rake_frame_enter(sizeof(%s));\n%s%s%s}\n" signature frame_type frame_type
+        Printf.sprintf {|%s
+{
+    size_t rake_frame_mark = 0;
+    enum { rake_arena_frame = sizeof(%s) > %d };
+    %s *const rake_locals = rake_arena_frame
+        ? rake_frame_enter(sizeof(%s), _Alignof(%s), &rake_frame_mark)
+        : __builtin_alloca_with_align(rake_arena_frame ? 1 : sizeof(%s),
+              rake_arena_frame ? __CHAR_BIT__ : _Alignof(%s) * __CHAR_BIT__);
+%s%s%s}
+|} signature frame_type frame_threshold frame_type frame_type frame_type frame_type frame_type
           (Buffer.contents entry) body
-          (if ends_in_return then "" else "    rake_frame_leave(rake_locals);\n") )
+          (if ends_in_return then "" else "    if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n") )
 
 let escape_bytes contents =
   let b = Buffer.create (String.length contents * 3) in

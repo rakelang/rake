@@ -543,11 +543,14 @@ a never-inlined scalar helper. Its captured uniforms are scalar parameters,
 and its captured views are passed as pointer/count pairs, so the run needs no
 C stack frame. Rack values never cross that helper boundary.
 
-Slow functions move aggregate locals whose compiler-estimated size exceeds
-256 bytes into Rake's bounded frame arena. Header-backed records are currently
-excluded from that estimate, including when nested in arrays or Rake records,
-so large C-owned locals may still occupy the C stack. Their size-aware frame
-placement remains work in progress.
+The development compiler groups a slow function's aggregate locals into one
+frame. The platform C compiler supplies its actual size and alignment,
+including header-backed records, unions, nested aggregates and padding.
+Frames of at most 256 bytes stay on the host stack through an aligned GNU C
+allocation. Larger frames use Rake's bounded arena, with alignment padding
+counted against its capacity. Releasing a frame also releases that padding.
+Scalar locals and compiler-generated expression temporaries remain the
+platform C compiler's responsibility.
 
 `RAKE_FRAME_BYTES` sets the arena's capacity, 4 MiB unless defined otherwise when
 compiling the C. Each call takes a frame and releases it on normal return.

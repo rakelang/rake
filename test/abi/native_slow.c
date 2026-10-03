@@ -20,6 +20,14 @@ int64_t native_packet_check(const NativePacket *packet)
 static pthread_barrier_t frame_barrier;
 static atomic_int callback_failures;
 
+void native_frame_storage_check(const NativeFrameBlock *block, int32_t expected)
+{
+    if ((uintptr_t)block % _Alignof(NativeFrameBlock) != 0
+        || block->values[0] != expected || block->values[8191] != expected + 1
+        || block->values[16383] != expected + 2)
+        atomic_fetch_add(&callback_failures, 1);
+}
+
 void native_frame_wait(void)
 {
     NativePacket packet = rake_frame_packet(73);
@@ -43,7 +51,8 @@ int main(void)
 {
     /* System V AMD64 and AAPCS64 agree on these independently defined C
        offsets. The Rake object must actually read and write those fields. */
-    if (sizeof(NativePacket) != 32 || _Alignof(NativePacket) != 8
+    if (sizeof(NativeFrameBlock) != 65536 || _Alignof(NativeFrameBlock) != 64
+        || sizeof(NativePacket) != 32 || _Alignof(NativePacket) != 8
         || offsetof(NativePacket, weight) != 8
         || offsetof(NativePacket, values) != 16
         || offsetof(NativePacket, samples) != 24) return 1;

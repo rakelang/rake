@@ -12,9 +12,16 @@ typedef struct NativePacket {
     uint16_t samples[3];
 } NativePacket;
 
+/* This layout exceeds a host worker's stack once several calls are live.
+   Its stronger alignment cannot be inferred from the Rake field types. */
+typedef struct NativeFrameBlock {
+    _Alignas(64) int32_t values[16384];
+} NativeFrameBlock;
+
 NativePacket native_packet_make(int32_t *values);
 int64_t native_packet_check(const NativePacket *packet);
 void native_frame_wait(void);
+void native_frame_storage_check(const NativeFrameBlock *block, int32_t expected);
 
 /* These are implemented in the separately compiled Rake object. */
 int64_t rake_packet_score(const NativePacket *packet);

@@ -7,9 +7,19 @@ record NativePacket from "native_slow.h" {
   [3]u16: samples;
 }
 
+record NativeFrameBlock from "native_slow.h" {
+  [16384]i32: values;
+}
+
+record FrameEnvelope {
+  NativeFrameBlock: block;
+  i32: stamp;
+}
+
 extern slow native_packet_make(values: ptr i32) -> NativePacket from "native_slow.h"
 extern slow native_packet_check(packet: ptr const NativePacket) -> i64 from "native_slow.h"
 extern slow native_frame_wait() from "native_slow.h"
+extern slow native_frame_storage_check(block: ptr const NativeFrameBlock, expected: i32) from "native_slow.h"
 
 state empty_native_pointer: ptr i32
 
@@ -30,6 +40,21 @@ slow rake_packet_make(values: ptr i32) -> NativePacket:
 ~~ Their independently chosen seeds must survive the other thread's unwind.
 slow rake_frame_sum(seed: i32, depth: i32) -> i32:
   local: [128]i32 := [0; 128]
+  foreign: NativeFrameBlock := NativeFrameBlock { values: [0; 16384] }
+  nested: FrameEnvelope := FrameEnvelope { block: NativeFrameBlock { values: [0; 16384] }, stamp: 0 }
+  blocks: [2]NativeFrameBlock := [NativeFrameBlock { values: [0; 16384] }; 2]
+  let marker = seed * 100 + depth * 10
+  foreign.values[0] <- marker
+  foreign.values[8191] <- marker + 1
+  foreign.values[16383] <- marker + 2
+  nested.block.values[0] <- marker + 3
+  nested.block.values[8191] <- marker + 4
+  nested.block.values[16383] <- marker + 5
+  nested.stamp <- marker
+  for index from 0 up to 2:
+    blocks[index].values[0] <- marker + 6 + index
+    blocks[index].values[8191] <- marker + 7 + index
+    blocks[index].values[16383] <- marker + 8 + index
   for index from 0 up to 128:
     local[index] <- seed * 100 + depth * 10 + index
   total: i32 := 0
@@ -37,6 +62,12 @@ slow rake_frame_sum(seed: i32, depth: i32) -> i32:
     total <- rake_frame_sum(seed + 1, depth - 1)
   else:
     native_frame_wait()
+  native_frame_storage_check(addr(foreign), marker)
+  native_frame_storage_check(addr(nested.block), marker + 3)
+  for index from 0 up to 2:
+    native_frame_storage_check(addr(blocks[index]), marker + 6 + index)
+  if nested.stamp != marker:
+    return -1
   for index from 0 up to 128:
     total <- total + local[index]
   return total

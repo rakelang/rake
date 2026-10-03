@@ -7,6 +7,10 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Place slow-local aggregate frames using their actual C size and alignment,
+  including header-backed records nested in arrays and Rake records. Small
+  frames retain aligned host-stack storage. Arena padding is reclaimed on
+  return, and independent small-stack checks cover 64-byte-aligned C objects.
 - Native large-local arenas allocate on entry and free on the outermost
   framed return. Only a pointer and cursor occupy TLS, allowing host runtimes
   to use small worker stacks. Independent pthread checks cover recursive
