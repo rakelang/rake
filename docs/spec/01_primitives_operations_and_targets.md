@@ -50,7 +50,8 @@ unavailable on every profile.
 The table shows operations on `f32s` racks in the development compiler.
 Physical profiles gained `abs`, `min`, `max` and integral rounding after the 0.6.0-beta tag,
 so the tagged compiler still rejects them on those profiles. Native float
-extraction, insertion, static shuffles, mask reductions and NEON folds are also development
+extraction, insertion, static shuffles, mask reductions, uniform `f32`
+conditionals and NEON folds are also development
 features after that tag.
 
 | Operation | `x86-sse2` | `x86-avx2` | `x86-avx512` | `aarch64-neon` | `wasm-simd128` |
@@ -62,7 +63,8 @@ features after that tag.
 | `min` `max` | yes | yes | yes | yes | yes |
 | `floor` `ceil` `trunc` `nearest` | yes | yes | yes | yes | yes |
 | `exp` `log` `log2` `tanh` | WIP* | WIP* | WIP* | WIP* | yes |
-| `if` on a uniform condition | WIP* | WIP* | WIP* | WIP* | yes |
+| `if` on a direct uniform `f32` comparison | yes | yes | yes | yes | yes |
+| `if` on an integer or Boolean uniform condition | WIP* | WIP* | WIP* | WIP* | yes |
 | `sum` `product` `minimum` `maximum`, and the scans | yes | yes | yes | yes | yes |
 | `extract` | yes | yes | yes | yes | yes |
 | `insert` | yes | yes | yes | yes | yes |
@@ -83,7 +85,10 @@ profile.
 
 `select(mask, a, b)` takes `a` in the mask's lanes and `b` elsewhere, and so
 does `if mask then a else b`. `if <c> then a else b` with a uniform condition
-chooses one rack for every lane. `abs` takes the magnitude of each lane,
+chooses one rack for every participating lane. Native uniform comparisons use
+vector broadcasts and comparisons, with benign operands for untaken branch
+work. [Control flow](05_control_flow.md) gives the supported forms.
+`abs` takes the magnitude of each lane,
 including changing −0 to +0. Native profiles clear the sign bit with a vector
 bitwise operation, without floating-point arithmetic or exceptions.
 

@@ -1,4 +1,5 @@
 #include <fenv.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,6 +12,19 @@ extern bool mask_any(rack);
 extern uint32_t mask_bits(rack);
 extern uint32_t mask_gap_bits(rack);
 extern uint32_t mask_composed(rack);
+
+extern rack uniform_lt(rack, rack, float, float);
+extern rack uniform_le(rack, rack, float, float);
+extern rack uniform_gt(rack, rack, float, float);
+extern rack uniform_ge(rack, rack, float, float);
+extern rack uniform_eq(rack, rack, float, float);
+extern rack uniform_ne(rack, rack, float, float);
+extern rack uniform_fused(rack, rack, float);
+extern rack uniform_literal_right(rack, rack, float);
+extern rack uniform_literal_left(rack, rack, float);
+extern rack uniform_extracted(rack, rack);
+extern rack uniform_guarded_roots(rack, float);
+extern rack uniform_nested(rack, float, float);
 
 extern rack shuffle_reverse(rack);
 extern rack shuffle_rotate(rack);
@@ -55,6 +69,97 @@ static uint32_t bits(float value)
     uint32_t result;
     memcpy(&result, &value, sizeof result);
     return result;
+}
+
+static int check_uniform_conditions(void)
+{
+    rack (*const comparisons[])(rack, rack, float, float) = {
+        uniform_lt, uniform_le, uniform_gt, uniform_ge, uniform_eq, uniform_ne
+    };
+    const uint32_t selectors[] = {
+        0u, 0x80000000u, 0x3f800000u, 0xbf800000u, 1u, 0x80000001u,
+        0x7f800000u, 0xff800000u, 0x7fc12345u, 0xffc54321u
+    };
+    uint32_t first[LANES], second[LANES], output[LANES];
+    for (int lane = 0; lane < LANES; ++lane) {
+        first[lane] = selectors[lane % 10];
+        second[lane] = selectors[(lane + 3) % 10];
+    }
+    rack a, b;
+    memcpy(&a, first, sizeof a);
+    memcpy(&b, second, sizeof b);
+    for (int l = 0; l < 10; ++l) for (int r = 0; r < 10; ++r) {
+        float left, right;
+        memcpy(&left, &selectors[l], sizeof left);
+        memcpy(&right, &selectors[r], sizeof right);
+        const bool ordered = !isnan(left) && !isnan(right);
+        const bool expected[] = {
+            ordered && left < right, ordered && left <= right,
+            ordered && left > right, ordered && left >= right,
+            ordered && left == right, ordered && left != right
+        };
+        for (int comparison = 0; comparison < 6; ++comparison) {
+            feclearexcept(FE_ALL_EXCEPT);
+            const rack result = comparisons[comparison](a, b, left, right);
+            memcpy(output, &result, sizeof output);
+            if (fetestexcept(FE_ALL_EXCEPT)) return 18;
+            for (int lane = 0; lane < LANES; ++lane)
+                if (output[lane] != (expected[comparison] ? first[lane] : second[lane])) return 19;
+        }
+        const rack literal_results[] = {
+            uniform_literal_right(a, b, left), uniform_literal_left(a, b, left)
+        };
+        for (int comparison = 0; comparison < 2; ++comparison) {
+            memcpy(output, &literal_results[comparison], sizeof output);
+            for (int lane = 0; lane < LANES; ++lane)
+                if (output[lane] != (left > 0.0f ? first[lane] : second[lane])) return 20;
+        }
+    }
+    for (int positive = 0; positive < 2; ++positive) {
+        float values[LANES], result[LANES];
+        for (int lane = 0; lane < LANES; ++lane)
+            values[lane] = (positive ? 1.0f : -1.0f) * (float)((lane + 1) * (lane + 1));
+        memcpy(&a, values, sizeof a);
+        const rack extracted = uniform_extracted(a, b);
+        memcpy(output, &extracted, sizeof output);
+        for (int lane = 0; lane < LANES; ++lane)
+            if (output[lane] != (positive ? bits(values[lane]) : second[lane])) return 21;
+        feclearexcept(FE_ALL_EXCEPT);
+        const rack roots = uniform_guarded_roots(a, positive ? 1.0f : -1.0f);
+        memcpy(result, &roots, sizeof result);
+        if (fetestexcept(FE_ALL_EXCEPT)) return 22;
+        for (int lane = 0; lane < LANES; ++lane)
+            if (bits(result[lane]) != bits((positive ? 1.0f : -1.0f) * (float)(lane + 1))) return 23;
+    }
+    float values[LANES], result[LANES];
+    for (int lane = 0; lane < LANES; ++lane)
+        values[lane] = lane % 2 ? -(float)((lane + 1) * (lane + 1)) : (float)((lane + 1) * (lane + 1));
+    memcpy(&a, values, sizeof a);
+    for (int root = 0; root < 2; ++root) {
+        feclearexcept(FE_ALL_EXCEPT);
+        /* The untaken division has a zero denominator; outer gaps include negative roots. */
+        const rack nested = uniform_nested(a, root ? 1.0f : -1.0f, root ? 0.0f : 2.0f);
+        memcpy(result, &nested, sizeof result);
+        if (fetestexcept(FE_ALL_EXCEPT)) return 24;
+        for (int lane = 0; lane < LANES; ++lane) {
+            const float expected = values[lane] > 0.0f
+                ? (root ? sqrtf(values[lane]) : values[lane] / 2.0f) : 0.0f;
+            if (bits(result[lane]) != bits(expected)) return 25;
+        }
+    }
+    float other[LANES];
+    for (int lane = 0; lane < LANES; ++lane) other[lane] = (float)(lane * 2 - 3);
+    memcpy(&b, other, sizeof b);
+    for (int first_arm = 0; first_arm < 2; ++first_arm) {
+        const rack fused = uniform_fused(a, b, first_arm ? 1.0f : -1.0f);
+        memcpy(result, &fused, sizeof result);
+        for (int lane = 0; lane < LANES; ++lane) {
+            const float shifted = values[lane] + 1.0f;
+            const float expected = (first_arm ? shifted : other[lane]) + shifted;
+            if (bits(result[lane]) != bits(expected)) return 26;
+        }
+    }
+    return 0;
 }
 
 static int check_mask_reductions(void)
@@ -136,6 +241,8 @@ static int check_shuffles(const uint32_t patterns[16], int scenario)
 
 int main(void)
 {
+    const int uniform = check_uniform_conditions();
+    if (uniform) return uniform;
     const int reduced = check_mask_reductions();
     if (reduced) return reduced;
     float (*const extractions[])(rack) = { ALL_LANES(extract_lane_) };

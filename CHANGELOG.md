@@ -7,6 +7,14 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Direct uniform `f32` comparisons support whole-rack conditional expressions
+  on all four physical profiles. Broadcast operands use ordered vector
+  comparisons and selection, with benign operands in untaken branches.
+  Independent C checks the six predicates, NaNs, signed zeros, subnormals,
+  mixed scalar/vector arguments and nesting inside through masks. Stream
+  checks cover guarded tails, in-place output and Rake callers. Integer and
+  Boolean uniform conditions remain work in progress on physical profiles.
+
 - Float comparison masks support `all`, `any` and `bitmask` on all four
   physical profiles. Full-width bitwise reductions use one checked temporary
   vector register, then transfer the completed Boolean or bitset through the

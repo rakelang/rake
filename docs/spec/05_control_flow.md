@@ -1,8 +1,9 @@
 # Control flow
 
-Rake has two kinds of choice. A uniform condition, one `bool` for every lane,
-chooses which code runs. A mask, one `bool` for each lane, chooses each lane's
-value, and every lane's code runs. Tines, through blocks and sweeps are the
+Rake has two kinds of choice. A uniform condition chooses the same branch for
+every lane. A mask chooses a branch independently in each lane.
+In vector code, both choices use vector selection. Slow code can branch
+around statements. Tines, through blocks and sweeps are the
 named form of the second kind, defined in [tines, through and
 sweeps](03_tines_and_through.md). This page defines conditional
 expressions, loops and branches.
@@ -18,25 +19,45 @@ inactive lane's computation doesn't happen, as in a through block, so
 operands are replaced with benign values on targets with floating-point
 exceptions. On WebAssembly, the expression below is two subtractions, a
 comparison and one `v128.bitselect`. A mask conditional compiles on
-`x86-avx2`, `aarch64-neon` and `wasm-simd128`:
+every production profile:
 
-<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 scratch distance(v: f32s, w: f32s) -> f32s:
   if v > w then v - w else w - v
 ```
 
-A uniform condition chooses one whole rack. In vector code both branches are
-rack expressions that the target computes before selecting one, so computing
-the branch not taken has no effect. In slow code, only the chosen branch is
-evaluated. A uniform conditional in vector code compiles on `wasm-simd128`
-only:
+A uniform condition chooses one whole rack. The development compiler accepts
+a direct comparison of uniform `f32` values on every production profile.
+A comparison can also use a literal or an extracted `f32` bound as a uniform.
+The physical profiles broadcast the operands, compare them as vectors and
+select the same branch in every participating lane. Both branches have
+instructions, with benign operands substituted for untaken work that could
+raise floating-point exceptions. A surrounding `through` or traversal tail
+also limits participation.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch pick(near: f32s, far: f32s, <distance: f32>, <limit: f32>) -> f32s:
+  if <distance> <= <limit> then near else far
+```
+
+Comparisons with a NaN are false, including `!=`, so an unordered condition
+chooses the `else` arm. These native conditionals are development additions
+after the 0.6.0-beta tag. Integer and Boolean uniform conditions in vector
+code remain WIP (work in progress) on the physical profiles.
+
+WebAssembly retains one scalar condition and a whole-rack selection. It
+computes both pure branches before selecting, and has no floating-point
+exception flags. It also supports integer and Boolean conditions:
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
-scratch pick(near: f32s, far: f32s, <late: i32>) -> f32s:
+scratch pick_late(near: f32s, far: f32s, <late: i32>) -> f32s:
   if <late> > <0> then near else far
 ```
+
+In slow code, only the chosen branch is evaluated.
 
 In vector code, a branch can't read memory. A load, gather or element read is
 bound with `let` before the conditional, so it visibly happens whichever way
@@ -60,7 +81,7 @@ In a scratch or rake, `repeat` unrolls completely, and the body may update
 mutable rack locations, so a scratch stays straight-line code. This compiles on
 every production profile:
 
-<!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 scratch cube(a: f32s) -> f32s:
   power := a

@@ -16,6 +16,11 @@ scratch native_any_positive(<value: f32>) -> bool:
 scratch native_positive_bits(<value: f32>) -> u32:
   bitmask(<value> > <0.0>)
 
+scratch native_uniform_choice(<left: f32>, <right: f32>, <value: f32>) -> f32:
+  let values = <value> * <1.0>
+  let selected = if <left> > <right> then values else <-0.0>
+  extract(selected, 0)
+
 slow main() -> i32:
   let original: f32 = -0.0
   let carried = native_identity(<original>)
@@ -27,4 +32,8 @@ slow main() -> i32:
     return 2
   if native_positive_bits(<-1.0>) != 0 or bit_and(native_positive_bits(<1.0>), 15) != 15:
     return 2
+  if native_uniform_choice(<2.0>, <1.0>, <3.5>) != 3.5:
+    return 4
+  if bitcast(u32, native_uniform_choice(<1.0>, <2.0>, <3.5>)) != bitcast(u32, original):
+    return 4
   return i32(native_identity(<3.5>))

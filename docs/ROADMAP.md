@@ -120,9 +120,16 @@ then cross the scalar C ABI through a checked terminal transfer. Independent
 C checks every lane-mask pattern and ordered comparisons containing quiet
 NaNs. Native scalar arithmetic over those results remains work in progress.
 
+Direct uniform `f32` comparisons now choose a whole rack on all four physical
+profiles. The comparison uses broadcasts and vector masks, with protected
+operands in untaken branches. Independent C checks all six ordered predicates,
+including quiet NaNs, and conditions nested inside through masks. Guard-page
+checks cover stream tails and in-place output. Integer and Boolean uniform
+conditions remain work in progress on the physical profiles.
+
 We will bring the physical profiles up to the language's published operation
 set. The next work covers substantial maths, integer racks, integer shuffles,
-integer extraction and insertion, uniform conditionals and
+integer extraction and insertion, the remaining uniform conditionals and
 gather. A CPU profile
 will gain an operation only when its compiled result matches the interpreter
 and its object verifier proves the selected vector sequence.

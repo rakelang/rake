@@ -133,6 +133,14 @@ with `movd` or `vmovd` into `eax` on x86, or `umov` into `w0` on AArch64.
 The verifier accepts only that terminal result transfer, and still rejects
 intermediate scalar lane work.
 
+A direct uniform `f32` condition broadcasts both comparison operands and
+uses the existing ordered vector comparison. Its mask selects the same arm
+in every participating lane. The branches pass through the common masked
+lowering, so untaken arithmetic receives benign operands. Outer through masks
+and stream tails further limit participation. This uses no scalar comparison
+or branch inside the register kernel. Integer and Boolean uniform conditions
+remain work in progress on physical profiles.
+
 ## Whole programs
 
 ```text

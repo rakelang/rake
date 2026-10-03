@@ -66,8 +66,11 @@ against independent scalar C. One to four input columns end at guard pages,
 as does the output, for counts from zero through 65. The checks cover every
 tail remainder, exact in-place output, inactive-lane arithmetic and an unread
 byte column in the descriptor. C and Rake callers pass scale, bias
-and threshold uniforms, including a quiet-NaN threshold. An eight-argument
-case checks argument-register preservation over multiple racks and in-place
+and threshold uniforms, including a quiet-NaN threshold. Direct uniform
+comparisons choose signed roots, checking both arms
+and quiet-NaN conditions over guarded tails without exceptions from untaken
+work. C and Rake callers exercise the condition, including in-place output.
+An eight-argument case checks argument-register preservation over multiple racks and in-place
 output. Mutable descriptors check a column update through C and Rake callers,
 an unread destination column, unchanged independent columns and null unused
 pointers. C and Rake callers use a separate output descriptor with a different
@@ -112,6 +115,12 @@ signed zeros stay gaps without floating-point exceptions. Independently
 assembled verifier fixtures require the exact scalar result transfer at
 the terminal return, and reject wrong registers, wrong lanes, missing or
 intermediate transfers, and scalar arithmetic inside the kernel.
+
+The same oracle compares all six uniform `f32` conditions with scalar ordered
+predicates, including signed zeros, subnormals, infinities and quiet NaNs.
+Exact selected lane bits cross the mixed vector/scalar C ABI. Literal
+operands, an extracted scalar, untaken roots and division, and conditions
+nested inside a through mask check the composed participation contract.
 
 The shared absolute-value oracle supplies explicit binary32 input and output
 bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.

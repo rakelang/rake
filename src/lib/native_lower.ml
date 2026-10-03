@@ -720,7 +720,7 @@ and is_uniform (expr : expr) =
   | EBinop (l, (Lt | Le | Gt | Ge | Eq | Ne), r) -> is_uniform l && is_uniform r
   | _ -> false
 
-and uniform_condition state (expr : expr) =
+and uniform_condition state provenance (expr : expr) =
   match expr.v with
   | EScalarVar name | EBroadcast { v = EScalarVar name; _ } ->
       let* value = find_binding state expr.loc name in
@@ -740,24 +740,34 @@ and uniform_condition state (expr : expr) =
       let* typ = typ in
       let* l = lower_scalar state l typ in
       let* r = lower_scalar state r typ in
-      Ok (emit state expr.loc Ir.source (Ir.Scalar Ir.I1)
-            (Ir.Compare (Option.get (ir_comparison comparison), fst l, fst r)))
+      let comparison = Option.get (ir_comparison comparison) in
+      if not (Target.is_wasm state.profile) && typ = Ir.Scalar Ir.F32 then
+        (* Physical profiles compare broadcasts in their vector registers.
+           All participating lanes take the same arm, with no scalar branch. *)
+        let broadcast scalar =
+          emit state expr.loc provenance (Ir.Rack Ir.F32) (Ir.Broadcast (fst scalar))
+          |> sanitize_operand state expr.loc provenance 0.0 in
+        let left = broadcast l and right = broadcast r in
+        Ok (emit state expr.loc provenance Ir.Mask (Ir.Compare (comparison, fst left, fst right)))
+      else
+        Ok (emit state expr.loc Ir.source (Ir.Scalar Ir.I1)
+              (Ir.Compare (comparison, fst l, fst r)))
   | _ -> error expr.loc "a uniform condition is a uniform bool or a comparison of uniform scalars"
 
-(** Value-producing if. A uniform condition chooses one whole rack; both
-    candidates are pure, so computing both and selecting is unobservable. A
-    mask chooses each lane: each candidate is computed under its lanes'
-    predication, so inactive lanes are sanitised exactly as in a through
-    region, then a vector select merges them. *)
+(** A physical f32 uniform comparison becomes an all-lanes mask. Its
+    branches use the same inactive-operand protection as lane conditions.
+    WebAssembly keeps its scalar condition and whole-rack select. *)
 and lower_if state provenance loc condition if_true if_false =
-  if is_uniform condition then
-    let* condition = uniform_condition state condition in
+  let* condition =
+    if is_uniform condition then uniform_condition state provenance condition
+    else lower_expr state provenance condition in
+  if snd condition = Ir.Scalar Ir.I1 then
     let* if_true, if_false = lower_operands state provenance if_true if_false in
     let* if_true, if_false = expect_same loc "if" if_true if_false in
     Ok (emit state loc provenance (snd if_true)
           (Ir.Select { condition = fst condition; if_true = fst if_true; if_false = fst if_false }))
   else
-    let* mask = lower_expr state provenance condition in
+    let mask = condition in
     let* () = expect_type loc "an if mask" Ir.Mask mask in
     (* The branch masks belong to the conditional's fused region, if any. *)
     let mask_provenance = { Ir.source with fused = provenance.Ir.fused } in

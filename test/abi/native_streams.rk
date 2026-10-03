@@ -70,6 +70,10 @@ run weighted_roots(input: stack Paired, <count: i64>, <scale: f32>, <bias: f32>,
     let rooted = nonnegative_root(row.first)
     yield if row.first >= <threshold> then rooted * <scale> + <bias> else <0.0>
 
+run signed_roots(input: stack Paired, <count: i64>, <mode: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield if <mode> >= <0.0> then sqrt(row.first) else -sqrt(-row.first)
+
 run eight_uniforms(input: stack Paired, <count: i64>, <a: f32>, <b: f32>, <c: f32>, <d: f32>, <e: f32>, <f: f32>, <g: f32>, <h: f32>) -> f32:
   for row in input using f32s up to <count>:
     let columns = ((row.first + row.second) + row.third) + row.fourth
@@ -113,4 +117,12 @@ slow main() -> i32:
   write_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, stack Roots { tag: writable_tags, value: result }, <2.0>, <3.0>)
   let written = i32(result[1])
   absolute_rows(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, result)
-  return pair + weighted + combined + updated + written + i32(result[0] + result[8])
+  let magnitude_sum = i32(result[0] + result[8])
+  positives: [9]f32 := [4.0; 9]
+  signed_roots(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, result)
+  if result[0] != 2.0 or result[8] != 2.0:
+    return 1
+  signed_roots(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, positives)
+  if positives[0] != 2.0 or positives[8] != 2.0:
+    return 1
+  return pair + weighted + combined + updated + written + magnitude_sum

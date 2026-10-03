@@ -34,6 +34,7 @@ extern void nearest_rows(const rake_stack_Paired_v1 *, int32_t, float *);
 extern void three_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void four_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void weighted_roots(const rake_stack_Paired_v1 *, int64_t, float, float, float, float *);
+extern void signed_roots(const rake_stack_Paired_v1 *, int64_t, float, float *);
 extern void eight_uniforms(const rake_stack_Paired_v1 *, int64_t,
     float, float, float, float, float, float, float, float, float *);
 extern void update_first(const rake_mut_stack_Paired_v1 *, int32_t, float, float);
@@ -281,6 +282,26 @@ int main(void)
             parameters[4], parameters[5], parameters[6], parameters[7], columns[0]);
         for (size_t i = 0; i < count; ++i)
             if (bits(columns[0][i]) != bits(expected_four[i])) abort();
+        for (int scenario = 0; scenario < 3; ++scenario) {
+            const int positive = scenario == 0;
+            const float mode = positive ? 1.0f : scenario == 1 ? -1.0f : NAN;
+            for (size_t i = 0; i < count; ++i) {
+                const float magnitude = (float)((i + 1) * (i + 1));
+                columns[0][i] = positive ? magnitude : -magnitude;
+            }
+            feclearexcept(FE_ALL_EXCEPT);
+            signed_roots(&stack, (int64_t)count, mode, columns[4]);
+            if (fetestexcept(FE_ALL_EXCEPT)) abort();
+            for (size_t i = 0; i < count; ++i) {
+                const float expected = (positive ? 1.0f : -1.0f) * (float)(i + 1);
+                if (bits(columns[4][i]) != bits(expected)) abort();
+            }
+            signed_roots(&stack, (int64_t)count, mode, columns[0]);
+            for (size_t i = 0; i < count; ++i) {
+                const float expected = (positive ? 1.0f : -1.0f) * (float)(i + 1);
+                if (bits(columns[0][i]) != bits(expected)) abort();
+            }
+        }
     }
     paired_roots(NULL, 0, NULL);
     absolute_rows(NULL, 0, NULL);
@@ -304,6 +325,8 @@ int main(void)
     four_roots(NULL, -1, NULL);
     eight_uniforms(NULL, 0, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, NULL);
     weighted_roots(NULL, -1, NAN, NAN, NAN, NULL);
+    signed_roots(NULL, 0, NAN, NULL);
+    signed_roots(NULL, -1, NAN, NULL);
     update_first(NULL, 0, NAN, NAN);
     update_fourth(NULL, -1);
     update_second(NULL, -1, NAN, NAN);

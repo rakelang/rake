@@ -24,6 +24,16 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         printf 'scratch relocate_lane_%d(values: f32s) -> f32s:\n  let <picked: f32> = extract(values, %d)\n  insert(values, %d, <picked>)\n\n' "$lane" "$(((lane + 1) % lanes))" "$lane"
     done > "$source"
     printf 'scratch mask_all(values: f32s) -> bool:\n  all(values > <0.0>)\n\nscratch mask_any(values: f32s) -> bool:\n  any(values > <0.0>)\n\nscratch mask_bits(values: f32s) -> u32:\n  bitmask(values > <0.0>)\n\nscratch mask_gap_bits(values: f32s) -> u32:\n  bitmask(not (values > <0.0>))\n\nscratch mask_composed(values: f32s) -> u32:\n  let positive = values > <0.0>\n  let combined = positive or (values = <0.0>)\n  bitmask(combined and positive)\n\n' >> "$source"
+    for comparison in lt le gt ge eq ne; do
+        case "$comparison" in
+            lt) operator='<' ;; le) operator='<=' ;;
+            gt) operator='>' ;; ge) operator='>=' ;;
+            eq) operator='=' ;; ne) operator='!=' ;;
+        esac
+        printf 'scratch uniform_%s(a: f32s, b: f32s, <left: f32>, <right: f32>) -> f32s:\n  if <left> %s <right> then a else b\n\n' "$comparison" "$operator" >> "$source"
+    done
+    printf 'scratch uniform_fused(a: f32s, b: f32s, <mode: f32>) -> f32s:\n  | shifted <| a + <1.0>\n  | chosen <| if <mode> > <0.0> then shifted else b\n  chosen + shifted\n\n' >> "$source"
+    printf 'scratch uniform_literal_right(a: f32s, b: f32s, <value: f32>) -> f32s:\n  if <value> > <0.0> then a else b\n\nscratch uniform_literal_left(a: f32s, b: f32s, <value: f32>) -> f32s:\n  if <0.0> < <value> then a else b\n\nscratch uniform_extracted(a: f32s, b: f32s) -> f32s:\n  let <first: f32> = extract(a, 0)\n  if <first> > <0.0> then a else b\n\nscratch uniform_guarded_roots(values: f32s, <mode: f32>) -> f32s:\n  if <mode> >= <0.0> then sqrt(values) else -sqrt(-values)\n\nrake uniform_nested(values: f32s, <left: f32>, <right: f32>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive else <0.0> into selected:\n    if <left> > <right> then sqrt(values) else values / <right>\n  sweep:\n    | #positive => selected\n    | _ => <0.0>\n\n' >> "$source"
     for pattern in reverse rotate repeat identity weave mixed right; do
         indices=()
         for ((lane=0; lane<lanes; ++lane)); do

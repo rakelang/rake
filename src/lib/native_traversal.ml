@@ -19,7 +19,8 @@ type count_width = Count32 | Count64
 let rec expand bindings (expression : Ast.expr) : Ast.expr =
   let walk = expand bindings in
   let v = match expression.v with
-    | EVar name -> (match List.assoc_opt name bindings with Some e -> e.Ast.v | None -> expression.v)
+    | EVar name | EScalarVar name ->
+        (match List.assoc_opt name bindings with Some e -> e.Ast.v | None -> expression.v)
     | EBroadcast e -> Ast.EBroadcast (walk e)
     | EBinop (a, op, b) -> EBinop (walk a, op, walk b)
     | EUnop (op, e) -> EUnop (op, walk e)
@@ -30,6 +31,27 @@ let rec expand bindings (expression : Ast.expr) : Ast.expr =
     | other -> other
   in
   { expression with v }
+
+(* Uniform conditions are hoisted by the run checker. Restore only the
+   checked, direct f32 comparison so the common lowerer selects its vector
+   mask, including the outer tail's participation. Other scalar work stays
+   outside the supported native traversal subset. *)
+let uniform_comparison_expression uniforms (value : expr) =
+  let operand (value : expr) : Ast.expr =
+    let v = match value.ty, value.k with
+      | Sc Types.SFloat, Var name when List.mem name uniforms -> Ast.EScalarVar name
+      | Sc Types.SFloat, Float number -> Ast.EFloat number
+      | _ -> reject value.loc
+          "native stream uniform comparisons take f32 parameters or literals; other scalar expressions are work in progress" in
+    { Ast.v; loc = value.loc } in
+  match value.ty, value.k with
+  | Sc Types.SBool, Compare (comparison, left, right) ->
+      let comparison = match comparison with
+        | Lt -> Ast.Lt | Le -> Ast.Le | Gt -> Ast.Gt
+        | Ge -> Ast.Ge | Eq -> Ast.Eq | Ne -> Ast.Ne in
+      { Ast.v = Ast.EBinop (operand left, comparison, operand right); loc = value.loc }
+  | _ -> reject value.loc
+      "native stream uniform work currently supports direct f32 comparisons; other scalar expressions are work in progress"
 
 let uniform_register profile index =
   let first = match profile with
@@ -51,6 +73,8 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     | R_pure (name, Rack Types.SFloat, expression, false)
     | R_pure (name, Mask _, expression, false) ->
         bindings := (name, expand !bindings expression) :: !bindings
+    | R_uniform (name, value) ->
+        bindings := (name, uniform_comparison_expression uniforms value) :: !bindings
     | R_yield name when output = Stream -> result := List.assoc_opt name !bindings
     | R_output (owner, field, name) when output = Column (owner, field) ->
         result := List.assoc_opt name !bindings
