@@ -119,6 +119,15 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     | Some index -> (List.nth func.parameters index).typ
     | None -> snd (IntMap.find value definitions)
   in
+  let unsigned_sign_test comparison constant =
+    match IntMap.find_opt constant definitions with
+    | Some (N.Rack_splat (N.Uint32 boundary), _) -> (
+        match comparison, boundary with
+        | N.Ge, 0x80000000l | N.Gt, 0x7fffffffl -> Some false
+        | N.Lt, 0x80000000l | N.Le, 0x7fffffffl -> Some true
+        | _ -> None)
+    | _ -> None
+  in
   (* A single-rack shuffle feeds i8x16.shuffle the same rack twice, so it counts as two uses. *)
   let uses =
     let add value counts = IntMap.update value (fun n -> Some (Option.value n ~default:0 + 1)) counts in
@@ -255,6 +264,23 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
         @ [ Local_get a; Local_get b; Operation "f32x4.lt"; Local_get a; Local_get b; Operation "f32x4.gt"; Operation "v128.or" ]
     | N.Compare (comparison, left, right), N.Mask -> (
         match type_of left with
+        | N.Rack N.U32 -> (
+            let reverse = match comparison with
+              | N.Lt -> N.Gt | N.Le -> N.Ge | N.Gt -> N.Lt | N.Ge -> N.Le
+              | N.Eq -> N.Eq | N.Ne -> N.Ne in
+            let sign_test = match unsigned_sign_test comparison right with
+              | Some inverted -> Some (left, inverted)
+              | None -> Option.map (fun inverted -> right, inverted)
+                  (unsigned_sign_test reverse left) in
+            match sign_test with
+            | Some (operand, inverted) ->
+                (* Unsigned values in the upper half have their sign bit set.
+                   Select that all-bits mask directly, before Clang can choose
+                   the shift on its own during C compilation. *)
+                emit operand @ [ I32_const 31l; Operation "i32x4.shr_s" ]
+                @ (if inverted then [ Operation "v128.not" ] else [])
+            | None -> emit_in_order [ left; right ]
+                @ [ Operation (comparison_instruction N.U32 comparison) ])
         | N.Rack element -> emit_in_order [ left; right ] @ [ Operation (comparison_instruction element comparison) ]
         | typ -> reject "comparison of %s is not a rack comparison" (N.string_of_typ typ))
     | N.Select { condition; if_true; if_false }, N.Rack _ when type_of condition <> N.Scalar N.I1 ->

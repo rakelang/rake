@@ -39,6 +39,25 @@ run unsigned_rows(a: []u32, b: []u32, out: mut []u32, masks: mut []u32, <cut: u3
   masks[<8>] <- <equal>
   masks[<12>] <- <threshold>
 
+run unsigned_half_masks(a: []u32, masks: mut []u32):
+  let values = a[<0>]
+  let <high_ge: u32> = bitmask(values >= <2147483648>)
+  let <high_gt: u32> = bitmask(values > <2147483647>)
+  let <high_le: u32> = bitmask(<2147483648> <= values)
+  let <high_lt: u32> = bitmask(<2147483647> < values)
+  let <low_lt: u32> = bitmask(values < <2147483648>)
+  let <low_le: u32> = bitmask(values <= <2147483647>)
+  let <low_gt: u32> = bitmask(<2147483648> > values)
+  let <low_ge: u32> = bitmask(<2147483647> >= values)
+  masks[<0>] <- <high_ge>
+  masks[<4>] <- <high_gt>
+  masks[<8>] <- <high_le>
+  masks[<12>] <- <high_lt>
+  masks[<16>] <- <low_lt>
+  masks[<20>] <- <low_le>
+  masks[<24>] <- <low_gt>
+  masks[<28>] <- <low_ge>
+
 slow main() -> i32:
   a: [4]u32 := [0, 2147483647, 2147483648, 4294967295]
   b: [4]u32 := [4294967295, 2147483648, 2147483647, 4294967295]
@@ -48,6 +67,7 @@ slow main() -> i32:
   largest: [4]u32 := [0; 4]
   bounded: [4]u32 := [0; 4]
   uniform_output: [4]u32 := [0; 4]
+  half_masks: [32]u32 := [0; 32]
   unsigned_extrema(a, b, smallest, largest, bounded)
   unsigned_rows(a, b, out, masks, <2147483648>)
   if out[0] != 0 or out[1] != 2147483647 or out[2] != 2147483647 or out[3] != 4294967295:
@@ -76,4 +96,9 @@ slow main() -> i32:
   for i from 0 up to 4:
     if uniform_output[i] != wrap_add(a[i], 1):
       return 10
+  unsigned_half_masks(a, half_masks)
+  ~~ Lanes zero and one are below bit 31, lanes two and three are above it.
+  for i from 0 up to 32:
+    if half_masks[i] != (if i < 16 then 12 else 3):
+      return 11
   return 0

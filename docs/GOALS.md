@@ -97,7 +97,7 @@ convention. A traversal's tail never reads or writes past the count, and its
 inactive lanes raise no exception and have no effect.
 
 Today: general runs, stacks and traversals compile on `wasm-simd128`.
-The development compiler adds `f32` stream traversals and single-column
+The development compiler adds `f32`, `i32` and `u32` stream traversals and single-column
 stack updates on SSE2, AVX2, AVX-512 and NEON. An update can write its input
 stack or a separate destination with a different record layout.
 [Packs and runs](spec/02_packs_and_run.md) defines

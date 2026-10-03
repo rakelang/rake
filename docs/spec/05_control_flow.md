@@ -83,7 +83,7 @@ scratch pick_first(near: f32s, far: f32s) -> f32s:
 ```
 
 These native Boolean conditions and C `bool` parameters are development
-additions after the 0.6.0-beta tag. The native `f32` stream subset also takes
+additions after the 0.6.0-beta tag. The native `f32`, `i32` and `u32` stream subset also takes
 `i32`, `u32` and `bool` uniforms within its
 [C register boundary](02_packs_and_run.md#native-cpu-streams).
 

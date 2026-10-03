@@ -1460,6 +1460,9 @@ and indent_lines n text =
     [element]-byte lanes: one lane-sized memory instruction per set bit of
     the remaining bytes, chosen by a switch on the uniform remainder. *)
 and tail_helpers u width element =
+  (* Keep the store's remainder opaque to Clang. A known one-lane store
+     otherwise lets it move integer arithmetic out of the rack and past a
+     lane extraction. The empty scalar asm preserves the runtime remainder. *)
   let name = Printf.sprintf "rake_tail_load_%d_%d" width element in
   if not (Hashtbl.mem u.helper_names name) then (
     let cases store =
@@ -1483,7 +1486,7 @@ and tail_helpers u width element =
     helper u name
       (Printf.sprintf
          "static inline v128_t %s(const uint8_t *p, int32_t r)\n{\n    v128_t v = wasm_i32x4_splat(0);\n    switch (r) {\n%s    default: __builtin_trap();\n    }\n    return v;\n}\n\
-          static inline void rake_tail_store_%d_%d(uint8_t *p, v128_t v, int32_t r)\n{\n    switch (r) {\n%s    default: __builtin_trap();\n    }\n}\n"
+          static inline void rake_tail_store_%d_%d(uint8_t *p, v128_t v, int32_t r)\n{\n    __asm__(\"\" : \"+r\"(r));\n    switch (r) {\n%s    default: __builtin_trap();\n    }\n}\n"
          name (cases false) width element (cases true)));
   u.selected <- "v128.load8_lane" :: "v128.load16_lane" :: "v128.load32_lane" :: "v128.load64_lane"
                 :: "v128.store8_lane" :: "v128.store16_lane" :: "v128.store32_lane" :: "v128.store64_lane" :: u.selected
@@ -1687,6 +1690,11 @@ int main(int argc, char **argv)
 |} (slow_symbol u f.fname)
   | _ -> ""
 
+let native_assembly_literal ~profile assembly =
+  let assembly = assembly
+    ^ (if Target.is_x86 profile then ".att_syntax prefix\n" else "") ^ ".text\n" in
+  "__asm__(\"" ^ escape_bytes assembly ^ "\");\n"
+
 (** The scratches and rakes, through their verified emission; and for each
     scratch slow code calls, a never-inlined boundary function. *)
 let vector_definitions ~source u =
@@ -1703,10 +1711,7 @@ let vector_definitions ~source u =
           let assembly = match Native_backend.emit_allocated ~source allocated with
             | Ok assembly -> assembly
             | Error error -> fail Ast.dummy_loc "%s" (Native_backend.format_error error) in
-          let assembly = assembly
-            ^ (if Target.is_x86 profile then ".att_syntax prefix\n" else "") ^ ".text\n" in
-          let literal = "__asm__(\"" ^ escape_bytes assembly ^ "\");\n" in
-          (literal, Some allocated)
+          (native_assembly_literal ~profile assembly, Some allocated)
       | WebAssembly ->
       match Native_lower.lower_program program with
       | Error error -> raise (Emission_error (error.loc, Native_lower.format_error error))
@@ -1853,9 +1858,10 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
                 Printf.sprintf "const %s *%s" (stack_type u schema writable) (local name)
             | Run_uniform (name, scalar) -> Printf.sprintf "%s %s" (scalar_c scalar) (local name)
             | _ -> assert false) run.run_params in
-          let parameters = parameters @ (if run.run_stream = None then [] else [ "float *rake_out" ]) in
+          let parameters = parameters @ (match run.run_stream with
+            | None -> [] | Some element -> [ scalar_c element ^ " *rake_out" ]) in
           Printf.sprintf "extern void %s(%s);\n" run.run_name (String.concat ", " parameters)) program.runs in
-        prototypes @ [ "__asm__(\"" ^ escape_bytes selected.assembly ^ "\");\n" ], Some selected in
+        prototypes @ [ native_assembly_literal ~profile selected.assembly ], Some selected in
   let native_kernels = if registers = None && traversals = None then None
     else Some { registers; traversals } in
   let slows = List.map (slow_function u) program.slows in

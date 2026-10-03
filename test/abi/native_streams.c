@@ -24,6 +24,29 @@ typedef struct {
     uint8_t *tag;
     float *value;
 } rake_mut_stack_Roots_v1;
+typedef struct {
+    const uint8_t *tag;
+    const int32_t *first, *second;
+    const uint32_t *bits;
+    const float *value;
+} rake_stack_Words_v1;
+typedef struct {
+    uint8_t *tag;
+    int32_t *first, *second;
+    uint32_t *bits;
+    float *value;
+} rake_mut_stack_Words_v1;
+typedef struct {
+    int32_t *signed_value;
+    uint8_t *tag;
+    uint32_t *unsigned_value;
+} rake_mut_stack_WordResults_v1;
+extern void signed_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
+extern void unsigned_words(const rake_stack_Words_v1 *, int64_t, uint32_t, uint32_t, uint32_t *);
+extern void shifted_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
+extern void selected_words(const rake_stack_Words_v1 *, int64_t, bool, int32_t *);
+extern void update_words(const rake_mut_stack_Words_v1 *, int32_t, int32_t);
+extern void write_words(const rake_stack_Words_v1 *, int64_t, const rake_mut_stack_WordResults_v1 *, bool);
 extern void paired_roots(const rake_stack_Paired_v1 *, int32_t, float *);
 extern void absolute_rows(const rake_stack_Paired_v1 *, int32_t, float *);
 extern void minimum_rows(const rake_stack_Paired_v1 *, int64_t, float *);
@@ -106,6 +129,98 @@ static uint32_t bits(float value)
 static float root(float value)
 {
     return value >= 0.0f ? sqrtf(value) : 0.0f;
+}
+
+static void check_integer_columns(unsigned char *const storage[5], size_t page)
+{
+    const uint32_t inputs[] = { 0, 1, 0x7fffffffu, 0x80000000u,
+        0x80000001u, UINT32_MAX, 17, 0xfffffffdu, 0x40000000u };
+    const uint32_t low = 0x80000000u, offset = UINT32_MAX;
+    for (size_t count = 0; count <= 65; ++count) {
+        int32_t *first = (int32_t *)(storage[0] + page) - count;
+        int32_t *second = (int32_t *)(storage[1] + page) - count;
+        uint32_t *words = (uint32_t *)(storage[2] + page) - count;
+        float *values = (float *)(storage[3] + page) - count;
+        uint32_t *output = (uint32_t *)(storage[4] + page) - count;
+        uint32_t expected[65], original_first[65], original_second[65];
+        const rake_stack_Words_v1 input = { NULL, first, second, words, values };
+        const rake_mut_stack_Words_v1 mutable_input = { NULL, first, second, words, values };
+        rake_mut_stack_WordResults_v1 destination = { NULL, NULL, output };
+        for (size_t i = 0; i < count; ++i) {
+            original_first[i] = inputs[(i + count) % 9];
+            original_second[i] = inputs[(i + count + 3) % 9];
+            memcpy(&first[i], &original_first[i], sizeof(int32_t));
+            memcpy(&second[i], &original_second[i], sizeof(int32_t));
+            words[i] = inputs[(i + count + 5) % 9];
+            values[i] = i % 3 == 0 ? NAN : i % 3 == 1 ? -1.0f : 1.0f;
+            const uint32_t magnitude = (uint32_t)(first[i] < 0 ? -(int64_t)first[i] : first[i]);
+            expected[i] = first[i] < second[i]
+                ? original_first[i] * original_second[i] : magnitude + original_second[i];
+        }
+        signed_words(&input, (int32_t)count, (int32_t *)output);
+        for (size_t i = 0; i < count; ++i)
+            if (output[i] != expected[i]) abort();
+        shifted_words(&input, (int32_t)count, (int32_t *)output);
+        for (size_t i = 0; i < count; ++i)
+            if (output[i] != (first[i] < 0 ? UINT32_MAX : 0)) abort();
+        unsigned_words(&input, (int64_t)count, low, offset, output);
+        for (size_t i = 0; i < count; ++i) {
+            uint32_t bounded = words[i] < low ? low : words[i];
+            if (bounded == UINT32_MAX) --bounded;
+            if (output[i] != bounded + offset) abort();
+        }
+        for (int enabled = 0; enabled < 2; ++enabled) {
+            selected_words(&input, (int64_t)count, enabled != 0, (int32_t *)output);
+            for (size_t i = 0; i < count; ++i) {
+                expected[i] = enabled
+                    ? (words[i] >= low ? original_first[i] : original_second[i])
+                    : original_first[i] + 1u;
+                if (output[i] != expected[i]) abort();
+            }
+            feclearexcept(FE_ALL_EXCEPT);
+            write_words(&input, (int64_t)count, &destination, enabled != 0);
+            if (fetestexcept(FE_ALL_EXCEPT)) abort();
+            for (size_t i = 0; i < count; ++i) {
+                expected[i] = enabled && !(values[i] >= 0.0f) ? words[i] + 1u : words[i];
+                if (output[i] != expected[i]) abort();
+            }
+        }
+        /* Every source rack is read before an aliased output column changes. */
+        signed_words(&input, (int32_t)count, first);
+        for (size_t i = 0; i < count; ++i) {
+            int32_t original;
+            memcpy(&original, &original_first[i], sizeof(original));
+            const uint32_t magnitude = (uint32_t)(original < 0 ? -(int64_t)original : original);
+            expected[i] = original < second[i]
+                ? original_first[i] * original_second[i] : magnitude + original_second[i];
+            uint32_t actual;
+            memcpy(&actual, &first[i], sizeof(actual));
+            if (actual != expected[i]) abort();
+            memcpy(&first[i], &original_first[i], sizeof(int32_t));
+        }
+        update_words(&mutable_input, (int32_t)count, INT32_MAX);
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t magnitude = (uint32_t)(first[i] < 0 ? -(int64_t)first[i] : first[i]);
+            uint32_t actual;
+            memcpy(&actual, &second[i], sizeof(actual));
+            if (actual != magnitude + (uint32_t)INT32_MAX) abort();
+            memcpy(&actual, &first[i], sizeof(actual));
+            if (actual != original_first[i] || words[i] != inputs[(i + count + 5) % 9]) abort();
+        }
+        destination.unsigned_value = words;
+        write_words(&input, (int64_t)count, &destination, true);
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t expected_word = inputs[(i + count + 5) % 9] + (values[i] >= 0.0f ? 0u : 1u);
+            if (words[i] != expected_word) abort();
+        }
+    }
+    signed_words(NULL, 0, NULL);
+    signed_words(NULL, INT32_MIN, NULL);
+    unsigned_words(NULL, -1, low, offset, NULL);
+    shifted_words(NULL, -1, NULL);
+    selected_words(NULL, 0, true, NULL);
+    update_words(NULL, -1, INT32_MIN);
+    write_words(NULL, 0, NULL, true);
 }
 
 int main(void)
@@ -408,6 +523,7 @@ int main(void)
     update_second(NULL, -1, NAN, NAN);
     write_roots(NULL, 0, NULL, NAN, NAN);
     write_roots(NULL, -1, NULL, NAN, NAN);
+    check_integer_columns(storage, page);
     for (size_t column = 0; column < 5; ++column)
         if (munmap(storage[column], page * 2)) abort();
     puts("native multi-column guard-page and scalar-oracle checks passed");

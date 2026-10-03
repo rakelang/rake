@@ -16,8 +16,8 @@ assembly, and the final object's kernels pass the existing instruction
 verifier. Slow callers can use uniform `f32`, `i32`, `u32` or `bool` parameters and
 `f32`, `bool`, `i32` or `u32` results.
 Imported C structs use their header's layout, and public slow functions have
-the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`
-streams or update one column in a mutable input or destination stack,
+the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`,
+`i32` or `u32` streams or update one column in a mutable input or destination stack,
 with full and partial racks,
 final-byte verification and independent C/guard-page checks. Traversals also take up to eight uniform
 `f32`, `i32`, `u32` or `bool` arguments, preserved in registers across racks
@@ -175,7 +175,7 @@ profiles use direct unsigned extrema instructions. Independent C checks
 values across bit 31, full-width unsigned literals, nested clamps and
 masked selection while retaining live inputs. Interpreter and WebAssembly
 goldens check unsigned extrema and literal broadcasts too.
-Runtime shift counts, other integer operations and native integer streams
+Runtime shift counts, other integer operations and native streams at other lane widths
 remain work in progress.
 
 Native register kernels now take signed and unsigned 32-bit uniforms through
@@ -191,7 +191,14 @@ untaken floating-point branches retain their inactive-operand protection.
 Float streams also accept integer uniforms. Mixed-type C calls check their
 independent integer and float register counters, the output pointer's slot,
 all eight persistent arguments, in-place updates and separate destinations.
-Streams over integer columns remain work in progress.
+Native streams now traverse signed and unsigned 32-bit columns too. They
+share full-width transfers and guarded tails with float columns, and can
+combine those types in one lane expression. Independent C checks wrapping
+arithmetic, unsigned clamps, literal shifts, mixed masks, exact aliasing and
+single-column updates against arrays ending at guard pages. WebAssembly
+and each selected-profile interpreter check the same fixture. We will extend
+native traversal to widening and the remaining column widths, then define
+participation for cross-lane operations before admitting them in tails.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
 integer extraction and insertion, the remaining scalar expressions and

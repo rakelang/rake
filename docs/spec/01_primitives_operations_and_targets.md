@@ -154,8 +154,9 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | runtime shift counts, conversions, extraction and insertion | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
-float racks, and float masks can select integer racks. Native streams still
-accept float columns only.
+float racks, and float masks can select integer racks. The
+[native stream subset](02_packs_and_run.md#native-cpu-streams) accepts `f32`,
+`i32` and `u32` columns while preserving each column's type.
 
 An integer literal passed to a typed scratch or rake parameter takes that
 parameter's element type. A `u32` parameter can therefore receive

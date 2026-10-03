@@ -70,7 +70,7 @@ reads sixteen byte records at once, and a `u8` column is its rack directly.
 
 ## Count and tail
 
-The count is a uniform `i64`. A count of zero or less reads nothing. A count
+The count is a uniform integer. A count of zero or less reads nothing. A count
 that isn't a multiple of the lane count ends with a tail chunk whose mask is
 `lane < count mod lanes`. Its transfers touch only active elements: lane-sized
 loads and stores on WebAssembly, count-guarded lane transfers on SSE2 and
@@ -151,9 +151,11 @@ Clang folds a constant offset into a WebAssembly load only when it can see
 that the address doesn't wrap, and loop strength reduction hides that. The
 default `--wasm-addressing barrier` gives each pointer an empty `asm`
 statement with one `i32` operand at the top of every iteration. That keeps
-the pointer opaque, so the offsets fold. `--wasm-addressing plain` emits the
-intrinsics alone. The barriers name only scalar pointers, because a `v128`
-operand to `asm` crashes some wasm32 builds of clang.
+the pointer opaque, so the offsets fold. `--wasm-addressing plain` omits
+these pointer barriers. Both modes keep a partial store's remainder opaque
+with an empty scalar `asm`, so clang retains the rack arithmetic before
+selecting its active lane stores. These barriers take scalar operands,
+because a `v128` operand to `asm` crashes some wasm32 builds of clang.
 
 ## wasm32 boundary
 
@@ -209,10 +211,13 @@ mutable stacks and rack parameters, in both addressing modes.
 The unreleased development compiler supports an input stack and an `i32` or
 `i64` count, optionally followed by a mutable destination stack, then up to eight
 uniform `f32`, `i32`, `u32` or `bool` arguments within the C register limits.
-One `f32s` traversal yields an `f32` stream from a
-read-only stack, or updates one column in its mutable input or destination.
-Its body loads one to four `f32` columns and combines immutable lane expressions,
-including calls to rakes and scratches. General loops, multiple column stores,
+One traversal using `f32s`, `i32s` or `u32s` yields a stream of the matching
+scalar type from a read-only stack, or updates one `f32`, `i32` or `u32`
+column in its mutable input or destination. Its body loads one to four
+columns of these types and combines immutable lane expressions, including
+calls to rakes and scratches. A float mask can select integer values, and an
+integer mask can select floats: each column keeps its own element type while
+sharing the traversal's lane count. General loops, multiple column stores,
 widening, other scalar parameter types, reductions, scans, extraction, insertion and shuffles
 remain work in progress and fail compilation. Unused stored columns may have
 other scalar types.
@@ -250,6 +255,30 @@ The C arguments retain source order, with the output last:
 ```c
 void scaled_values(const struct rake_stack_Values_v1 *input,
     int64_t count, float scale, float bias, float *result);
+```
+
+An integer column follows the same traversal. This run adds an offset to
+each signed magnitude using the [wrapping integer arithmetic](01_primitives_operations_and_targets.md#integer-racks):
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack IntegerValues {
+  i32: value;
+}
+
+run signed_magnitudes(input: stack IntegerValues, <count: i32>, <offset: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    yield abs(row.value) + <offset>
+```
+
+`using i32s` visits four records on SSE2 or NEON, eight on AVX2 and sixteen
+on AVX-512. Its C descriptor and output use `int32_t`, preserving every lane's
+bits through the boundary:
+
+```c
+struct rake_stack_IntegerValues_v1 { const int32_t *value; };
+void signed_magnitudes(const struct rake_stack_IntegerValues_v1 *input,
+    int32_t count, int32_t offset, int32_t *result);
 ```
 
 The floating-point arguments arrive in `xmm0` through `xmm7` on x86, or
@@ -372,14 +401,18 @@ and [AAPCS64](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.r
 define those unused argument bits as unspecified. Counts of zero or less
 touch no pointer, so null pointers are allowed then.
 For a positive count, each read column and the output must hold that many
-floats. The same overlap rules as the wasm32 boundary apply.
+elements of its declared type. The same overlap rules as the wasm32 boundary apply.
 
 The final-object verifier compares the complete traversal function with the
 separately assembled selection, including branch offsets, memory operands
 and embedded literals. Any difference or unresolved relocation is rejected.
 `test/native_stream_test.sh` checks independent C results, exact in-place
 output and guarded tails of every remainder for one to four columns. It also
-checks C and Rake callers with scale, bias and threshold arguments, including
+checks signed and unsigned integer columns against independently computed
+wrapping bits, including multiplication, absolute values, literal shifts,
+unsigned clamps and mixed float/integer selection. Integer streams and
+column updates exercise exact aliasing and a separately shaped destination.
+C and Rake callers also check scale, bias and threshold arguments, including
 a quiet-NaN threshold, and eight uniform arguments preserved across racks.
 Mutable-descriptor checks cover the first and fourth columns, an unread
 destination column, unchanged independent columns and null unused pointers.

@@ -71,7 +71,11 @@ general memory runs remain work in progress.
 against independent scalar C. One to four input columns end at guard pages,
 as does the output, for counts from zero through 65. The checks cover every
 tail remainder, exact in-place output, inactive-lane arithmetic and an unread
-byte column in the descriptor. C and Rake callers pass scale, bias
+byte column in the descriptor. Signed and unsigned 32-bit columns check
+wrapping multiplication, absolute values, unsigned clamps, literal shifts
+and mixed float/integer masks against scalar bit arithmetic. Their streams,
+in-place updates and separate destinations use the same guarded counts.
+C and Rake callers pass scale, bias
 and threshold uniforms, including a quiet-NaN threshold. Direct uniform
 comparisons choose signed roots, checking both arms
 and quiet-NaN conditions over guarded tails without exceptions from untaken
@@ -158,7 +162,8 @@ side, equal operands, all/any reductions, global tines and gap inversion.
 Hand-specified interpreter masks cover all six predicates at each CPU width.
 `test/program/unsigned_comparisons.rk` checks unsigned rack selection,
 extrema, clamps and uniform broadcasts against explicit values in both the interpreter and
-compiled WebAssembly.
+compiled WebAssembly. High-bit masks check comparisons at 2³¹ and 2³¹−1,
+including reversed operands and every unsigned boundary value.
 AND-NOT checks operand order, equal inputs, full-width unsigned literals
 and destructive register reuse. Multiplication checks all lanes against unsigned
 C products, including overflow, shared operands and still-live inputs that

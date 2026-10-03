@@ -220,7 +220,8 @@ Equality and inequality compare the unmodified bits. WebAssembly selects
 comparisons and broadcasts. The interpreter stores unsigned lane values in
 the range 0 to 2³²−1, so its ordering stays independent of signed predicates.
 Integer masks and float masks share the same lane representation, so either
-can select float or integer racks. Native integer streams remain work in progress.
+can select float or integer racks. The native traversal subset accepts these
+32-bit integer columns alongside floats.
 
 ## Whole programs
 
@@ -334,6 +335,13 @@ bit-selection. That keeps the choice on a rack through a partial store.
 The final-object verifier rejects extra lane extractions or scalar lowering
 introduced by the C compiler.
 
+A partial store also keeps its scalar remainder opaque to clang with an
+empty `asm` operand. Otherwise a known one-lane store can pull integer
+arithmetic past a lane extraction. This barrier applies in both WebAssembly
+addressing modes and leaves rack arithmetic vectorised. Unsigned comparisons
+at 2³¹ select a packed sign-bit mask directly, with inversion for the lower
+half. Those instructions belong to Rake's selection before C compilation.
+
 The promise is the same as on a physical target: outside a `slow` block, rack
 work uses vector instructions wherever the selected profile implements the
 operation. A run may also contain the uniform address, loop and bounds work
@@ -355,7 +363,8 @@ assembled selection. This includes its branches, address operands and
 embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
-This stage supports one to four `f32` read columns and an `f32` output.
+This stage supports one to four `f32`, `i32` or `u32` read columns and one
+output of these types. A stream's result type matches its traversal domain.
 The output is a separate stream pointer or one column in a mutable stack.
 A separate destination stack may have a different record layout. Column
 updates load every input rack before writing the result.

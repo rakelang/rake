@@ -8,6 +8,50 @@ pack Roots {
   f32: value;
 }
 
+pack Words {
+  u8: tag;
+  i32: first, second;
+  u32: bits;
+  f32: value;
+}
+
+pack WordResults {
+  i32: signed_value;
+  u8: tag;
+  u32: unsigned_value;
+}
+
+run signed_words(input: stack Words, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    let first = row.first
+    let second = row.second
+    yield if first < second then first * second else abs(first) + second
+
+run unsigned_words(input: stack Words, <count: i64>, <low: u32>, <offset: u32>) -> u32:
+  for row in input using u32s up to <count>:
+    yield min(max(row.bits, <low>), <4294967294>) + <offset>
+
+run shifted_words(input: stack Words, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    yield shift_bits_right_signed(row.first, 31)
+
+run selected_words(input: stack Words, <count: i64>, <enabled: bool>) -> i32:
+  for row in input using i32s up to <count>:
+    let first = row.first
+    let second = row.second
+    let bits = row.bits
+    yield if <enabled> then (if bits >= <2147483648> then first else second) else first + <1>
+
+run update_words(input: mut stack Words, <count: i32>, <increment: i32>):
+  for row in input using i32s up to <count>:
+    input.second <- abs(row.first) + <increment>
+
+run write_words(input: stack Words, <count: i64>, result: mut stack WordResults, <enabled: bool>):
+  for row in input using u32s up to <count>:
+    let value = row.value
+    let bits = row.bits
+    result.unsigned_value <- if <enabled> then (if value >= <0.0> then bits else bits + <1>) else bits
+
 rake nonnegative_root(values: f32s) -> f32s:
   tine #valid means values >= <0.0>
   through #valid else <0.0> into rooted:
@@ -151,4 +195,33 @@ slow main() -> i32:
   integer_destination(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, stack Roots { tag: writable_tags, value: result }, <-2147483648>, <2.0>, <4294967295>, <true>)
   if result[0] != 16.0 or result[8] != 16.0:
     return 1
+  let signed_a: [9]i32 = [-2147483648, -1, 0, 2147483647, -17, 29, 1, -2, 536870912]
+  let signed_b: [9]i32 = [-1, 2147483647, -2147483648, 1, 29, -17, 1, -2, 536870912]
+  let unsigned_a: [9]u32 = [0, 2147483647, 2147483648, 4294967295, 1, 2147483649, 4294967294, 17, 29]
+  signed_output: [9]i32 := [0; 9]
+  unsigned_output: [9]u32 := [0; 9]
+  signed_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
+  for i from 0 up to 9:
+    let magnitude = if signed_a[i] < 0 then wrap_sub(0, signed_a[i]) else signed_a[i]
+    let expected = if signed_a[i] < signed_b[i] then wrap_mul(signed_a[i], signed_b[i]) else wrap_add(magnitude, signed_b[i])
+    if signed_output[i] != expected:
+      return 1
+  unsigned_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, <2147483648>, <4294967295>, unsigned_output)
+  for i from 0 up to 9:
+    let expected = wrap_add(min(max(unsigned_a[i], 2147483648), 4294967294), 4294967295)
+    if unsigned_output[i] != expected:
+      return 1
+  shifted_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
+  for i from 0 up to 9:
+    if signed_output[i] != (if signed_a[i] < 0 then -1 else 0):
+      return 1
+  selected_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, <true>, signed_output)
+  for i from 0 up to 9:
+    if signed_output[i] != (if unsigned_a[i] >= 2147483648 then signed_a[i] else signed_b[i]):
+      return 1
+  update_words(stack Words { tag: writable_tags, first: signed_output, second: signed_output, bits: unsigned_output, value: working }, <9>, <7>)
+  write_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output }, <true>)
+  for i from 0 up to 9:
+    if unsigned_output[i] != (if a[i] >= 0.0 then unsigned_a[i] else wrap_add(unsigned_a[i], 1)):
+      return 1
   return pair + weighted + combined + updated + written + magnitude_sum

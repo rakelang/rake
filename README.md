@@ -64,7 +64,8 @@ object, and supports uniform `f32`, `i32` and `u32` parameters and `f32`,
 scalar kernel boundaries remain WIP. Platform C
 imports and exports, header-backed unions, typed C callbacks and process
 arguments are supported too. SSE2, AVX2, AVX-512 and NEON also support
-`f32s` traversals that yield a stream or update one mutable stack column,
+`f32s`, `i32s` and `u32s` traversals that yield a matching stream or update
+one mutable stack column,
 including a separate destination with its own record layout,
 with checked partial racks. The physical profiles also compile direct uniform
 `f32` comparisons as vector selections, including within through masks and

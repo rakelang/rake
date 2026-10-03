@@ -63,6 +63,19 @@ let uniform_type = function
   | Types.SBool -> Native_ir.Scalar Native_ir.I1
   | _ -> invalid_arg "unsupported native stream uniform type"
 
+let column_type = function
+  | Types.SFloat -> Native_ir.Rack Native_ir.F32
+  | Types.SInt -> Native_ir.Rack Native_ir.I32
+  | Types.SUint -> Native_ir.Rack Native_ir.U32
+  | _ -> invalid_arg "unsupported native stream column type"
+
+let column_supported = function Types.SFloat | Types.SInt | Types.SUint -> true | _ -> false
+
+let output_pack program run owner =
+  match List.find_opt (function Run_stack (name, _, true) -> name = owner | _ -> false) run.run_params with
+  | Some (Run_stack (_, schema, _)) -> find_pack program schema
+  | _ -> invalid_arg "native traversal output missing from its checked mutable stacks"
+
 (* Stack descriptors, counts and the stream result consume integer slots.
    Floating-point arguments advance a separate ABI counter. *)
 let uniform_arguments ~profile run uniforms output =
@@ -95,9 +108,9 @@ let compile_body ~profile program run traverse uniforms output ~tail =
   List.iter (fun statement ->
     if !result <> None then reject statement.rloc "native traversal must end with its yield or column update";
     match statement.r with
-    | R_chunk_load (name, Types.SFloat, field, Types.SFloat) ->
-        columns := !columns @ [ name, field ]
-    | R_pure (name, Rack Types.SFloat, expression, false)
+    | R_chunk_load (name, element, field, stored) when column_supported element && element = stored ->
+        columns := !columns @ [ name, element, field ]
+    | R_pure (name, Rack (Types.SFloat | Types.SInt | Types.SUint), expression, false)
     | R_pure (name, Mask _, expression, false) ->
         bindings := (name, expand !bindings expression) :: !bindings
     | R_uniform (name, value) ->
@@ -106,11 +119,11 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     | R_output (owner, field, name) when output = Column (owner, field) ->
         result := List.assoc_opt name !bindings
     | _ -> reject statement.rloc
-        "native traversals currently support f32 columns, immutable lane expressions and one final yield or column update; this run operation is work in progress") traverse.t_body;
-  let expression = match !result with Some e -> e | None -> reject run.run_loc "native traversal requires an f32 output expression" in
+        "native traversals currently support f32/i32/u32 columns, immutable lane expressions and one final yield or column update; this run operation is work in progress") traverse.t_body;
+  let expression = match !result with Some e -> e | None -> reject run.run_loc "native traversal requires a 32-bit rack output expression" in
   if List.length !columns = 0 || List.length !columns > 4 then
-    reject run.run_loc "native streams currently load one to four f32 columns";
-  let parameters = List.map (fun (name, _) -> name, Native_ir.Rack Native_ir.F32) !columns
+    reject run.run_loc "native streams currently load one to four f32/i32/u32 columns";
+  let parameters = List.map (fun (name, element, _) -> name, column_type element) !columns
     @ List.map (fun (name, scalar) -> name, uniform_type scalar) uniforms in
   let mask = if tail then Some "$native_tail" else None in
   let parameters = match mask with None -> parameters | Some name -> parameters @ [ name, Native_ir.Mask ] in
@@ -123,8 +136,11 @@ let compile_body ~profile program run traverse uniforms output ~tail =
   let func = match Native_lower.lower_expression ~profile ~definitions:program.vector_defs
     ~name:run.run_name ~parameters ?mask ~fused:false run.run_loc expression with
     | Ok f -> f | Error e -> reject run.run_loc "%s" (Native_lower.format_error e) in
-  if func.result <> Some (Native_ir.Rack Native_ir.F32) then
-    reject run.run_loc "native stream expression must produce f32s";
+  let output_element = match output with
+    | Stream -> Option.get run.run_stream
+    | Column (owner, field) -> List.assoc field (output_pack program run owner).pack_fields in
+  if not (column_supported output_element) || func.result <> Some (column_type output_element) then
+    reject run.run_loc "native traversal expression must match its f32/i32/u32 output column or stream";
   let ir = match Native_optimize.optimize ~profile [ func ] with
     | Ok ir -> ir | Error e -> reject run.run_loc "%s" (Native_optimize.format_error e) in
   let allocation =
@@ -134,27 +150,30 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     | Ok allocated -> allocated
     | Error e -> reject run.run_loc "%s" (Native_backend.format_error e)
   in
-  (* Cross-lane operations need a separately defined participation contract
-     for tails. Do not accept them through expression expansion. *)
-  if Native_backend.cross_lane_function_names allocated <> []
-      || List.exists (fun (instruction : Native_ir.instruction) ->
-          match instruction.op with Native_ir.Extract _ | Native_ir.Insert _ | Native_ir.Shuffle _ -> true | _ -> false) func.body.instructions then
+  (* Tail participation follows the source operation, not its instruction
+     sequence: SSE2 multiplication permutes partial products back to their
+     original lanes. Actual cross-lane expressions remain unsupported. *)
+  if List.exists (fun (instruction : Native_ir.instruction) ->
+      match instruction.op with
+      | Native_ir.Reduce _ | Native_ir.Scan _ | Native_ir.Extract _
+      | Native_ir.Insert _ | Native_ir.Shuffle _ -> true
+      | _ -> false) func.body.instructions then
     reject run.run_loc "native stream reductions, scans, extractions, insertions and shuffles are work in progress";
   allocated, !columns
 
 let run_traversal (run : run) =
   match run.run_body, run.run_params, run.run_stream with
     | [ { r = R_traverse t; _ } ], Run_stack (input, schema, writable) :: Run_uniform (count, ((Types.SInt | Types.SInt64) as count_type)) :: arguments, stream
-      when t.t_stack = input && t.t_pack = schema && t.t_domain = Types.SFloat
+      when t.t_stack = input && t.t_pack = schema && column_supported t.t_domain
         && (match t.t_count.k with Var n -> n = count | _ -> false) ->
         let destination, uniforms = match arguments with
           | Run_stack (owner, _, true) :: rest -> Some owner, rest
           | _ -> None, arguments in
         let output = match stream, destination, List.rev t.t_body with
-          | Some Types.SFloat, None, { r = R_yield _; _ } :: _ when not writable -> Stream
+          | Some element, None, { r = R_yield _; _ } :: _ when not writable && element = t.t_domain -> Stream
           | None, None, { r = R_output (owner, field, _); _ } :: _ when owner = input && writable -> Column (owner, field)
           | None, Some destination, { r = R_output (owner, field, _); _ } :: _ when owner = destination -> Column (owner, field)
-          | _ -> reject run.run_loc "native traversals end with one f32 stream yield or one f32 column update in a mutable stack; other outputs are work in progress" in
+          | _ -> reject run.run_loc "native traversals end with one stream yield matching the f32/i32/u32 domain or one 32-bit column update in a mutable stack; other outputs are work in progress" in
         if List.length uniforms > 8 then
           reject run.run_loc "native streams accept at most eight uniform arguments; stack arguments are work in progress";
         let uniforms = List.map (function
@@ -162,7 +181,7 @@ let run_traversal (run : run) =
           | _ -> reject run.run_loc "native stream arguments after the count must be uniform f32/i32/u32/bool values; other arguments are work in progress") uniforms in
         let count_width = if count_type = Types.SInt then Count32 else Count64 in
         t, count_width, uniforms, output
-    | _ -> reject run.run_loc "native traversals currently support one f32 traversal with an input stack, an i32 or i64 count, an optional mutable destination stack and uniform f32/i32/u32/bool arguments; general native runs are work in progress"
+    | _ -> reject run.run_loc "native traversals currently support one f32/i32/u32 traversal with an input stack, an i32 or i64 count, an optional mutable destination stack and uniform f32/i32/u32/bool arguments; general native runs are work in progress"
 
 let column_offset schema field =
   let rec offset n = function
@@ -171,11 +190,6 @@ let column_offset schema field =
     | [] -> invalid_arg "native traversal column missing from its checked pack"
   in
   offset 0 schema.pack_fields
-
-let output_pack program run owner =
-  match List.find_opt (function Run_stack (name, _, true) -> name = owner | _ -> false) run.run_params with
-  | Some (Run_stack (_, schema, _)) -> find_pack program schema
-  | _ -> invalid_arg "native traversal output missing from its checked mutable stacks"
 
 let emit_x86_run ~profile program buffer (run : run) =
   let sse2 = profile = Target.X86_sse2 in
@@ -229,7 +243,7 @@ let emit_x86_run ~profile program buffer (run : run) =
   Option.iter (fun slot ->
     let source = List.nth [ "rdi"; "rsi"; "rdx"; "rcx"; "r8"; "r9" ] slot in
     if source <> "rdx" then emit "mov rdx, %s" source) output_slot;
-  List.iteri (fun index (_, field) ->
+  List.iteri (fun index (_, _, field) ->
     emit "mov %s, QWORD PTR [rdi + %d]" pointers.(index) (column_offset schema field)) columns;
   (match output with
    | Stream -> ()
@@ -352,7 +366,7 @@ let emit_neon_run program buffer (run : run) =
       emit "dup v%d.4s, v%d.s[0]" (uniform_register profile index) slot
     else emit "fmov s%d, w%d" (uniform_register profile index) slot) arguments;
   Option.iter (fun slot -> if slot <> 2 then emit "mov x2, x%d" slot) output_slot;
-  List.iteri (fun index (_, field) ->
+  List.iteri (fun index (_, _, field) ->
     let displacement = column_offset schema field in
     if displacement > 32760 then
       reject run.run_loc "native NEON stream column exceeds the supported descriptor offset";
