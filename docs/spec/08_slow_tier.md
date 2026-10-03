@@ -23,7 +23,8 @@ runs remain work in progress.
 ### Native kernel calls
 
 On the development compiler, a native register kernel called from slow code
-takes uniform `f32` parameters and returns `f32`, `bool` or `u32`. Rake selects and allocates
+takes uniform `f32`, `i32` or `u32` parameters and returns `f32`, `bool`, `i32`
+or `u32`. Rake selects and allocates
 the kernel's instructions. The generated C contains its opaque assembly,
 and the final object is checked against the selected profile. The platform C
 compiler lowers the slow caller and supplies the scalar calling convention.

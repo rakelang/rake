@@ -42,9 +42,10 @@ Stepping through a program in the Lanes tab shows one instruction acting on
 all the lanes at once, the idea the whole tutorial builds on.
 
 The target menu offers WebAssembly, SSE2, AVX2, AVX-512 and NEON. The browser
-development compiler supports native slow orchestration with uniform `f32`
-kernel calls returning `f32`, `bool` or `u32` too. Lessons start on WebAssembly when they contain a whole
-program. WebAssembly covers general memory runs. SSE2, AVX2, AVX-512 and NEON
+development compiler supports native slow orchestration with uniform `f32`,
+`i32` and `u32` kernel arguments and `f32`, `bool`, `i32` or `u32` results.
+Lessons start on WebAssembly when they contain a whole program. WebAssembly
+covers general memory runs. SSE2, AVX2, AVX-512 and NEON
 also compile `f32` stream traversals and single-column stack updates. Other
 native memory runs give the compiler's work-in-progress diagnostic. Updates
 can use a separate destination stack with a different record layout. Every result and

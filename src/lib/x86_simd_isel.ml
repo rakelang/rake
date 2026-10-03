@@ -132,10 +132,10 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
     List.iter
       (fun (parameter : N.parameter) ->
         match parameter.typ with
-        | N.Rack (N.F32 | N.I32 | N.U32) | N.Scalar N.F32 | N.Mask -> ()
+        | N.Rack (N.F32 | N.I32 | N.U32) | N.Scalar (N.F32 | N.I32 | N.U32) | N.Mask -> ()
         | typ ->
             fail func.name
-              (Printf.sprintf "parameter %%%d has unsupported type %s; only rack<f32>, rack<i32>, scalar<f32>, and mask parameters use the x86 SSE-class boundary"
+              (Printf.sprintf "parameter %%%d has unsupported type %s; x86 kernels take 32-bit racks, masks, and f32/i32/u32 uniforms"
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
@@ -175,16 +175,16 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           if List.exists (function N.Insert { inserted; _ } -> inserted = dst | _ -> false) uses then
             Some (M.Uniform_f32 { dst; bits; provenance })
           else None
-      | N.Const (N.Int32 _ | N.Uint32 _) ->
+      | N.Const (N.Int32 bits | N.Uint32 bits) ->
           let id, _ = result func.name index instruction in
+          let returned = List.exists (function N.Return (Some value) -> value = id | _ -> false) func.body.terminators in
           (match N.IntMap.find_opt id constant_uses with
-          | Some operations when operations <> []
+          | Some operations when not returned && operations <> []
               && List.for_all (function
                   | N.Extract { lane; _ } | N.Insert { lane; _ } -> lane = id
                   | N.Shift { count; _ } -> count = id
                   | _ -> false) operations -> None
-          | _ -> fail func.name ~instruction:index
-              "an i32 constant is only legal as a static lane index or bit-shift count in this vector selector")
+          | _ -> Some (M.Uniform_f32 { dst = id; bits; provenance }))
       | N.Mask_const value ->
           let dst = mask_result () in
           Some (M.Uniform_mask { dst; value; provenance })
@@ -207,16 +207,16 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
               fail func.name ~instruction:index
                 "non-uniform rack constants are not in the initial x86 SIMD selection contract")
       | N.Broadcast scalar ->
-          let dst = rack_result () in
+          let dst = word_rack_result () in
           (match N.IntMap.find_opt scalar constants with
           | Some bits -> Some (M.Uniform_f32 { dst; bits; provenance })
           | None ->
               (match find_type func.name environment index scalar with
-              | N.Scalar N.F32 ->
+              | N.Scalar (N.F32 | N.I32 | N.U32) ->
                   Some (M.Broadcastss { dst; source = scalar; provenance })
               | typ ->
                   fail func.name ~instruction:index
-                    (Printf.sprintf "rack.broadcast requires scalar<f32>, got %s"
+                    (Printf.sprintf "rack.broadcast requires a 32-bit uniform, got %s"
                        (N.string_of_typ typ))))
       | N.Unary (N.Neg, source)
           when find_type func.name environment index source = N.Rack N.I32 ->
@@ -267,12 +267,13 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             | N.Div -> M.Divps { dst; left; right; provenance }
             | _ -> assert false)
       | N.Binary (((N.Min | N.Max) as operation), left, right)
-          when find_type func.name environment index left = N.Rack N.I32 ->
+          when List.mem (find_type func.name environment index left) [N.Rack N.I32; N.Rack N.U32] ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index right;
           Some (M.Extreme_i32 {
             dst; left; right;
             operation = (if operation = N.Min then M.Minimum else M.Maximum);
+            unsigned = (find_type func.name environment index left = N.Rack N.U32);
             provenance;
           })
       | N.Binary (((N.Min | N.Max) as operation), left, right) ->
@@ -433,7 +434,11 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
         loc = func.loc;
         parameters =
           List.map
-            (fun (parameter : N.parameter) -> { M.reg = parameter.id; name = parameter.name })
+            (fun (parameter : N.parameter) ->
+              { M.reg = parameter.id; name = parameter.name;
+                argument_class = (match parameter.typ with
+                  | N.Scalar (N.I32 | N.U32) -> Native_register_assignment.Integer32
+                  | _ -> Native_register_assignment.Vector) })
             func.parameters;
         instructions;
         result;

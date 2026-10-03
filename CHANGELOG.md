@@ -7,13 +7,36 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Native register kernels take `i32` and `u32` uniforms through the platform
+  C integer argument registers, independently of SIMD argument slots. Their
+  entry imports and vector broadcasts preserve all 32 bits. Verification
+  permits only the declared entry transfers. Independent C checks high-bit
+  values, interleaved argument classes, every integer argument register,
+  eight SIMD arguments and retained racks. Slow callers also use these
+  uniforms and signed 32-bit results. Integer bitwise built-ins and extrema
+  broadcast marked uniforms in either operand, including two uniforms.
+  Typed calls check integer literals against the parameter's range, and
+  explicitly typed rack bindings broadcast their uniforms. Native scalar
+  integer constants stay in vector registers until the C return transfer.
+  Executable semantics and WebAssembly checks cover unsigned boundary bits
+  and wrapping uniform arithmetic. Integer uniform conditions, stream
+  arguments and runtime shift counts remain work in progress.
+
+- `u32s` `min` and `max` compile on SSE2, AVX2, AVX-512F, NEON and
+  WebAssembly. SSE2 compares sign-bit-biased copies, then selects the
+  original lane bits with three allocated temporary registers. AVX2 and
+  AVX-512F use `vpminud` and `vpmaxud`, NEON uses `umin` and `umax`, and
+  WebAssembly uses `i32x4.min_u` and `i32x4.max_u`. Independent C checks
+  unsigned boundaries, nested clamps, masked selection and retained inputs.
+  Interpreter and WebAssembly goldens include full-width unsigned literals.
+
 - `u32s` supports all six comparisons on SSE2, AVX2, AVX-512F, NEON and
   WebAssembly. Unsigned rack and uniform types retain their signedness in
   the IR and interpreter. SSE2 and AVX2 compare sign-bit-biased copies,
   AVX-512F uses `vpcmpud`, and NEON uses `cmhi` and `cmhs`. Independent C
   checks high-bit boundaries, operand order, mask reductions and live inputs.
   Interpreter goldens and a whole-program WebAssembly fixture check unsigned
-  ordering and broadcasts. Native unsigned extrema remain WIP.
+  ordering and broadcasts.
 
 - Static `i32s` and `u32s` shuffles compile on all four physical profiles.
   They share the float shuffle's bit-preserving selection, allocation and

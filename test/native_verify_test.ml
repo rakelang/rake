@@ -15,6 +15,27 @@ let expect_obligation obligation = function
         (Printf.sprintf "expected obligation %S, got: %s" obligation
            (Rake.Native_verify.format_error error))
 
+let check_integer_argument_boundaries () =
+  List.iter (fun (profile, prefix, transfer, wrong, vector_work) ->
+    let source = "integer-argument-boundary" in
+    let fixture body = prefix ^ "\n.text\n.globl integer_entry\ninteger_entry:\n" ^ body ^ "\n    ret\n" in
+    let authorized = [ "integer_entry", [ { Rake.Native_register_assignment.argument = 0; register = 1 } ] ] in
+    let check ?(integer_argument_transfers = authorized) body =
+      Rake.Native_verify.verify ~profile ~source ~functions:[ "integer_entry" ]
+        ~integer_argument_transfers (assemble ~profile ~source (fixture body)) in
+    expect_ok (check (transfer ^ "\n" ^ vector_work));
+    expect_obligation "integer argument boundary" (check (wrong ^ "\n" ^ vector_work));
+    expect_obligation "integer argument boundary" (check (vector_work ^ "\n" ^ transfer));
+    List.iter (fun body -> match check body with
+      | Error _ -> () | Ok () -> failwith "an undeclared integer import passed object verification")
+      [ transfer ^ "\n" ^ transfer ^ "\n" ^ vector_work ];
+    (match check ~integer_argument_transfers:[] (transfer ^ "\n" ^ vector_work) with
+     | Error _ -> () | Ok () -> failwith "integer imports require boundary authorization"))
+    [ Rake.Target.X86_sse2, ".intel_syntax noprefix", "    movd xmm1, edi", "    movd xmm1, esi", "    addps xmm0, xmm0";
+      Rake.Target.X86_avx2, ".intel_syntax noprefix", "    vmovd xmm1, edi", "    vmovd xmm1, esi", "    vaddps ymm0, ymm0, ymm0";
+      Rake.Target.X86_avx512, ".intel_syntax noprefix", "    vmovd xmm1, edi", "    vmovd xmm1, esi", "    vaddps zmm0, zmm0, zmm0";
+      Rake.Target.Aarch64_neon, ".arch armv8-a+simd", "    fmov s1, w0", "    fmov s1, w1", "    fadd v0.4s, v0.4s, v0.4s" ]
+
 let valid =
   {|
 .intel_syntax noprefix
@@ -253,7 +274,7 @@ integer_kernel:
       | Rake.Target.X86_avx512 -> "zmm", "ZMMWORD", "one ZMM per rack"
       | _ -> assert false in
     List.iter (fun mnemonic ->
-      let source = "signed-integer-extrema-verifier-fixture" in
+      let source = "integer-extrema-verifier-fixture" in
       let check body = Rake.Native_verify.verify ~profile ~source ~functions:[ "extrema_kernel" ]
         (assemble ~profile ~source
           (".intel_syntax noprefix\n.text\n.globl extrema_kernel\nextrema_kernel:\n    " ^ body ^ "\n    ret\n")) in
@@ -261,9 +282,9 @@ integer_kernel:
       expect_obligation width (check (mnemonic ^ " xmm0, xmm0, xmm1"));
       expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only")
         (check (Printf.sprintf "%s %s0, %s0, %s PTR [rax]" mnemonic register register memory));
-      expect_obligation "instruction allow-list" (check "cmovg eax, ecx")) [ "vpminsd"; "vpmaxsd" ])
+      expect_obligation "instruction allow-list" (check "cmovg eax, ecx")) [ "vpminsd"; "vpmaxsd"; "vpminud"; "vpmaxud" ])
     [ Rake.Target.X86_avx2; Rake.Target.X86_avx512 ];
-  (* Direct PMINSD needs SSE4.1 and cannot enter the SSE2 profile. *)
+  (* Direct 32-bit extrema need SSE4.1 and cannot enter the SSE2 profile. *)
   let unsigned_profile = Rake.Target.X86_avx512 and unsigned_source = "unsigned-compare-verifier-fixture" in
   let unsigned_check instruction = Rake.Native_verify.verify ~profile:unsigned_profile ~source:unsigned_source ~functions:["unsigned_kernel"]
     (assemble ~profile:unsigned_profile ~source:unsigned_source
@@ -281,7 +302,7 @@ integer_kernel:
       (Rake.Native_verify.verify ~profile ~source ~functions:[ "extrema_kernel" ]
         (assemble ~profile ~source
           (".intel_syntax noprefix\n.text\n.globl extrema_kernel\nextrema_kernel:\n    " ^ mnemonic ^ " xmm0, xmm1\n    ret\n"))))
-    [ "pminsd"; "pmaxsd" ];
+    [ "pminsd"; "pmaxsd"; "pminud"; "pmaxud" ];
   let profile = Rake.Target.Aarch64_neon in
   let source = "neon-integer-verifier-fixture" in
   let check instruction =
@@ -327,7 +348,7 @@ integer_kernel:
     expect_ok (check (mnemonic ^ " v0.4s, v0.4s, v1.4s"));
     expect_obligation "four 32-bit integer lanes" (check (mnemonic ^ " v0.2s, v0.2s, v1.2s"));
     expect_obligation "four 32-bit integer lanes" (check (mnemonic ^ " v0.8h, v0.8h, v1.8h")))
-    [ "smin"; "smax" ];
+    [ "smin"; "smax"; "umin"; "umax" ];
   expect_obligation "four 32-bit integer lanes" (check "add v0.8h, v0.8h, v1.8h");
   expect_obligation "four 32-bit integer lanes" (check "cmeq v0.16b, v0.16b, v1.16b");
   expect_obligation "four 32-bit integer lanes" (check "neg v0.2s, v0.2s");
@@ -569,4 +590,5 @@ neon_unselected_lane:
   expect_obligation "no lane extraction"
     (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-unselected-lane-fixture"
       ~functions:[ "neon_unselected_lane" ] ~cross_lane_functions:[ "neon_unselected_lane" ] neon_unselected_lane);
+  check_integer_argument_boundaries ();
   print_endline "native object-code verification test passed"

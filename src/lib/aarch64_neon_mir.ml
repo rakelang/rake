@@ -22,8 +22,8 @@ type instruction =
   | Add_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Sub_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Mul_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
-  | Min_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
-  | Max_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Min_i32 of { dst : vreg; left : vreg; right : vreg; unsigned : bool; provenance : provenance }
+  | Max_i32 of { dst : vreg; left : vreg; right : vreg; unsigned : bool; provenance : provenance }
   | Neg_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Abs_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Shift_i32 of { dst : vreg; source : vreg; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift; provenance : provenance }
@@ -61,7 +61,7 @@ type instruction =
   | Eor of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Mvn of { dst : vreg; source : vreg; provenance : provenance }
 
-type parameter = { reg : vreg; name : string option }
+type parameter = { reg : vreg; name : string option; argument_class : Native_register_assignment.argument_class }
 
 type func = {
   name : string;
@@ -181,8 +181,8 @@ let instruction_name = function
   | Add_i32 _ -> "add.4s"
   | Sub_i32 _ -> "sub.4s"
   | Mul_i32 _ -> "mul.4s"
-  | Min_i32 _ -> "smin.4s"
-  | Max_i32 _ -> "smax.4s"
+  | Min_i32 { unsigned; _ } -> if unsigned then "umin.4s" else "smin.4s"
+  | Max_i32 { unsigned; _ } -> if unsigned then "umax.4s" else "smax.4s"
   | Neg_i32 _ -> "neg.4s"
   | Abs_i32 _ -> "abs.4s"
   | Shift_i32 _ -> "shift.bits.4s"

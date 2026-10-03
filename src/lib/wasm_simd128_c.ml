@@ -112,6 +112,8 @@ let intrinsic text =
       | "i32x4.sub" -> call 2 "wasm_i32x4_sub"
       | "i32x4.min_s" -> call 2 "wasm_i32x4_min"
       | "i32x4.max_s" -> call 2 "wasm_i32x4_max"
+      | "i32x4.min_u" -> call 2 "wasm_u32x4_min"
+      | "i32x4.max_u" -> call 2 "wasm_u32x4_max"
       | "i32x4.dot_i16x8_s" -> call 2 "wasm_i32x4_dot_i16x8"
       | "i16x8.narrow_i32x4_s" -> call 2 "wasm_i16x8_narrow_i32x4"
       | "i16x8.extend_low_i8x16_u" -> call 1 "wasm_u16x8_extend_low_u8x16"

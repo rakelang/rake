@@ -38,8 +38,8 @@ output is a platform C object with verified kernels. `--verify-native` checks
 those kernels too. Native slow-only units have no vector function to verify,
 so they use `--emit-obj`. SSE2, AVX2, AVX-512 and NEON additionally support the limited
 [native stream traversal](spec/02_packs_and_run.md#native-cpu-streams). Other native runs remain work in progress. A
-native kernel called from slow code currently takes uniform `f32` parameters
-and returns `f32`.
+native kernel called from slow code supports uniform `f32`, `i32` and `u32`
+parameters and returns `f32`, `bool`, `i32` or `u32`.
 
 ## Options
 

@@ -31,6 +31,7 @@ let lanes_f32 register = vector register ^ ".4s"
 let lanes_bits register = vector register ^ ".16b"
 
 let registers = function
+  | A.Integer_parameter { dst; _ } -> [ dst ]
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Mask_const { dst; _ } -> [ dst ]
   | A.Broadcast_f32 { dst; source; _ } -> [ dst; source ]
@@ -41,8 +42,8 @@ let registers = function
   | A.Add_i32 { dst; left; right }
   | A.Sub_i32 { dst; left; right }
   | A.Mul_i32 { dst; left; right }
-  | A.Min_i32 { dst; left; right }
-  | A.Max_i32 { dst; left; right }
+  | A.Min_i32 { dst; left; right; _ }
+  | A.Max_i32 { dst; left; right; _ }
   | A.Compare_i32 { dst; left; right; _ }
   | A.Fmul { dst; left; right }
   | A.Fdiv { dst; left; right }
@@ -92,6 +93,9 @@ let validate_function (func : A.func) =
         let rec check = function
           | [] -> Ok ()
           | ({ A.operation; loc; _ } : A.instruction) :: rest -> (
+              if (match operation with A.Integer_parameter { argument; _ } -> argument < 0 || argument >= 8 | _ -> false) then
+                Error { function_name = func.name; loc; message = "integer argument is outside the AAPCS64 register boundary" }
+              else
               match
                 List.find_opt
                   (fun register -> not (valid_physical_register register))
@@ -114,6 +118,7 @@ let validate_function (func : A.func) =
 let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
   let emit format = Printf.bprintf buffer ("    " ^^ format ^^ "\n") in
   match operation with
+  | A.Integer_parameter { dst; argument } -> emit "fmov s%d, w%d" dst argument
   | A.Uniform_f32 { dst; bits } ->
       if bits = Int32.zero then emit "movi %s, #0" (lanes_f32 dst)
       else
@@ -148,10 +153,10 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "sub %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Mul_i32 { dst; left; right } ->
       emit "mul %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
-  | A.Min_i32 { dst; left; right } ->
-      emit "smin %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
-  | A.Max_i32 { dst; left; right } ->
-      emit "smax %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Min_i32 { dst; left; right; unsigned } ->
+      emit "%s %s, %s, %s" (if unsigned then "umin" else "smin") (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Max_i32 { dst; left; right; unsigned } ->
+      emit "%s %s, %s, %s" (if unsigned then "umax" else "smax") (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Neg_i32 { dst; source } ->
       emit "neg %s, %s" (lanes_f32 dst) (lanes_f32 source)
   | A.Abs_i32 { dst; source } ->

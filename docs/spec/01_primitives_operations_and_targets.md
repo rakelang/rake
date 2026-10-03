@@ -138,19 +138,40 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | wrapping `+`, `-` and `*` | yes | yes |
 | signed negation | yes | WIP* |
 | signed `abs` | yes | WIP* |
-| signed `min` and `max` | yes | WIP* |
+| `min` and `max` (signed or unsigned) | yes | yes |
 | `bit_and`, `bit_or`, `bit_xor`, `bit_andnot` | yes | yes |
 | bit shifts with literal counts from 0 to 31 | yes | yes |
 | six lane comparisons (signed or unsigned) | yes | yes |
 | select an integer rack with a lane mask | yes | yes |
 | `all`, `any`, `bitmask` of a comparison | yes | yes |
 | integer literal broadcast | yes | yes |
+| marked `i32` or `u32` uniform arguments and broadcasts | yes | yes |
 | static one- and two-rack `shuffle` | yes | yes |
-| integer uniform arguments, runtime shift counts, conversions, extraction and insertion | WIP* | WIP* |
+| runtime shift counts, conversions, extraction and insertion | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
 float racks, and float masks can select integer racks. Native streams still
 accept float columns only.
+
+An integer literal passed to a typed scratch or rake parameter takes that
+parameter's element type. A `u32` parameter can therefore receive
+`<4294967295>`, while an untyped literal retains the signed `i32` range.
+The compiler checks the literal against that type's range. An explicitly
+typed rack binding, such as `let values: u32s = <value>`, broadcasts the
+uniform across every lane.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch unsigned_identity(<value: u32>) -> u32:
+  <value>
+
+scratch unsigned_limit() -> u32:
+  unsigned_identity(<4294967295>)
+
+scratch repeated_bits(<value: u32>) -> u32s:
+  let values: u32s = <value>
+  values
+```
 
 Signed negation wraps too: negating −2³¹ gives −2³¹ because +2³¹ doesn't fit
 in a signed 32-bit lane. Unary minus takes signed integer racks only.
@@ -170,7 +191,13 @@ Signed `min` and `max` choose the smaller or larger lane value, including
 −2³¹ and 2³¹−1. AVX2, AVX-512F and NEON each use a full-width packed
 instruction. SSE2 compares the lanes with `pcmpgtd` and selects their bits
 using vector logical operations, with one allocated mask register.
-Unsigned extrema remain work in progress.
+
+Unsigned `min` and `max` order lane values from 0 to 2³²−1, so values with
+bit 31 set remain larger than those without it. AVX2 and AVX-512F use
+`vpminud` and `vpmaxud`, and NEON uses `umin .4s` and `umax .4s`.
+SSE2 flips bit 31 in two temporary copies before comparing them, then uses
+the comparison mask to select the original lane bits. Those two copies and
+the mask require three allocated temporary registers.
 
 Both `i32s` and `u32s` support all six lane comparisons. An unsigned lane
 orders 2³¹ above 2³¹−1 and 2³²−1 above both. SSE2 and AVX2 flip bit 31 in
@@ -195,6 +222,9 @@ scratch product(a: u32s, b: u32s) -> u32s:
 scratch clamp_signed(values: i32s) -> i32s:
   min(max(values, <-17>), <29>)
 
+scratch clamp_unsigned(values: u32s) -> u32s:
+  min(max(values, <2147483648>), <4294967294>)
+
 scratch greater(a: i32s, b: i32s) -> i32s:
   if a > b then a else b
 
@@ -215,7 +245,7 @@ On its 128-bit register a `u8s` rack has 16 lanes, `i16s` 8, `i32s` and
 | `*` | WIP* | yes | yes | yes | yes | yes |
 | negation | WIP* | yes | yes | WIP* | yes | WIP* |
 | `abs` | yes | yes | yes | WIP* | yes | WIP* |
-| `min` `max` | yes | yes | yes | WIP* | WIP* | WIP* |
+| `min` `max` | yes | yes | yes | yes | WIP* | WIP* |
 | comparisons, and so `select` and `bitmask` | yes | yes | yes | yes | yes | WIP* |
 | bitwise operations and bit shifts | yes | yes | yes | yes | yes | yes |
 | `shuffle` `extract` `insert` | yes | yes | yes | yes | yes | yes |
@@ -258,7 +288,12 @@ scratch requantise(low: i32s, high: i32s, low_scale: f32s, high_scale: f32s) -> 
 
 `bit_and(a, b)`, `bit_or(a, b)` and `bit_xor(a, b)` combine two integer racks
 of one type bit by bit, and `bit_andnot(a, b)` keeps the bits of `a` that `b`
-doesn't set. `shift_bits_left(x, n)` moves each lane's bits towards its high
+doesn't set. A marked uniform of the same integer type can occupy either
+operand. It broadcasts across the rack before the operation, as it does in
+`min` and `max`. These built-ins produce a rack even when both operands are
+uniforms.
+
+`shift_bits_left(x, n)` moves each lane's bits towards its high
 end, filling with zeros. `shift_bits_right(x, n)` moves them towards the low
 end, filling with zeros, and `shift_bits_right_signed(x, n)` fills with the
 sign bit. The count is an integer literal below the lane's width in bits, or
@@ -272,8 +307,8 @@ instruction operands to preserve `a & ~b`.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
-scratch clear_bits(values: u32s, removed: u32s) -> u32s:
-  bit_andnot(values, removed)
+scratch clear_bits(values: u32s, <removed: u32>) -> u32s:
+  bit_andnot(values, <removed>)
 ```
 
 The physical profiles support all three bit shifts on `i32s` and `u32s`
@@ -503,14 +538,22 @@ registers and its result returns in one. No profile passes an argument on
 the stack, so a function that would need to is rejected.
 
 On x86, the function is a hidden global symbol following the System V
-convention. Parameters take the eight SSE-class argument registers in source
-order. A uniform `f32` occupies the low lane of an XMM register. A rack or
+convention. Rack, mask and `f32` parameters take the eight SSE-class argument
+registers in their order of appearance. A uniform `f32` occupies the low lane of an XMM register. A rack or
 mask uses XMM on SSE2, YMM on AVX2, or ZMM on AVX-512. Native `i32s` and
 `u32s` use the same register class as `f32s`, with a 32-bit integer in each
 lane. The result uses register
 zero of the same class, or `xmm0` for a scalar `f32`.
 `all` and `any` return C `bool` in `al`, with the full `eax` set to zero or
 one. `bitmask` returns `uint32_t` in `eax`.
+
+The development compiler also takes `i32` and `u32` uniforms through the
+six C integer argument registers: `edi`, `esi`, `edx`, `ecx`, `r8d` and `r9d`.
+This counter advances independently of the SIMD counter. At entry, Rake
+imports each integer's 32 bits into an allocated vector register. `<value>`
+then broadcasts those bits across the rack. The object verifier checks each
+declared import at entry and refuses further integer-register transfers in
+the body. An `i32` or `u32` result returns its low 32 bits in `eax`.
 
 | Profile | Rack arguments | Rack result | C caller flags |
 | --- | --- | --- | --- |
@@ -532,10 +575,22 @@ scratch scaled_sum(a: f32s, <scale: f32>, b: f32s) -> f32s:
   a * <scale> + b
 ```
 
-On `aarch64-neon`, parameters take `v0` to `v7` in source order, a uniform
+In this AVX2 scratch, `low` arrives in `edi`, `values` in `ymm0`, and `high`
+in `esi`. Both uniforms participate in unsigned lane arithmetic:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch bounded_values(<low: u32>, values: u32s, <high: u32>) -> u32s:
+  min(max(values, <low>), <high>)
+```
+
+On `aarch64-neon`, SIMD parameters take `v0` to `v7` in their order of appearance, a uniform
 `f32` in the low lane of its register, and rack and `f32` results return in
 `v0`. The integer results of `all`, `any` and `bitmask` return in `w0`, following
-the C `bool` or `uint32_t` ABI. The register allocator uses `v0` to `v7` and
+the C `bool` or `uint32_t` ABI. Integer uniforms take `w0` to `w7` with a
+separate counter, then move into allocated vector registers at entry.
+Signed and unsigned 32-bit results also return in `w0`.
+The register allocator uses `v0` to `v7` and
 `v16` to `v31`, because AAPCS64
 makes the low halves of `v8` to `v15` callee-saved, and saving them would need
 the stack.
@@ -543,7 +598,8 @@ the stack.
 On `wasm-simd128`, the function is C, `static inline` unless
 `RAKE_WASM_LINKAGE` is defined. A rack or mask is a `v128_t`, a uniform `f32`
 a `float`, a 64-bit uniform a `uint64_t`, and any other uniform, `bool` or
-`bitmask` result a `uint32_t`.
+`bitmask` result a `uint32_t`. A slow caller's boundary wrapper uses
+`int32_t` for signed `i32` values, preserving the same bits.
 
 Each uniform keeps its brackets at its declaration, `<scale: f32>`, and at its
 use, `<scale>`. The use is where the broadcast happens: `vbroadcastss` on
@@ -553,8 +609,9 @@ A run's boundary is in [packs and runs](02_packs_and_run.md#wasm32-boundary),
 and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
 backends in the 0.6.0-beta tag compile neither runs nor slow code. The
 unreleased development compiler adds native C programs with slow orchestration
-and Rake-selected register kernels. Slow callers can pass uniform `f32`
-arguments and receive `f32`, `bool` or `u32` results. SSE2, AVX2, AVX-512 and NEON also support the
+and Rake-selected register kernels. Slow callers can pass uniform `f32`,
+`i32` or `u32` arguments and receive `f32`, `bool`, `i32` or `u32` results.
+SSE2, AVX2, AVX-512 and NEON also support the
 [native stream subset](02_packs_and_run.md#native-cpu-streams).
 General native runs and other scalar kernel boundaries remain work in progress.
 
@@ -577,7 +634,7 @@ then disassembles the object and checks register kernels:
 - `wasm-simd128`: a scratch or rake contains only locals, constants, and SIMD
   and scalar register instructions, with no calls, memory or branches.
 
-A native `bool` or `u32` result has one additional permitted instruction:
+A native `bool`, `i32` or `u32` result has one additional permitted instruction:
 the transfer from the low lane of vector register zero into the platform's
 integer return register, immediately before `ret`. This exception permits
 neither scalar arithmetic nor an intermediate scalar lane transfer.

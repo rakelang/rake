@@ -13,8 +13,8 @@ remain work in progress. This roadmap states what we intend to build next.
 The development compiler after 0.6.0-beta compiles slow orchestration and
 register kernels into one native object. Its C unit embeds Rake-selected
 assembly, and the final object's kernels pass the existing instruction
-verifier. Slow callers can use uniform `f32` parameters and `f32`, `bool` or
-`u32` results.
+verifier. Slow callers can use uniform `f32`, `i32` or `u32` parameters and
+`f32`, `bool`, `i32` or `u32` results.
 Imported C structs use their header's layout, and public slow functions have
 the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`
 streams or update one column in a mutable input or destination stack,
@@ -130,7 +130,8 @@ conditions remain work in progress on the physical profiles.
 We will bring the physical profiles up to the language's published operation
 set. The development compiler now supports 32-bit integer wrapping add/subtract/multiply
 and bitwise AND/OR/XOR/AND-NOT on all four physical profiles, along with signed
-negation, absolute value and lane-wise `min` and `max`. Both `i32s` and `u32s` comparisons produce
+negation and absolute value. Lane-wise `min` and `max` support both signed
+and unsigned 32-bit racks. Both `i32s` and `u32s` comparisons produce
 masks for integer or float selection and mask reductions.
 Independent C checks exact overflow bits, signed boundary values and still-live
 inputs across the vector ABI, including masked negation of the minimum signed
@@ -160,8 +161,23 @@ WebAssembly. The unsigned IR and interpreter preserve ordering across bit 31.
 Independent C checks all six predicates, literal order, mask reductions,
 global tines and gaps, and still-live inputs. WebAssembly also checks unsigned
 uniform broadcasts against hand-specified boundary values.
+Unsigned 32-bit extrema also compile on every CPU profile. SSE2 compares
+sign-bit-biased copies and selects the original lane bits, with three
+temporary registers included in allocation pressure. The other physical
+profiles use direct unsigned extrema instructions. Independent C checks
+values across bit 31, full-width unsigned literals, nested clamps and
+masked selection while retaining live inputs. Interpreter and WebAssembly
+goldens check unsigned extrema and literal broadcasts too.
 Runtime shift counts, other integer operations and native integer streams
 remain work in progress.
+
+Native register kernels now take signed and unsigned 32-bit uniforms through
+the platform's integer argument registers. Entry imports use allocated vector
+registers, and rack arithmetic uses broadcasts of their exact bits. Independent
+C checks mixed argument order, high-bit values, all integer argument slots,
+eight SIMD arguments alongside an integer uniform, and retained input racks.
+Slow callers use the same boundary. Integer uniform conditions and native
+integer stream arguments remain work in progress.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
 integer extraction and insertion, the remaining uniform conditionals and
@@ -173,7 +189,7 @@ and its object verifier proves the selected vector sequence.
 
 We will fill the gaps shared by every profile. These include lane movement,
 transcendental functions, float remainder, `f64s`, the remaining integer and
-boolean rack types, other unsigned comparison widths and extrema, integer reductions,
+boolean rack types, unsigned comparisons and extrema at other widths, integer reductions,
 widening conversions, scalar arithmetic over rack results, scatter,
 compression and expansion.
 

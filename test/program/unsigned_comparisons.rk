@@ -3,6 +3,23 @@
 scratch below(values: u32s, <cut: u32>) -> u32:
   bitmask(values < <cut>)
 
+scratch uniform_bits(<left: u32>, values: u32s, <right: u32>) -> u32s:
+  bit_xor(bit_andnot(<left>, values), <right>)
+
+scratch uniform_minimum(<left: u32>, <right: u32>) -> u32:
+  bitmask(min(<left>, <right>) = <left>)
+
+run unsigned_uniforms(a: []u32, bits: mut []u32, bounded: mut []u32, <low: u32>, <high: u32>):
+  bits[<0>] <- uniform_bits(<low>, a[<0>], <1>)
+  bounded[<0>] <- min(<high>, max(<low>, a[<0>]))
+
+run unsigned_extrema(a: []u32, b: []u32, smallest: mut []u32, largest: mut []u32, bounded: mut []u32):
+  let left = a[<0>]
+  let right = b[<0>]
+  smallest[<0>] <- min(left, right)
+  largest[<0>] <- max(left, right)
+  bounded[<0>] <- min(max(<2147483648>, left), <4294967294>)
+
 run unsigned_rows(a: []u32, b: []u32, out: mut []u32, masks: mut []u32, <cut: u32>):
   let left = a[<0>]
   let right = b[<0>]
@@ -21,10 +38,28 @@ slow main() -> i32:
   b: [4]u32 := [4294967295, 2147483648, 2147483647, 4294967295]
   out: [4]u32 := [0; 4]
   masks: [16]u32 := [0; 16]
+  smallest: [4]u32 := [0; 4]
+  largest: [4]u32 := [0; 4]
+  bounded: [4]u32 := [0; 4]
+  uniform_output: [4]u32 := [0; 4]
+  unsigned_extrema(a, b, smallest, largest, bounded)
   unsigned_rows(a, b, out, masks, <2147483648>)
   if out[0] != 0 or out[1] != 2147483647 or out[2] != 2147483647 or out[3] != 4294967295:
     return 1
   for i from 0 up to 4:
     if masks[i] != 3 or masks[i + 4] != 4 or masks[i + 8] != 8 or masks[i + 12] != 3:
       return 2
+  if smallest[0] != 0 or smallest[1] != 2147483647 or smallest[2] != 2147483647 or smallest[3] != 4294967295:
+    return 3
+  if largest[0] != 4294967295 or largest[1] != 2147483648 or largest[2] != 2147483648 or largest[3] != 4294967295:
+    return 4
+  if bounded[0] != 2147483648 or bounded[1] != 2147483648 or bounded[2] != 2147483648 or bounded[3] != 4294967294:
+    return 5
+  unsigned_uniforms(a, uniform_output, bounded, <2147483648>, <4294967294>)
+  if uniform_output[0] != 2147483649 or uniform_output[1] != 2147483649 or uniform_output[2] != 1 or uniform_output[3] != 1:
+    return 6
+  if bounded[0] != 2147483648 or bounded[1] != 2147483648 or bounded[2] != 2147483648 or bounded[3] != 4294967294:
+    return 7
+  if uniform_minimum(<2147483648>, <4294967295>) != 15 or uniform_minimum(<4294967295>, <2147483648>) != 0:
+    return 8
   return 0

@@ -51,7 +51,7 @@ type instruction =
   | Add_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Sub_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Mul_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
-  | Extreme_i32 of { dst : vreg; left : vreg; right : vreg; operation : extremum; provenance : provenance }
+  | Extreme_i32 of { dst : vreg; left : vreg; right : vreg; operation : extremum; unsigned : bool; provenance : provenance }
   | Neg_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Abs_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Shift_i32 of { dst : vreg; source : vreg; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift; provenance : provenance }
@@ -96,7 +96,7 @@ type instruction =
   | Mask_xorps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Mask_notps of { dst : vreg; source : vreg; provenance : provenance }
 
-type parameter = { reg : vreg; name : string option }
+type parameter = { reg : vreg; name : string option; argument_class : Native_register_assignment.argument_class }
 
 type func = {
   name : string;
@@ -233,8 +233,8 @@ let instruction_name = function
   | Add_i32 _ -> "vpaddd"
   | Sub_i32 _ -> "vpsubd"
   | Mul_i32 _ -> "multiply.low.i32"
-  | Extreme_i32 { operation = Minimum; _ } -> "min.i32"
-  | Extreme_i32 { operation = Maximum; _ } -> "max.i32"
+  | Extreme_i32 { operation = Minimum; unsigned; _ } -> if unsigned then "min.u32" else "min.i32"
+  | Extreme_i32 { operation = Maximum; unsigned; _ } -> if unsigned then "max.u32" else "max.i32"
   | Neg_i32 _ -> "zero.sub.i32"
   | Abs_i32 _ -> "abs.i32"
   | Shift_i32 _ -> "shift.bits.i32"

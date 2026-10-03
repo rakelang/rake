@@ -11,6 +11,7 @@ module S = Native_ir.IntSet
 type vector_register = int
 
 type operation =
+  | Integer_parameter of { dst : vector_register; argument : int }
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Mask_const of { dst : vector_register; value : bool }
   | Broadcast_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
@@ -26,8 +27,8 @@ type operation =
   | Add_i32 of { dst : vector_register; left : vector_register; right : vector_register }
   | Sub_i32 of { dst : vector_register; left : vector_register; right : vector_register }
   | Mul_i32 of { dst : vector_register; left : vector_register; right : vector_register }
-  | Min_i32 of { dst : vector_register; left : vector_register; right : vector_register }
-  | Max_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Min_i32 of { dst : vector_register; left : vector_register; right : vector_register; unsigned : bool }
+  | Max_i32 of { dst : vector_register; left : vector_register; right : vector_register; unsigned : bool }
   | Neg_i32 of { dst : vector_register; source : vector_register }
   | Abs_i32 of { dst : vector_register; source : vector_register }
   | Shift_i32 of { dst : vector_register; source : vector_register; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift }
@@ -143,7 +144,8 @@ let live_is_fused provenances allocation =
 let allocate_function ?parameter_assignment func =
   let parameter_count = List.length func.M.parameters in
   match Native_register_assignment.resolve ~available:allocatable_registers
-    ~argument_count:argument_register_count ~parameter_count parameter_assignment with
+    ~argument_count:argument_register_count ~integer_argument_count:8
+    ~classes:(List.map (fun parameter -> parameter.M.argument_class) func.parameters) parameter_assignment with
   | Error message ->
     Error
       {
@@ -154,13 +156,13 @@ let allocate_function ?parameter_assignment func =
         fused = false;
         message;
       }
-  | Ok parameter_assignment ->
+  | Ok (parameter_assignment, integer_transfers) ->
     let uses = Native_register_assignment.preserve_uses
       ~instruction_count:(List.length func.instructions) parameter_assignment
       (List.map (fun parameter -> parameter.M.reg) func.parameters) (last_uses func) in
     let provenances = definition_provenance func in
     let initial_allocation =
-      List.map2 (fun assignment parameter ->
+      List.map2 (fun (assignment : Native_register_assignment.parameter) parameter ->
         (parameter.M.reg, assignment.Native_register_assignment.register)) parameter_assignment func.parameters
       |> List.fold_left
            (fun allocation (value, physical) -> I.add value physical allocation)
@@ -177,6 +179,8 @@ let allocate_function ?parameter_assignment func =
     let emit loc provenance operation =
       emitted_rev := { operation; loc; provenance } :: !emitted_rev
     in
+    List.iter (fun (transfer : Native_register_assignment.integer_transfer) ->
+      emit func.loc Native_ir.source (Integer_parameter { dst = transfer.register; argument = transfer.argument })) integer_transfers;
     let fail_pressure ?(additional = 1) instruction =
       let required = I.cardinal !allocation + additional in
       let provenance = M.provenance instruction in
@@ -289,8 +293,8 @@ let allocate_function ?parameter_assignment func =
               | M.Add_i32 { left; right; _ } -> emit loc provenance (Add_i32 { dst; left = p left; right = p right })
               | M.Sub_i32 { left; right; _ } -> emit loc provenance (Sub_i32 { dst; left = p left; right = p right })
               | M.Mul_i32 { left; right; _ } -> emit loc provenance (Mul_i32 { dst; left = p left; right = p right })
-              | M.Min_i32 { left; right; _ } -> emit loc provenance (Min_i32 { dst; left = p left; right = p right })
-              | M.Max_i32 { left; right; _ } -> emit loc provenance (Max_i32 { dst; left = p left; right = p right })
+              | M.Min_i32 { left; right; unsigned; _ } -> emit loc provenance (Min_i32 { dst; left = p left; right = p right; unsigned })
+              | M.Max_i32 { left; right; unsigned; _ } -> emit loc provenance (Max_i32 { dst; left = p left; right = p right; unsigned })
               | M.Neg_i32 { source; _ } -> emit loc provenance (Neg_i32 { dst; source = p source })
               | M.Abs_i32 { source; _ } -> emit loc provenance (Abs_i32 { dst; source = p source })
               | M.Shift_i32 { source; count; shift; _ } ->

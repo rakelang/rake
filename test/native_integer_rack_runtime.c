@@ -102,6 +102,27 @@ extern integer_rack signed_max_same(integer_rack);
 extern integer_rack signed_clamp(integer_rack);
 extern integer_rack signed_extreme_selected(integer_rack, integer_rack);
 extern integer_rack signed_extreme_literal_first(integer_rack);
+extern integer_rack unsigned_min(integer_rack, integer_rack);
+extern integer_rack unsigned_max(integer_rack, integer_rack);
+extern integer_rack unsigned_min_keep_inputs(integer_rack, integer_rack);
+extern integer_rack unsigned_max_keep_inputs(integer_rack, integer_rack);
+extern integer_rack unsigned_min_keep_left(integer_rack, integer_rack);
+extern integer_rack unsigned_max_keep_left(integer_rack, integer_rack);
+extern integer_rack unsigned_min_same(integer_rack);
+extern integer_rack unsigned_max_same(integer_rack);
+extern integer_rack unsigned_clamp(integer_rack);
+extern integer_rack unsigned_extreme_selected(integer_rack, integer_rack);
+extern integer_rack unsigned_extreme_literal_first(integer_rack);
+extern integer_rack signed_uniform_add(integer_rack, int32_t);
+extern integer_rack unsigned_uniform_keep(uint32_t, integer_rack, uint32_t);
+extern integer_rack unsigned_uniform_clamp(integer_rack, uint32_t, uint32_t);
+extern integer_rack unsigned_uniform_reverse(uint32_t, integer_rack);
+extern float_rack integer_float_boundary(int32_t, float_rack, float, uint32_t, integer_rack);
+extern integer_rack six_integer_slots(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern float_rack eight_vector_slots(float_rack, float_rack, float_rack, float_rack, float_rack, float_rack, float_rack, float_rack, int32_t);
+#ifdef __aarch64__
+extern integer_rack eight_integer_slots(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+#endif
 
 static int32_t signed_bits(uint32_t bits)
 {
@@ -203,6 +224,10 @@ int main(void)
     integer_rack (*const extrema_keep_inputs[])(integer_rack, integer_rack) = {signed_min_keep_inputs, signed_max_keep_inputs};
     integer_rack (*const extrema_keep_left[])(integer_rack, integer_rack) = {signed_min_keep_left, signed_max_keep_left};
     integer_rack (*const extrema_same[])(integer_rack) = {signed_min_same, signed_max_same};
+    integer_rack (*const unsigned_extrema[])(integer_rack, integer_rack) = {unsigned_min, unsigned_max};
+    integer_rack (*const unsigned_extrema_keep_inputs[])(integer_rack, integer_rack) = {unsigned_min_keep_inputs, unsigned_max_keep_inputs};
+    integer_rack (*const unsigned_extrema_keep_left[])(integer_rack, integer_rack) = {unsigned_min_keep_left, unsigned_max_keep_left};
+    integer_rack (*const unsigned_extrema_same[])(integer_rack) = {unsigned_min_same, unsigned_max_same};
     integer_rack (*const comparisons[])(integer_rack, integer_rack) = {
         signed_lt, signed_le, signed_gt, signed_ge, signed_eq, signed_ne
     };
@@ -348,7 +373,35 @@ int main(void)
             }
             if (check_bits("destructive extrema right input", extrema_keep_left[operation](a, b), expected)) return 1;
             if (check_bits("aliased extrema inputs", extrema_same[operation](a), left)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) {
+                const bool choose_left = operation == 0
+                    ? left[lane] < right[lane] : left[lane] > right[lane];
+                expected[lane] = choose_left ? left[lane] : right[lane];
+            }
+            if (check_bits("unsigned integer extrema", unsigned_extrema[operation](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = (expected[lane] ^ left[lane]) + right[lane];
+            if (check_bits("live unsigned extrema inputs", unsigned_extrema_keep_inputs[operation](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) {
+                const bool choose_left = operation == 0
+                    ? left[lane] < right[lane] : left[lane] > right[lane];
+                expected[lane] = (choose_left ? left[lane] : right[lane]) + left[lane];
+            }
+            if (check_bits("destructive unsigned extrema right input", unsigned_extrema_keep_left[operation](a, b), expected)) return 1;
+            if (check_bits("aliased unsigned extrema inputs", unsigned_extrema_same[operation](a), left)) return 1;
         }
+        for (int lane = 0; lane < LANES; ++lane) {
+            const uint32_t value = left[lane];
+            expected[lane] = value < 0x7fffffffu ? 0x7fffffffu : value > 0x80000001u ? 0x80000001u : value;
+        }
+        if (check_bits("nested unsigned extrema literals", unsigned_clamp(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) {
+            const uint32_t x = left[lane], y = right[lane];
+            expected[lane] = x < y ? (x > 0x80000000u ? x : 0x80000000u) : (y < 0x80000000u ? y : 0x80000000u);
+        }
+        if (check_bits("masked unsigned extrema", unsigned_extreme_selected(a, b), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane)
+            expected[lane] = left[lane] < 0x80000000u ? 0x80000000u : left[lane];
+        if (check_bits("literal-first unsigned extrema", unsigned_extreme_literal_first(a), expected)) return 1;
         for (int lane = 0; lane < LANES; ++lane) {
             const int32_t value = signed_bits(left[lane]);
             expected[lane] = value < -17 ? (uint32_t)-17 : value > 29 ? 29u : left[lane];
@@ -432,6 +485,28 @@ int main(void)
             expected[lane] = signed_bits(left[lane]) < 0 ? left[lane] - 1u : left[lane] + 1u;
         if (check_bits("integer tines and gaps", integer_gaps(a), expected)) return 1;
 
+        const uint32_t uniform_bits[] = {0u, 1u, 0x7fffffffu, 0x80000000u, 0xffffffffu};
+        for (unsigned uniform = 0; uniform < sizeof uniform_bits / sizeof uniform_bits[0]; ++uniform) {
+            const uint32_t amount = uniform_bits[uniform];
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] + amount;
+            if (check_bits("signed uniform broadcast", signed_uniform_add(a, signed_bits(amount)), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = ((left[lane] ^ amount) + left[lane]) * (amount + 1u);
+            if (check_bits("unsigned uniforms and retained input", unsigned_uniform_keep(amount, a, amount + 1u), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = amount & ~left[lane];
+            if (check_bits("uniform-first complement", unsigned_uniform_reverse(amount, a), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) {
+                const uint32_t low = left[lane] < amount ? amount : left[lane];
+                expected[lane] = low > 0x80000001u ? 0x80000001u : low;
+            }
+            if (check_bits("unsigned uniform extrema", unsigned_uniform_clamp(a, amount, 0x80000001u), expected)) return 1;
+        }
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = ((0xffffffffu + 3u) ^ (0x80000000u * 5u)) - 7u + 11u;
+        if (check_bits("six integer argument registers", six_integer_slots(0xffffffffu, 3u, 0x80000000u, 5u, 7u, 11u), expected)) return 1;
+#ifdef __aarch64__
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] += 13u * 17u;
+        if (check_bits("eight AAPCS64 integer registers", eight_integer_slots(0xffffffffu, 3u, 0x80000000u, 5u, 7u, 11u, 13u, 17u), expected)) return 1;
+#endif
+
         float first[LANES], second[LANES];
         for (int lane = 0; lane < LANES; ++lane) {
             first[lane] = (float)(lane - 3);
@@ -440,6 +515,17 @@ int main(void)
         float_rack f, g;
         memcpy(&f, first, sizeof f);
         memcpy(&g, second, sizeof g);
+        const float_rack boundary = integer_float_boundary(INT32_MIN, f, 2.0f, 0x80000000u, a);
+        const float_rack full_vector_arguments = eight_vector_slots(f, f, f, f, f, f, f, f, INT32_MIN);
+        const float_rack full_vector_arguments_other = eight_vector_slots(f, f, f, f, f, f, f, f, INT32_MAX);
+        for (int lane = 0; lane < LANES; ++lane) {
+            const float answer = left[lane] < 0x80000000u ? first[lane] * 2.0f : first[lane] + 1.0f;
+            if (boundary[lane] != answer || full_vector_arguments[lane] != first[lane] * 8.0f
+                || full_vector_arguments_other[lane] != first[lane]) {
+                fprintf(stderr, "mixed integer/SIMD argument counters disagree\n");
+                return 1;
+            }
+        }
         for (int lane = 0; lane < LANES; ++lane)
             memcpy(&expected[lane], compare_signed(0, left[lane], right[lane]) ? &first[lane] : &second[lane], sizeof(uint32_t));
         const float_rack selected_float = select_float(a, b, f, g);

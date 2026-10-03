@@ -235,6 +235,22 @@ let test_integer_shuffles () =
     eval_expr ~lanes env (expression (EShuffle (expression (ETuple [var "a"; var "b"]), paired)))
     |> get |> expect_i32 expected_pair) cases
 
+let test_unsigned_extrema () =
+  List.iter (fun lanes ->
+    let repeated xs = Array.init lanes (fun lane -> xs.(lane mod 4)) in
+    let env = ["a", U32_rack (repeated [|0L; 2147483647L; 2147483648L; 4294967295L|]);
+               "b", U32_rack (repeated [|4294967295L; 2147483648L; 2147483647L; 4294967295L|])] in
+    let check operation arguments expected =
+      match eval_expr ~lanes env (expression (ECall (operation, arguments))) |> get with
+      | U32_rack values when values = repeated expected -> ()
+      | _ -> failwith "unsigned extrema disagree with boundary goldens" in
+    check "min" [var "a"; var "b"] [|0L; 2147483647L; 2147483647L; 4294967295L|];
+    check "max" [var "a"; var "b"] [|4294967295L; 2147483648L; 2147483648L; 4294967295L|];
+    check "max" [expression (EBroadcast (expression (EInt 2147483648L))); var "a"]
+      [|2147483648L; 2147483648L; 2147483648L; 4294967295L|];
+    check "min" [var "a"; expression (EBroadcast (expression (EInt 4294967294L)))]
+      [|0L; 2147483647L; 2147483648L; 4294967294L|]) [4; 8; 16]
+
 let test_unsigned_comparisons () =
   (* Hand-specified order across the signed boundary, repeated at every
      physical rack width. These values distinguish unsigned from signed. *)
@@ -257,6 +273,53 @@ let test_unsigned_comparisons () =
     match result with
     | U32_rack values when values = repeated [|0L; 2147483647L; 2147483647L; 4294967295L|] -> ()
     | _ -> failwith "unsigned mask selected incorrect lane bits") [4; 8; 16]
+
+let test_integer_uniform_builtins () =
+  (* Hand-specified bits distinguish unsigned ordering, complement operand
+     order and per-operation wrapping before a uniform is broadcast. *)
+  List.iter (fun lanes ->
+    let repeated xs = Array.init lanes (fun lane -> xs.(lane mod 4)) in
+    let env = ["values", U32_rack (repeated [|0L; 2147483647L; 2147483648L; 4294967295L|]);
+               "cut", int_scalar Types.SUint 2147483648L;
+               "top", int_scalar Types.SUint 4294967295L] in
+    let check operation arguments expected =
+      match eval_expr ~lanes env (expression (ECall (operation, arguments))) |> get with
+      | U32_rack actual when actual = repeated expected -> ()
+      | _ -> failwith "integer uniform built-in disagrees with boundary goldens" in
+    check "bit_and" [var "values"; scalar_var "cut"] [|0L; 0L; 2147483648L; 2147483648L|];
+    check "bit_or" [scalar_var "cut"; var "values"] [|2147483648L; 4294967295L; 2147483648L; 4294967295L|];
+    check "bit_xor" [var "values"; scalar_var "cut"] [|2147483648L; 4294967295L; 0L; 2147483647L|];
+    check "bit_andnot" [scalar_var "cut"; var "values"] [|2147483648L; 2147483648L; 0L; 0L|];
+    check "bit_andnot" [scalar_var "top"; scalar_var "cut"] (Array.make 4 2147483647L);
+    check "min" [scalar_var "cut"; var "values"] [|0L; 2147483647L; 2147483648L; 2147483648L|];
+    check "max" [var "values"; scalar_var "cut"] [|2147483648L; 2147483648L; 2147483648L; 4294967295L|];
+    check "max" [scalar_var "cut"; scalar_var "top"] (Array.make 4 4294967295L);
+    let wrapped = binop (scalar_var "top") Add (expression (EInt 1L)) in
+    check "bit_xor" [wrapped; scalar_var "cut"] (Array.make 4 2147483648L)) [4; 8; 16]
+
+let test_annotated_rack_bindings () =
+  (* Each explicit rack binding must fill every lane, preserving high bits
+     and negative zero rather than leaving its initializer scalar. *)
+  List.iter (fun lanes ->
+    List.iter (fun (primitive, argument, check) ->
+      let annotation = Some (node (TRack primitive) loc) in
+      let initial_value = scalar_var "value" in
+      let bindings = [
+        SLet { bind_name = "result"; bind_type = annotation; bind_expr = initial_value };
+        SFused { fused_name = "result"; fused_type = annotation; fused_expr = initial_value };
+        SLocBind { loc_name = "result"; loc_type = annotation; loc_expr = initial_value };
+      ] in
+      List.iter (fun binding ->
+        let definition = node
+          (DScratch ("broadcast", [PScalar ("value", Some (node (TScalar primitive) loc))],
+            { result_name = "result"; result_type = annotation },
+            [node binding loc; node (SExpr (var "result")) loc])) loc in
+        eval_scratch ~lanes definition [argument] |> get |> check) bindings)
+      [PInt, int_scalar Types.SInt (-2147483648L), expect_i32 (List.init lanes (fun _ -> -2147483648));
+       PUint, int_scalar Types.SUint 4294967295L,
+         (function U32_rack values when values = Array.make lanes 4294967295L -> ()
+          | _ -> failwith "annotated u32 rack lost unsigned high bits");
+       PFloat, scalar (-0.0), expect_rack (Array.make lanes (-0.0))]) [4; 8; 16]
 
 (* The wasm-simd128 integer racks: eight i16 or four i32 lanes where f32 has four. *)
 let test_integer_racks () =
@@ -318,6 +381,9 @@ let test_integer_bits () =
   |> get |> expect_i32 [ -4; 0; 0; 2 ]
 
 let () =
+  test_annotated_rack_bindings ();
+  test_integer_uniform_builtins ();
+  test_unsigned_extrema ();
   test_unsigned_comparisons ();
   test_integer_shuffles ();
   test_signed_integer_absolute_value ();

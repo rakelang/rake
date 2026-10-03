@@ -123,7 +123,7 @@ operands, an extracted scalar, untaken roots and division, and conditions
 nested inside a through mask check the composed participation contract.
 
 `test/native_integer_rack_test.sh` compares 32-bit wrapping add/subtract/multiply,
-signed negation, absolute value and extrema, literal bit shifts, bitwise
+signed negation and absolute value, signed and unsigned extrema, literal bit shifts, bitwise
 AND/OR/XOR/AND-NOT and all six signed and unsigned comparisons with independent scalar C
 on the four physical profiles. The oracle uses unsigned
 arithmetic for exact overflow bits and reinterprets signed predicates
@@ -137,14 +137,24 @@ still-live input racks, reused intermediates, nested calls and lane masks.
 Unsigned comparison checks cover the boundary at bit 31, literals on either
 side, equal operands, all/any reductions, global tines and gap inversion.
 Hand-specified interpreter masks cover all six predicates at each CPU width.
-`test/program/unsigned_comparisons.rk` checks unsigned rack selection and
-uniform broadcasts against explicit values in both the interpreter and
+`test/program/unsigned_comparisons.rk` checks unsigned rack selection,
+extrema, clamps and uniform broadcasts against explicit values in both the interpreter and
 compiled WebAssembly.
 AND-NOT checks operand order, equal inputs, full-width unsigned literals
 and destructive register reuse. Multiplication checks all lanes against unsigned
 C products, including overflow, shared operands and still-live inputs that
 force destructive register reuse on SSE2. Signed extrema checks cover boundary
 values, aliased operands, nested clamps, lane masks and retained inputs.
+Unsigned extrema use independent `uint32_t` ordering across bit 31 and the
+full lane range, including literal-first operations and preservation of
+live inputs. Hand-specified interpreter extrema cover four, eight and
+sixteen lanes.
+The C oracle also checks signed and unsigned uniform arguments across the
+platform's separate integer and SIMD register counters. Boundary values
+include zero, bit 31 and all-one bits, with retained racks, unsigned clamps,
+six integer arguments on x86, eight on AArch64, and eight SIMD arguments
+alongside an integer uniform. Independently assembled fixtures require exact
+entry imports and reject wrong, missing, repeated and body-local transfers.
 Bit-shift checks cover every literal count from 0 to 31 on signed and unsigned
 racks. Unsigned scalar bit operations independently compute sign extension,
 and composition checks preserve live inputs across shifts and lane masks.

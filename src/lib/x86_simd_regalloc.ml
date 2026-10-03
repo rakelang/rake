@@ -7,6 +7,7 @@ module S = Native_ir.IntSet
 type vector_register = int
 
 type operation =
+  | Integer_parameter of { dst : vector_register; argument : int }
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Uniform_mask of { dst : vector_register; value : bool }
   | Broadcastss of { dst : vector_register; source : vector_register }
@@ -60,6 +61,7 @@ type operation =
       left : vector_register;
       right : vector_register;
       operation : M.extremum;
+      unsigned : bool;
       scratch : vector_register list;
     }
   | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; unsigned : bool; left : vector_register; right : vector_register; scratch : vector_register list }
@@ -186,7 +188,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
   let parameter_count = List.length func.M.parameters in
   match Native_register_assignment.resolve
     ~available:(List.init physical_register_count Fun.id)
-    ~argument_count:argument_register_count ~parameter_count parameter_assignment with
+    ~argument_count:argument_register_count ~integer_argument_count:6
+    ~classes:(List.map (fun parameter -> parameter.M.argument_class) func.parameters) parameter_assignment with
   | Error message ->
     Error
       {
@@ -197,13 +200,13 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
         fused = false;
         message;
       }
-  | Ok parameter_assignment ->
+  | Ok (parameter_assignment, integer_transfers) ->
     let uses = Native_register_assignment.preserve_uses
       ~instruction_count:(List.length func.instructions) parameter_assignment
       (List.map (fun parameter -> parameter.M.reg) func.parameters) (last_uses func) in
     let provenances = definition_provenance func in
     let initial_allocation =
-      List.map2 (fun assignment parameter ->
+      List.map2 (fun (assignment : Native_register_assignment.parameter) parameter ->
         (parameter.M.reg, assignment.Native_register_assignment.register)) parameter_assignment func.parameters
       |> List.fold_left (fun allocation (value, physical) -> I.add value physical allocation) I.empty
     in
@@ -218,6 +221,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
     let emit loc provenance operation =
       emitted_rev := { operation; loc; provenance } :: !emitted_rev
     in
+    List.iter (fun (transfer : Native_register_assignment.integer_transfer) ->
+      emit func.loc Native_ir.source (Integer_parameter { dst = transfer.register; argument = transfer.argument })) integer_transfers;
     let fail_pressure instruction =
       let required = I.cardinal !allocation + 1 in
       let provenance = M.provenance instruction in
@@ -323,7 +328,7 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                 | M.Insert_f32 _ -> 1
                 | M.Reduce_mask _ -> 1
                 | M.Mul_i32 _ when profile = Target.X86_sse2 -> 2
-                | M.Extreme_i32 _ when profile = Target.X86_sse2 -> 1
+                | M.Extreme_i32 { unsigned; _ } when profile = Target.X86_sse2 -> if unsigned then 3 else 1
                 | M.Abs_i32 _ when profile = Target.X86_sse2 -> 1
                 | M.Shuffle_word { racks; _ } ->
                     (if profile = Target.X86_sse2 then 0 else 1)
@@ -384,8 +389,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               | M.Add_i32 { left; right; _ } -> emit loc provenance (Add_i32 { dst; left = p left; right = p right })
               | M.Sub_i32 { left; right; _ } -> emit loc provenance (Sub_i32 { dst; left = p left; right = p right })
               | M.Mul_i32 { left; right; _ } -> emit loc provenance (Mul_i32 { dst; left = p left; right = p right; scratch })
-              | M.Extreme_i32 { left; right; operation; _ } ->
-                  emit loc provenance (Extreme_i32 { dst; left = p left; right = p right; operation; scratch })
+              | M.Extreme_i32 { left; right; operation; unsigned; _ } ->
+                  emit loc provenance (Extreme_i32 { dst; left = p left; right = p right; operation; unsigned; scratch })
               | M.Neg_i32 { source; _ } -> emit loc provenance (Neg_i32 { dst; source = p source })
               | M.Abs_i32 { source; _ } ->
                   emit loc provenance (Abs_i32 { dst; source = p source; sign = List.nth_opt scratch 0 })

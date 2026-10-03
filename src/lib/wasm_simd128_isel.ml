@@ -202,8 +202,9 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     | N.Mask_const set, _ -> [ I32_const (if set then -1l else 0l); Operation "i32x4.splat" ]
     | N.Broadcast scalar, N.Rack N.F32 -> emit scalar @ [ Operation "f32x4.splat" ]
     | N.Broadcast scalar, N.Rack (N.I32 | N.U32) -> emit scalar @ [ Operation "i32x4.splat" ]
-    | N.Binary (((N.Add | N.Sub) as operation), left, right), N.Rack N.U32 ->
-        emit_in_order [ left; right ] @ [ Operation (if operation = N.Add then "i32x4.add" else "i32x4.sub") ]
+    | N.Binary (((N.Add | N.Sub | N.Min | N.Max) as operation), left, right), N.Rack N.U32 ->
+        let operation = match operation with N.Add -> "add" | N.Sub -> "sub" | N.Min -> "min_u" | _ -> "max_u" in
+        emit_in_order [ left; right ] @ [ Operation ("i32x4." ^ operation) ]
     | N.Binary (((N.Add | N.Sub | N.Min | N.Max) as operation), left, right), N.Rack ((N.I16 | N.I32) as element) ->
         let shape = if element = N.I16 then "i16x8" else "i32x4" in
         let name =

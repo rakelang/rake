@@ -1752,6 +1752,7 @@ let boundaries u =
       let c_of (t : Ast.typ) =
         match t.v with
         | TScalar PFloat -> "float"
+        | TScalar PInt -> "int32_t"
         | TScalar PBool when u.execution_target <> WebAssembly -> "bool"
         | TScalar (PInt64 | PUint64) -> "uint64_t"
         | _ -> "uint32_t"
@@ -1761,9 +1762,9 @@ let boundaries u =
       let prototype = match u.execution_target with
         | WebAssembly -> ""
         | Native_program _ ->
-            if not (List.for_all (function Ast.PScalar (_, Some { v = TScalar PFloat; _ }) -> true | _ -> false) params
-              && (match result.result_type with Some { v = TScalar (PFloat | PBool | PUint); _ } -> true | _ -> false)) then
-              fail def.loc "a native kernel called from slow code takes uniform f32 parameters and returns f32, bool or u32; other scalar C boundaries are work in progress";
+            if not (List.for_all (function Ast.PScalar (_, Some { v = TScalar (PFloat | PInt | PUint); _ }) -> true | _ -> false) params
+              && (match result.result_type with Some { v = TScalar (PFloat | PBool | PInt | PUint); _ } -> true | _ -> false)) then
+              fail def.loc "a native kernel called from slow code takes uniform f32/i32/u32 parameters and returns f32, bool, i32 or u32; other scalar C boundaries are work in progress";
             Printf.sprintf "extern %s %s(%s);\n" r name (if ps = [] then "void" else String.concat ", " ps)
       in
       acc

@@ -508,6 +508,25 @@ let broadcast_to other value =
   | U32_scalar v, Some (element, xs) -> int_rack element (Array.make (Array.length xs) (Int64.of_int v))
   | _ -> value
 
+let integer_uniform = function
+  | Int_scalar (element, value) -> Some (element, value)
+  | U32_scalar value -> Some (Types.SUint, Int64.of_int value)
+  | _ -> None
+
+let broadcast_integer_uniform ~lanes value =
+  match integer_uniform value with
+  | Some (element, bits) -> splat_int ~lanes element bits
+  | None -> value
+
+let broadcast_rack_annotation ~lanes annotation value =
+  match annotation, value with
+  | Some { v = TRack PFloat; _ }, F32_scalar x -> splat lanes x
+  | Some { v = TRack element; _ }, Int_scalar (_, bits) ->
+      splat_int ~lanes (Types.of_prim element) bits
+  | Some { v = TRack element; _ }, U32_scalar bits ->
+      splat_int ~lanes (Types.of_prim element) (Int64.of_int bits)
+  | _ -> value
+
 let round_half_even x =
   if Float.is_nan x || Float.is_integer x then x
   else
@@ -543,7 +562,21 @@ let rec eval_expr ~lanes env (expr : expr) =
                  let p = match op with
                    | Lt -> ( < ) | Le -> ( <= ) | Gt -> ( > ) | Ge -> ( >= ) | Eq -> ( = ) | _ -> ( <> ) in
                  Ok (Mask (Array.map2 (fun x y -> p (Int64.compare x y) 0) xs ys)))
-         | _ -> error expr.loc (Operand_kind_mismatch { operation = Ast.show_binop op; left = value_kind left; right = Some (value_kind right) }))
+         | _ -> (
+             match integer_uniform left, integer_uniform right with
+             | Some (element, x), Some (_, y) -> (
+                 match op with
+                 | Add | Sub | Mul ->
+                     let f = match op with Add -> Int64.add | Sub -> Int64.sub | _ -> Int64.mul in
+                     Ok (int_scalar element (f x y))
+                 | _ ->
+                     let compare = if element = Types.SUint64 then Int64.unsigned_compare else Int64.compare in
+                     let ordered = compare x y in
+                     let result = match op with
+                       | Lt -> ordered < 0 | Le -> ordered <= 0 | Gt -> ordered > 0
+                       | Ge -> ordered >= 0 | Eq -> ordered = 0 | _ -> ordered <> 0 in
+                     Ok (int_scalar Types.SBool (if result then 1L else 0L)))
+             | _ -> error expr.loc (Operand_kind_mismatch { operation = Ast.show_binop op; left = value_kind left; right = Some (value_kind right) })))
     | EBinop (left_expr, ((Add | Sub | Mul | Div | Lt | Le | Gt | Ge | Eq | Ne) as op), right_expr)
       when (integer_literal left_expr <> None) <> (integer_literal right_expr <> None) ->
         (* An integer literal beside an f32 rack is an f32 constant. *)
@@ -658,18 +691,30 @@ let rec eval_expr ~lanes env (expr : expr) =
         | value -> error expr.loc (Operand_kind_mismatch { operation = "mask reduction"; left = value_kind value; right = None }))
     | ECall (name, arguments) when List.exists (fun (d : def) -> match d.v with DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions ->
         let definition = List.find (fun (d : def) -> match d.v with DScratch (n, _, _, _) | DRake (n, _, _, _, _, _, _) -> n = name | _ -> false) !definitions in
+        let parameters = match definition.v with DScratch (_, ps, _, _) | DRake (_, ps, _, _, _, _, _) -> ps | _ -> [] in
+        if List.length parameters <> List.length arguments then
+          error expr.loc (Argument_count_mismatch { expected = List.length parameters; actual = List.length arguments })
+        else
         let* values =
-          List.fold_right (fun a acc -> let* rest = acc in let* v = eval_expr ~lanes env a in Ok (v :: rest)) arguments (Ok [])
+          List.fold_right2 (fun parameter argument acc ->
+            let* rest = acc in
+            let* value = match integer_literal argument, parameter with
+              | Some value, PScalar (_, Some { v = TScalar element; _ })
+                when element <> PFloat && element <> PDouble && element <> PBool ->
+                  Ok (int_scalar (Types.of_prim element) (Int64.of_int value))
+              | Some value, PRack (_, Some { v = TRack element; _ })
+                when element <> PFloat && element <> PDouble && element <> PBool ->
+                  Ok (splat_int ~lanes (Types.of_prim element) (Int64.of_int value))
+              | _ -> eval_expr ~lanes env argument
+            in
+            Ok (value :: rest)) parameters arguments (Ok [])
         in
         (* A uniform passed to a rack parameter is broadcast at the call. *)
-        let parameters = match definition.v with DScratch (_, ps, _, _) | DRake (_, ps, _, _, _, _, _) -> ps | _ -> [] in
         let values =
           List.map2
             (fun parameter value ->
               match (parameter, value) with
-              | PRack (_, Some { v = TRack p; _ }), F32_scalar x when Types.of_prim p = Types.SFloat -> F32_rack (Array.make lanes x)
-              | PRack (_, Some { v = TRack p; _ }), Int_scalar (_, x) -> splat_int ~lanes (Types.of_prim p) x
-              | PRack (_, Some { v = TRack p; _ }), U32_scalar x -> splat_int ~lanes (Types.of_prim p) (Int64.of_int x)
+              | PRack (_, annotation), value -> broadcast_rack_annotation ~lanes annotation value
               (* A marked uniform evaluates as a splat here; a scalar parameter takes one lane. *)
               | PScalar _, F32_rack xs when Array.length xs > 0 -> F32_scalar xs.(0)
               | PScalar _, value when (match int_lanes value with Some (_, xs) -> Array.length xs > 0 | None -> false) ->
@@ -750,18 +795,10 @@ let rec eval_expr ~lanes env (expr : expr) =
          | _ -> error expr.loc (Operand_kind_mismatch { operation = Ast.show_binop op; left = value_kind left; right = Some (value_kind right) }))
     | ECall (("min" | "max") as name, [ a; b ])
       when integer_literal a <> None || integer_literal b <> None
-           || (match eval_expr ~lanes env a with Ok (U8_rack _ | I16_rack _ | I32_rack _ | F32_rack _) -> true | _ -> false) ->
-        let literal_first = integer_literal a <> None in
-        let rack_expr, other_expr = if literal_first then (b, a) else (a, b) in
-        let* rack = eval_expr ~lanes env rack_expr in
-        let* other =
-          match (integer_literal other_expr, rack) with
-          | Some value, U8_rack xs -> Ok (U8_rack (Array.make (Array.length xs) value))
-          | Some value, I16_rack xs -> Ok (I16_rack (Array.make (Array.length xs) value))
-          | Some value, I32_rack xs -> Ok (I32_rack (Array.make (Array.length xs) value))
-          | Some _, value -> error expr.loc (Operand_kind_mismatch { operation = name; left = value_kind value; right = None })
-          | None, _ -> eval_expr ~lanes env other_expr
-        in
+           || (match eval_expr ~lanes env a with Ok (U8_rack _ | I16_rack _ | I32_rack _ | U32_rack _ | F32_rack _ | Int_scalar _ | U32_scalar _) -> true | _ -> false) ->
+        let* rack, other = operands ~lanes env a b in
+        let rack = broadcast_integer_uniform ~lanes rack in
+        let other = broadcast_integer_uniform ~lanes other in
         let f = if name = "min" then min else max in
         (match (rack, other) with
          | F32_rack xs, F32_rack ys when Array.length xs = Array.length ys ->
@@ -770,19 +807,12 @@ let rec eval_expr ~lanes env (expr : expr) =
          | U8_rack xs, U8_rack ys when Array.length xs = Array.length ys -> Ok (U8_rack (Array.map2 f xs ys))
          | I16_rack xs, I16_rack ys when Array.length xs = Array.length ys -> Ok (I16_rack (Array.map2 f xs ys))
          | I32_rack xs, I32_rack ys when Array.length xs = Array.length ys -> Ok (I32_rack (Array.map2 f xs ys))
+         | U32_rack xs, U32_rack ys when Array.length xs = Array.length ys -> Ok (U32_rack (Array.map2 (if name = "min" then Int64.min else Int64.max) xs ys))
          | _ -> error expr.loc (Operand_kind_mismatch { operation = name; left = value_kind rack; right = Some (value_kind other) }))
     | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot") as name, [ a; b ]) ->
-        let literal_beside rack_expr literal =
-          let* rack = eval_expr ~lanes env rack_expr in
-          let value = Option.bind (integer_literal literal) (fun n -> typed_literal_value rack (Int64.of_int n)) in
-          match value with Some v -> Ok (rack, v) | None -> let* v = eval_expr ~lanes env literal in Ok (rack, v)
-        in
-        let* a, b =
-          match (integer_literal a, integer_literal b) with
-          | Some _, None -> let* b, a = literal_beside b a in Ok (a, b)
-          | None, Some _ -> literal_beside a b
-          | _ -> let* a = eval_expr ~lanes env a in let* b = eval_expr ~lanes env b in Ok (a, b)
-        in
+        let* a, b = operands ~lanes env a b in
+        let a = broadcast_integer_uniform ~lanes a in
+        let b = broadcast_integer_uniform ~lanes b in
         let f x y =
           match name with
           | "bit_and" -> x land y | "bit_or" -> x lor y | "bit_xor" -> x lxor y | _ -> x land lnot y
@@ -1029,6 +1059,7 @@ and is_integer_operation ~lanes env left_expr right_expr =
   in
   match (integer left_expr, integer right_expr) with
   | `Rack, (`Rack | `Literal | `Uniform) | (`Literal | `Uniform), `Rack -> true
+  | `Uniform, (`Uniform | `Literal) | `Literal, `Uniform -> true
   | _ -> false
 
 let bind_parameter ~lanes env parameter argument loc =
@@ -1059,6 +1090,10 @@ let bind_parameter ~lanes env parameter argument loc =
          })
   | PSpread _, _ -> error loc (Unsupported_definition "spread scratch parameter")
 
+let eval_binding ~lanes env annotation expression =
+  let* value = eval_expr ~lanes env expression in
+  Ok (broadcast_rack_annotation ~lanes annotation value)
+
 let eval_scratch ~lanes definition arguments =
   match definition.v with
   | DScratch (_, parameters, result, body) ->
@@ -1081,16 +1116,16 @@ let eval_scratch ~lanes definition arguments =
           | statement :: rest -> (
               match statement.v with
               | SLet binding ->
-                  let* value = eval_expr ~lanes env binding.bind_expr in
+                  let* value = eval_binding ~lanes env binding.bind_type binding.bind_expr in
                   eval_body ((binding.bind_name, value) :: env) rest
               | SFused binding ->
-                  let* value = eval_expr ~lanes env binding.fused_expr in
+                  let* value = eval_binding ~lanes env binding.fused_type binding.fused_expr in
                   eval_body ((binding.fused_name, value) :: env) rest
               | SUniform binding ->
                   let* value = eval_expr ~lanes env binding.bind_expr in
                   eval_body ((binding.bind_name, value) :: env) rest
               | SLocBind location ->
-                  let* value = eval_expr ~lanes env location.loc_expr in
+                  let* value = eval_binding ~lanes env location.loc_type location.loc_expr in
                   eval_body ((location.loc_name, value) :: env) rest
               | SAssign (name, expression) ->
                   let* value = eval_expr ~lanes env expression in
@@ -1120,8 +1155,12 @@ let eval_scratch ~lanes definition arguments =
           | [] -> Ok env
           | statement :: rest -> (
               match statement.v with
-              | SLet { bind_name = name; bind_expr = e; _ } | SFused { fused_name = name; fused_expr = e; _ }
-              | SUniform { bind_name = name; bind_expr = e; _ } | SLocBind { loc_name = name; loc_expr = e; _ } | SAssign (name, e) ->
+              | SLet { bind_name = name; bind_expr = e; bind_type = annotation }
+              | SFused { fused_name = name; fused_expr = e; fused_type = annotation }
+              | SLocBind { loc_name = name; loc_expr = e; loc_type = annotation } ->
+                  let* value = eval_binding ~lanes env annotation e in
+                  eval_body_statements ((name, value) :: env) rest
+              | SUniform { bind_name = name; bind_expr = e; _ } | SAssign (name, e) ->
                   let* value = eval_expr ~lanes env e in
                   eval_body_statements ((name, value) :: env) rest
               | SLoop ({ loop_repeat = true; _ } as loop) -> (
@@ -1240,10 +1279,10 @@ let eval_rake ~lanes definition arguments =
           | statement :: rest -> (
               match statement.v with
               | SLet binding ->
-                  let* value = eval_expr ~lanes env binding.bind_expr in
+                  let* value = eval_binding ~lanes env binding.bind_type binding.bind_expr in
                   eval_statements ~lanes ((binding.bind_name, value) :: env) rest
               | SFused binding ->
-                  let* value = eval_expr ~lanes env binding.fused_expr in
+                  let* value = eval_binding ~lanes env binding.fused_type binding.fused_expr in
                   eval_statements ~lanes ((binding.fused_name, value) :: env) rest
               | SExpr expression ->
                   let* _ = eval_expr ~lanes env expression in

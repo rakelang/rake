@@ -4,7 +4,7 @@ module A = Rake.X86_simd_regalloc
 let loc line =
   { Rake.Native_ir.file = "regalloc.rk"; line; col = 2; offset = line * 10 }
 
-let parameter reg = { M.reg; name = Some ("p" ^ string_of_int reg) }
+let parameter reg = { M.reg; name = Some ("p" ^ string_of_int reg); argument_class = Rake.Native_register_assignment.Vector }
 
 let fma_function =
   let provenance = { Rake.Native_ir.fused = Some 0; through = None } in

@@ -21,6 +21,27 @@ scratch native_uniform_choice(<left: f32>, <right: f32>, <value: f32>) -> f32:
   let selected = if <left> > <right> then values else <-0.0>
   extract(selected, 0)
 
+scratch native_signed_identity(<value: i32>) -> i32:
+  <value>
+
+scratch native_unsigned_identity(<value: u32>) -> u32:
+  <value>
+
+scratch native_unsigned_literal() -> u32:
+  native_unsigned_identity(<4294967295>)
+
+scratch native_signed_literal() -> i32:
+  native_signed_identity(<-2147483648>)
+
+scratch native_signed_bits(<value: i32>, <factor: f32>, <limit: i32>) -> u32:
+  let values: i32s = <value>
+  let flags = values < <limit>
+  bitmask(flags)
+
+scratch native_unsigned_bits(<factor: f32>, <value: u32>, <limit: u32>) -> u32:
+  let values: u32s = <value>
+  bitmask(values >= <limit>)
+
 slow main() -> i32:
   let original: f32 = -0.0
   let carried = native_identity(<original>)
@@ -36,4 +57,12 @@ slow main() -> i32:
     return 4
   if bitcast(u32, native_uniform_choice(<1.0>, <2.0>, <3.5>)) != bitcast(u32, original):
     return 4
+  if native_signed_identity(<-2147483648>) != -2147483648 or native_unsigned_identity(<4294967295>) != 4294967295:
+    return 5
+  if native_unsigned_literal() != 4294967295 or native_signed_literal() != -2147483648:
+    return 5
+  if bit_and(native_signed_bits(<-2147483648>, <2.0>, <0>), 15) != 15 or native_signed_bits(<2147483647>, <2.0>, <0>) != 0:
+    return 6
+  if bit_and(native_unsigned_bits(<2.0>, <4294967295>, <2147483648>), 15) != 15 or native_unsigned_bits(<2.0>, <2147483647>, <2147483648>) != 0:
+    return 7
   return i32(native_identity(<3.5>))

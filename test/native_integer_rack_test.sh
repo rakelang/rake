@@ -64,6 +64,11 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         done
     done > "$source"
     printf 'scratch unsigned_andnot_all(a: u32s) -> u32s:\n  bit_andnot(<4294967295>, a)\n\n' >> "$source"
+    printf 'scratch signed_uniform_add(a: i32s, <amount: i32>) -> i32s:\n  a + <amount>\n\nscratch unsigned_uniform_keep(<xor_bits: u32>, a: u32s, <amount: u32>) -> u32s:\n  | changed <| bit_xor(a, <xor_bits>)\n  | retained <| changed + a\n  retained * <amount>\n\nscratch unsigned_uniform_clamp(a: u32s, <low: u32>, <high: u32>) -> u32s:\n  min(<high>, max(<low>, a))\n\nscratch unsigned_uniform_reverse(<removed: u32>, a: u32s) -> u32s:\n  bit_andnot(<removed>, a)\n\nscratch integer_float_boundary(<amount: i32>, values: f32s, <factor: f32>, <limit: u32>, integers: u32s) -> f32s:\n  if integers < <limit> then values * <factor> else values + <1.0>\n\nscratch six_integer_slots(<a: u32>, <b: u32>, <c: u32>, <d: u32>, <e: u32>, <f: u32>) -> u32s:\n  bit_xor(<a> + <b>, <c> * <d>) - <e> + <f>\n\n' >> "$source"
+    if [[ "$profile" == aarch64-neon ]]; then
+        printf 'scratch eight_integer_slots(<a: u32>, <b: u32>, <c: u32>, <d: u32>, <e: u32>, <f: u32>, <g: u32>, <h: u32>) -> u32s:\n  bit_xor(<a> + <b>, <c> * <d>) - <e> + <f> + <g> * <h>\n\n' >> "$source"
+    fi
+    printf 'scratch eight_vector_slots(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s, <offset: i32>) -> f32s:\n  if (<offset> * <1>) < <0> then a + b + c + d + e + f + g + h else h\n\n' >> "$source"
     for kind in i32s u32s; do
         for count in {0..31}; do
             for operation in left right right_signed; do
@@ -78,7 +83,10 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     for operation in min max; do
         printf 'scratch signed_%s(a: i32s, b: i32s) -> i32s:\n  %s(a, b)\n\nscratch signed_%s_keep_inputs(a: i32s, b: i32s) -> i32s:\n  | chosen <| %s(a, b)\n  | mixed <| bit_xor(chosen, a)\n  mixed + b\n\nscratch signed_%s_keep_left(a: i32s, b: i32s) -> i32s:\n  let chosen = %s(a, b)\n  chosen + a\n\nscratch signed_%s_same(a: i32s) -> i32s:\n  %s(a, a)\n\n' \
             "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" >> "$source"
+        printf 'scratch unsigned_%s(a: u32s, b: u32s) -> u32s:\n  %s(a, b)\n\nscratch unsigned_%s_keep_inputs(a: u32s, b: u32s) -> u32s:\n  | chosen <| %s(a, b)\n  | mixed <| bit_xor(chosen, a)\n  mixed + b\n\nscratch unsigned_%s_keep_left(a: u32s, b: u32s) -> u32s:\n  let chosen = %s(a, b)\n  chosen + a\n\nscratch unsigned_%s_same(a: u32s) -> u32s:\n  %s(a, a)\n\n' \
+            "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" >> "$source"
     done
+    printf 'scratch unsigned_clamp(a: u32s) -> u32s:\n  min(max(a, <2147483647>), <2147483649>)\n\nscratch unsigned_extreme_selected(a: u32s, b: u32s) -> u32s:\n  if a < b then max(a, <2147483648>) else min(b, <2147483648>)\n\nscratch unsigned_extreme_literal_first(a: u32s) -> u32s:\n  max(<2147483648>, min(<4294967295>, a))\n\n' >> "$source"
     printf 'scratch signed_clamp(a: i32s) -> i32s:\n  min(max(a, <-17>), <29>)\n\nscratch signed_extreme_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then max(a, <0>) else min(b, <0>)\n\nscratch signed_extreme_literal_first(a: i32s) -> i32s:\n  max(<0>, min(<29>, a))\n\n' >> "$source"
     printf 'scratch signed_multiply_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then a * b else (a + <1>) * (b - <1>)\n\n' >> "$source"
     printf 'scratch signed_negate(a: i32s) -> i32s:\n  -a\n\nscratch signed_negate_keep_input(a: i32s) -> i32s:\n  | negative <| -a\n  bit_xor(negative, a)\n\nscratch signed_negate_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then -a else -b\n\n' >> "$source"

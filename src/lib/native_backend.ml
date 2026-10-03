@@ -244,9 +244,24 @@ let verify_allocated_object ~source ~(config : Target.config) allocated object_b
       | Error error -> Error { stage = Verify; message = Wasm_simd128_toolchain.format_error error })
   | X86 _ | Neon _ ->
     let cross_lane_functions = cross_lane_function_names allocated in
+    let integer_argument_transfers = match allocated with
+      | X86 (_, functions) -> List.map (fun (func : X86_simd_regalloc.func) ->
+          func.name, List.filter_map (fun (instruction : X86_simd_regalloc.instruction) ->
+            match instruction.operation with
+            | X86_simd_regalloc.Integer_parameter { dst; argument } ->
+                Some { Native_register_assignment.register = dst; argument }
+            | _ -> None) func.instructions) functions
+      | Neon functions -> List.map (fun (func : Aarch64_neon_regalloc.func) ->
+          func.name, List.filter_map (fun (instruction : Aarch64_neon_regalloc.instruction) ->
+            match instruction.operation with
+            | Aarch64_neon_regalloc.Integer_parameter { dst; argument } ->
+                Some { Native_register_assignment.register = dst; argument }
+            | _ -> None) func.instructions) functions
+      | Wasm _ -> [] in
     match
       Native_verify.verify ~profile:config.profile ~source ~functions
         ~cross_lane_functions
+        ~integer_argument_transfers
         ~integer_result_functions:(integer_result_function_names allocated)
         ~expected_fma_count:(fma_count allocated) object_bytes
     with

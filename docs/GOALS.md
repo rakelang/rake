@@ -116,9 +116,9 @@ Today: whole programs compile on `wasm-simd128`, as [the slow
 tier](spec/08_slow_tier.md) describes. The unreleased development compiler
 also compiles slow orchestration with register kernels into native objects.
 Their C unit embeds Rake-selected assembly, which remains opaque to the
-platform C compiler. Slow callers currently take uniform `f32` arguments and
-receive `f32` results. Native runs beyond the stream subset and other scalar
-kernel boundaries remain work in progress.
+platform C compiler. Slow callers can pass uniform `f32`, `i32` and `u32`
+arguments and receive `f32`, `bool`, `i32` or `u32` results. Native runs beyond
+the stream subset and other scalar kernel boundaries remain work in progress.
 
 ## Compilation is predictable
 

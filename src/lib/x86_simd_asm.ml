@@ -35,6 +35,7 @@ let vector_register profile register =
   Printf.sprintf "%s%d" (Option.get (Target.info profile).mir_register_class) register
 
 let registers = function
+  | A.Integer_parameter { dst; _ } -> [ dst ]
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Uniform_mask { dst; _ } -> [ dst ]
   | A.Broadcastss { dst; source } -> [ dst; source ]
@@ -104,6 +105,8 @@ let validate_function profile (func : A.func) =
           | [] -> Ok ()
           | ({ A.operation; loc; _ } : A.instruction) :: rest -> (
               match operation with
+              | A.Integer_parameter { argument; _ } when argument < 0 || argument >= 6 ->
+                  Error { function_name = func.name; loc; message = "integer argument is outside the System V register boundary" }
               | A.Extract_f32 { lane; _ } | A.Insert_f32 { lane; _ }
                   when M.f32_lane_index lane >= (Target.info profile).f32_lanes ->
                   Error { function_name = func.name; loc; message = "lane transfer is outside the selected profile's rack" }
@@ -161,6 +164,18 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
     else (
       let label = intern pool (Splat_f32 bits) in
       emit "vbroadcastss %s, DWORD PTR [rip + %s]" (ymm dst) label)
+  in
+  let unsigned_order_operands left right = function
+    | [ biased_left; biased_right ] ->
+        let sign = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.min_int))) in
+        let bias dst source =
+          if sse then (move dst source; emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) sign)
+          else emit "vxorps %s, %s, YMMWORD PTR [rip + %s]" (ymm dst) (ymm source) sign in
+        bias biased_left left;
+        bias biased_right right;
+        biased_left, biased_right
+    | [] -> left, right
+    | _ -> invalid_arg "unsigned ordering requires two temporary racks"
   in
   let compare ?ordered_mask predicate dst left right =
     if sse then (
@@ -269,6 +284,9 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
     | _ -> invalid_arg "strict x86 SIMD combine requires five temporary registers"
   in
   match operation with
+  | A.Integer_parameter { dst; argument } ->
+      let register = List.nth [ "edi"; "esi"; "edx"; "ecx"; "r8d"; "r9d" ] argument in
+      emit "%smovd xmm%d, %s" (if sse then "" else "v") dst register
   | A.Uniform_f32 { dst; bits } ->
       load_splat dst bits
   | A.Uniform_mask { dst; value = false } ->
@@ -421,16 +439,21 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
         logical "xorps" dst source sign;
         binary "psubd" dst dst sign)
       else emit "vpabsd %s, %s" (ymm dst) (ymm source)
-  | A.Extreme_i32 { dst; left; right; operation; scratch } ->
+  | A.Extreme_i32 { dst; left; right; operation; unsigned; scratch } ->
       if sse then (
-        let mask = match scratch with
-          | [ mask ] -> mask
+        let mask, biased_left, biased_right = match unsigned, scratch with
+          | true, [ biased_left; biased_right; mask ] ->
+              let biased_left, biased_right = unsigned_order_operands left right [biased_left; biased_right] in
+              mask, biased_left, biased_right
+          | false, [ mask ] -> mask, left, right
           | _ -> invalid_arg "SSE2 integer extrema require an allocated mask register" in
-        binary "pcmpgtd" mask left right;
+        binary "pcmpgtd" mask biased_left biased_right;
         (match operation with
         | M.Minimum -> blend dst mask right left
         | M.Maximum -> blend dst mask left right))
-      else binary (match operation with M.Minimum -> "pminsd" | M.Maximum -> "pmaxsd") dst left right
+      else binary (match operation, unsigned with
+        | M.Minimum, false -> "pminsd" | M.Maximum, false -> "pmaxsd"
+        | M.Minimum, true -> "pminud" | M.Maximum, true -> "pmaxud") dst left right
   | A.Shift_i32 { dst; source; count; shift } ->
       let count = Native_ir.I32_shift_count.to_int count in
       let mnemonic = match shift with
@@ -453,17 +476,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       else (
         (* XORing the sign bit maps unsigned order to signed order. Both
            temporary racks are allocated so live inputs remain unchanged. *)
-        let left, right = match scratch with
-          | [ biased_left; biased_right ] ->
-              let sign = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.min_int))) in
-              let bias dst source =
-                if sse then (move dst source; emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) sign)
-                else emit "vxorps %s, %s, YMMWORD PTR [rip + %s]" (ymm dst) (ymm source) sign in
-              bias biased_left left;
-              bias biased_right right;
-              biased_left, biased_right
-          | [] -> left, right
-          | _ -> invalid_arg "unsigned comparison requires two temporary racks" in
+        let left, right = unsigned_order_operands left right scratch in
         let mnemonic, left, right, invert = match predicate with
           | Native_ir.Eq -> "pcmpeqd", left, right, false
           | Native_ir.Ne -> "pcmpeqd", left, right, true

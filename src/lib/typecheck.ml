@@ -584,19 +584,10 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall (("min" | "max") as name, [a; b])
     when not (is_integer_literal a && is_integer_literal b)
-         && (let t = infer_expr env (if is_integer_literal a then b else a) in is_integer_rack t || t = Rack SUint8) ->
-      (* An integer literal takes the element type of the integer rack beside it. *)
+         && (let t = broadcast (infer_expr env (if is_integer_literal a then b else a)) in
+             is_integer_rack t || List.mem t [Rack SUint8; Rack SUint]) ->
       require_feature env expr.loc Capabilities.Integer_rack_arithmetic;
-      let rack, other = if is_integer_literal a then (b, a) else (a, b) in
-      let t = infer_expr env rack in
-      if is_integer_literal other then begin
-        let value = integer_literal_value other in
-        if not (literal_fits t value) then
-          type_errorf other.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type t))
-      end
-      else if (match infer_expr env other with o -> o <> t && o <> element_type t) then
-        type_errorf expr.loc "%s requires two equal integer racks" name;
-      t
+      infer_integer_rack_operands env expr.loc name a b
 
   | ECall (("dot" | "narrow") as name, [a; b]) ->
       require_feature env expr.loc Capabilities.Integer_rack_conversion;
@@ -627,23 +618,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
 
   | ECall (("bit_and" | "bit_or" | "bit_xor" | "bit_andnot") as name, [a; b]) ->
       require_feature env expr.loc Capabilities.Integer_rack_bits;
-      (* An integer literal takes the type of the integer rack beside it. *)
-      let rack, other = if is_integer_literal a && not (is_integer_literal b) then (b, a) else (a, b) in
-      let t = infer_expr env rack in
-      if lane_bits t = None then
-        type_errorf rack.loc "%s requires integer racks, got %s" name (show_concise t);
-      if is_integer_literal other then begin
-        let value = integer_literal_value other in
-        if not (literal_fits t value) then
-          type_errorf other.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type t))
-      end
-      else begin
-        let o = infer_expr env other in
-        if o <> t then
-          type_errorf other.loc "%s requires two equal integer racks, got %s and %s" name
-            (show_concise t) (show_concise o)
-      end;
-      t
+      infer_integer_rack_operands env expr.loc name a b
 
   | ECall (("shift_bits_left" | "shift_bits_right" | "shift_bits_right_signed") as name, [x; count]) ->
       require_feature env expr.loc Capabilities.Integer_rack_bits;
@@ -693,15 +668,24 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | ECall (name, args) -> (
       match Hashtbl.find_opt env.funcs name with
       | Some (param_types, ret) ->
-          let arg_types = List.map (infer_expr env) args in
-          if List.length arg_types <> List.length param_types then
+          if List.length args <> List.length param_types then
             type_errorf expr.loc "Function %s expects %d args, got %d"
-              name (List.length param_types) (List.length arg_types);
-          List.iter2 (fun expected actual ->
+              name (List.length param_types) (List.length args);
+          List.iter2 (fun expected argument ->
+            let actual = match expected with
+              | Scalar element | Rack element
+                when is_integer_scalar_type element && is_integer_literal argument ->
+                  let value = integer_literal_value argument in
+                  if not (literal_fits_scalar element value) then
+                    type_errorf argument.loc "integer literal %Ld does not fit a %s argument"
+                      value (show_concise (Scalar element));
+                  expected
+              | _ -> infer_expr env argument
+            in
             if not (compatible expected actual) then
               type_errorf expr.loc "Argument type mismatch: expected %s, got %s"
                 (show_concise expected) (show_concise actual)
-          ) param_types arg_types;
+          ) param_types args;
           ret
       | None -> type_errorf expr.loc "Unknown function: %s" name)
 
@@ -834,6 +818,29 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | EString _ | EIndex _ | EConvert _ | EArray _ | ESlow _ ->
       type_errorf expr.loc "%s belongs to runs and slow definitions"
         (Capabilities.id (Capabilities.feature_of_expr expr.v))
+
+(** Integer rack built-ins broadcast marked uniforms and type literals by
+    the other operand. The operation still produces a rack with two uniforms. *)
+and infer_integer_rack_operands env loc name a b =
+  let anchor = if is_integer_literal a && not (is_integer_literal b) then b else a in
+  let expected = broadcast (infer_expr env anchor) in
+  if lane_bits expected = None then
+    type_errorf anchor.loc "%s requires integer racks, got %s" name (show_concise expected);
+  List.iter (fun operand ->
+    if is_integer_literal operand then begin
+      let value = integer_literal_value operand in
+      if not (literal_fits expected value) then
+        type_errorf operand.loc "integer literal %Ld does not fit a %s lane"
+          value (show_concise (element_type expected))
+    end
+    else begin
+      let actual = infer_expr env operand in
+      if actual <> expected && actual <> element_type expected then
+        type_errorf operand.loc "%s requires matching integer operands, got %s and %s"
+          name (show_concise expected) (show_concise actual);
+      require_marked loc operand actual anchor expected
+    end) [a; b];
+  expected
 
 (** Infer binary operation result type *)
 and infer_binop t1 t2 op loc =

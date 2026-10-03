@@ -512,12 +512,12 @@ let rec lower_expr state provenance (expr : expr) =
         let* () = expect_type expr.loc "bitmask" Ir.Mask operand in
         Ok (emit state expr.loc provenance (Ir.Scalar Ir.U32) (Ir.Reduce (Ir.Reduce_bitmask, fst operand)))
   | ECall (("min" | "max") as name, [ a; b ]) ->
-      (* i16, i32 and f32 racks; an integer literal becomes a splat of the integer rack beside it. *)
+      (* An integer literal becomes a splat of the integer rack beside it. *)
       let literal_first = integer_literal a <> None in
       let rack_expr, other_expr = if literal_first then (b, a) else (a, b) in
       let* rack = lower_expr state provenance rack_expr in
-      if not (is_integer_rack (snd rack) || snd rack = Ir.Rack Ir.F32 || snd rack = Ir.Rack Ir.U8) then
-        errorf expr.loc "native %s is available for u8, i16, i32 and f32 racks only" name
+      if not (is_integer_rack (snd rack) || List.mem (snd rack) [Ir.Rack Ir.U32; Ir.Rack Ir.F32; Ir.Rack Ir.U8]) then
+        errorf expr.loc "native %s is available for u8, i16, i32, u32 and f32 racks only" name
       else
         let* other =
           match integer_literal other_expr with

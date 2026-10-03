@@ -188,7 +188,7 @@ let () =
        [ instruction (Some (0, N.Rack N.F32))
            (N.Rack_const [ N.Float32_bits 0l; N.Float32_bits 0l ]) ]
        (N.Return (Some 0)));
-  expect_error "only rack<f32>, rack<i32>, scalar<f32>, and mask parameters"
+  expect_error "x86 kernels take 32-bit racks, masks, and f32/i32/u32 uniforms"
     (with_body "f64" [ { N.id = 0; typ = N.Rack N.F64; name = None } ]
        (Some (N.Rack N.F64)) [] (N.Return (Some 0)));
   expect_error "call @helper is forbidden"

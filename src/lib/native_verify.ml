@@ -244,7 +244,7 @@ let allowed_avx2 = function
       true
   | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" | "vroundps" -> true
   | "vpxor" | "vpcmpeqd" | "vpcmpgtd" | "vpaddd" | "vpsubd" | "vpmulld"
-  | "vpminsd" | "vpmaxsd" | "vpabsd" | "vpslld" | "vpsrld" | "vpsrad" -> true
+  | "vpminsd" | "vpmaxsd" | "vpminud" | "vpmaxud" | "vpabsd" | "vpslld" | "vpsrld" | "vpsrad" -> true
   | _ -> false
 
 let is_fma profile =
@@ -354,6 +354,10 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
       && not (full_integer_rack_operands Target.X86_avx2 operands) then
     error ~source ~function_name ~obligation:"full-width signed integer extrema"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
+  else if List.mem mnemonic [ "vpminud"; "vpmaxud" ]
+      && not (full_integer_rack_operands Target.X86_avx2 operands) then
+    error ~source ~function_name ~obligation:"full-width unsigned integer extrema"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if List.mem mnemonic [ "vpslld"; "vpsrld"; "vpsrad" ]
       && not (full_integer_shift_operands Target.X86_avx2 operands) then
     error ~source ~function_name ~obligation:"full-width literal integer shift"
@@ -394,7 +398,7 @@ let allowed_avx512f = function
   | "vpaddd" | "vpsubd" | "vpmulld" | "vpcmpd" | "vpcmpud"
   | "vpcmpequd" | "vpcmpnequd" | "vpcmpltud" | "vpcmpleud" | "vpcmpnltud" | "vpcmpnleud"
   | "vpcmpeqd" | "vpcmpneqd"
-  | "vpminsd" | "vpmaxsd" | "vpabsd"
+  | "vpminsd" | "vpmaxsd" | "vpminud" | "vpmaxud" | "vpabsd"
   | "vpslld" | "vpsrld" | "vpsrad"
   | "vpcmpltd" | "vpcmpled" | "vpcmpnltd" | "vpcmpnled"
   | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
@@ -437,6 +441,8 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
       && not (full_integer_unary_operands profile operands) then fail "full-width integer absolute value"
   else if List.mem mnemonic [ "vpminsd"; "vpmaxsd" ]
       && not (full_integer_rack_operands profile operands) then fail "full-width signed integer extrema"
+  else if List.mem mnemonic [ "vpminud"; "vpmaxud" ]
+      && not (full_integer_rack_operands profile operands) then fail "full-width unsigned integer extrema"
   else if List.mem mnemonic [ "vpcmpud"; "vpcmpequd"; "vpcmpnequd"; "vpcmpltud"; "vpcmpleud"; "vpcmpnltud"; "vpcmpnleud" ]
       && not (full_unsigned_compare_operands operands) then fail "full-width unsigned integer comparison"
   else if List.mem mnemonic [ "pslld"; "psrld"; "psrad"; "vpslld"; "vpsrld"; "vpsrad" ]
@@ -447,7 +453,7 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
 
 let allowed_neon = function
   | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv" | "fmin" | "fmax"
-  | "add" | "sub" | "mul" | "neg" | "abs" | "smin" | "smax" | "cmeq" | "cmgt" | "cmge" | "cmhi" | "cmhs"
+  | "add" | "sub" | "mul" | "neg" | "abs" | "smin" | "smax" | "umin" | "umax" | "cmeq" | "cmgt" | "cmge" | "cmhi" | "cmhs"
   | "shl" | "ushr" | "sshr"
   | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "bic" | "orr"
   | "frintm" | "frintp" | "frintz" | "frintn"
@@ -513,7 +519,7 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
       && not (regexp_contains "^v[0-9]+\\.16b,[ \\t]*v[0-9]+\\.16b,[ \\t]*v[0-9]+\\.16b$" operands) then
     error ~source ~function_name ~obligation:"full-width integer and-not"
       (Printf.sprintf "encountered unsupported bit-clear form in %s %s" mnemonic operands)
-  else if List.mem mnemonic [ "add"; "sub"; "mul"; "smin"; "smax"; "cmeq"; "cmgt"; "cmge"; "cmhi"; "cmhs" ]
+  else if List.mem mnemonic [ "add"; "sub"; "mul"; "smin"; "smax"; "umin"; "umax"; "cmeq"; "cmgt"; "cmge"; "cmhi"; "cmhs" ]
       && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
     error ~source ~function_name ~obligation:"four 32-bit integer lanes"
       (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
@@ -575,7 +581,23 @@ let valid_integer_result_transfer profile decoded =
   | Target.Aarch64_neon -> List.mem decoded.mnemonic [ "mov"; "umov" ] && operands = "w0,v0.s[0]"
   | _ -> false
 
-let verify_function ~profile ~allow_cross_lane ~integer_result ~source ~function_name instructions =
+let valid_integer_argument_transfer profile (transfer : Native_register_assignment.integer_transfer) decoded =
+  let operands = Str.global_replace (Str.regexp "[ \\t]+") "" decoded.operands in
+  let argument = transfer.argument and register = transfer.register in
+  match profile with
+  | Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512 ->
+      argument >= 0 && argument < 6 && register >= 0 && register < Target.x86_register_count profile
+      && decoded.mnemonic = (if profile = Target.X86_sse2 then "movd" else "vmovd")
+      && operands = Printf.sprintf "xmm%d,%s" register
+        (List.nth [ "edi"; "esi"; "edx"; "ecx"; "r8d"; "r9d" ] argument)
+  | Target.Aarch64_neon ->
+      argument >= 0 && argument < 8
+      && ((register >= 0 && register < 8) || (register >= 16 && register < 32))
+      && decoded.mnemonic = "fmov"
+      && operands = Printf.sprintf "s%d,w%d" register argument
+  | _ -> false
+
+let verify_function ~profile ~allow_cross_lane ~integer_result ~integer_arguments ~source ~function_name instructions =
   let rec loop saw_ret fma_count = function
     | [] ->
         if not saw_ret then
@@ -603,10 +625,17 @@ let verify_function ~profile ~allow_cross_lane ~integer_result ~source ~function
               (fma_count + if is_fma profile decoded.mnemonic then 1 else 0)
               rest)
   in
-  loop false 0 instructions
+  let rec entry transfers instructions = match transfers, instructions with
+    | [], instructions -> loop false 0 instructions
+    | transfer :: transfers, decoded :: instructions
+        when valid_integer_argument_transfer profile transfer decoded -> entry transfers instructions
+    | _ -> error ~source ~function_name ~obligation:"integer argument boundary"
+        "expected the declared C integer-register imports at function entry"
+  in
+  entry integer_arguments instructions
 
 let verify ?(profile = Target.X86_avx2) ?expected_fma_count
-    ?(cross_lane_functions = []) ?(integer_result_functions = []) ~source ~functions object_bytes =
+    ?(cross_lane_functions = []) ?(integer_result_functions = []) ?(integer_argument_transfers = []) ~source ~functions object_bytes =
   let object_ = Filename.temp_file "rake-native-verify-" ".o" in
   let output = Filename.temp_file "rake-native-verify-" ".objdump" in
   let files = [ object_; output ] in
@@ -640,6 +669,7 @@ let verify ?(profile = Target.X86_avx2) ?expected_fma_count
                         verify_function ~profile
                           ~allow_cross_lane:(List.mem function_name cross_lane_functions)
                           ~integer_result:(List.mem function_name integer_result_functions)
+                          ~integer_arguments:(Option.value ~default:[] (List.assoc_opt function_name integer_argument_transfers))
                           ~source ~function_name instructions
                       with
                       | Error _ as result -> result
