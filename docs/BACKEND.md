@@ -102,7 +102,7 @@ explicit slow code -> scalar C and C ABI declarations ────────�
                                                               register-kernel verifier
 ```
 
-This development path supports the limited SSE2, AVX2 and AVX-512 stream traversal.
+This development path supports the limited SSE2, AVX2, AVX-512 and NEON stream traversal.
 General native runs remain work in progress. Slow callers can pass
 uniform `f32` arguments and receive `f32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
@@ -157,12 +157,14 @@ written in its source. It never replaces rack work with scalar lane loops.
 
 ## Native traversal selection
 
-An AVX2 or AVX-512 stream's loop, addresses, full-rack transfers and masked tail are
-selected by Rake. Its lane expression goes through the same SSA selector
+Rake selects a native stream's loop, addresses, full-rack transfers and tail.
+Its lane expression goes through the same SSA selector
 and no-spill allocator as a register kernel. The tail is lowered under its
 participation mask, so inactive operands cannot raise arithmetic exceptions.
 The complete stream is opaque assembly inside the native C unit. C supplies
-only slow orchestration and its ABI.
+only slow orchestration and its ABI. SSE2 and NEON use count-guarded lane
+transfers for the tail, then evaluate its arithmetic as one masked rack.
+AVX2 and AVX-512 use fault-suppressing masked vector transfers.
 
 The final traversal function's complete bytes must match a separately
 assembled selection. This includes its branches, address operands and
@@ -170,13 +172,14 @@ embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
 This stage supports one to four `f32` read columns and an `f32` output.
-[Native x86 streams](spec/02_packs_and_run.md#native-x86-streams) defines
+[Native CPU streams](spec/02_packs_and_run.md#native-cpu-streams) defines
 the accepted subset and caller obligations.
 
 ## Object verification
 
-`--verify-native` disassembles the object and checks each function against
-its profile's list of instructions:
+`--verify-native` disassembles the object and checks register kernels against
+their profile's instruction list. Native streams use the complete-function
+selection check above:
 
 - On SSE2, AVX2, AVX-512 and NEON: no calls, no stack, every rack in one
   whole register, no scalar arithmetic on rack lanes, cross-lane instructions
@@ -202,7 +205,7 @@ relocations, linking and start-up. Debug information and exception unwinding
 aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile scratches
 and rakes only. The development compiler adds native mixed programs through
 the limited scalar C boundary above. General runs compile on WebAssembly;
-SSE2, AVX2 and AVX-512 implement the stream subset. NEON traversal remains WIP.
+SSE2, AVX2, AVX-512 and NEON implement the stream subset.
 
 ## Planned GPU pipeline
 

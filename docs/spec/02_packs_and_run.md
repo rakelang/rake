@@ -3,8 +3,8 @@
 A run is vector code over memory. It traverses columnar data a rack at a
 time, loops over views, and writes its results to memory. Runs are
 implemented for `wasm-simd128`. The unreleased compiler also implements the
-[SSE2, AVX2 and AVX-512 stream subset](#native-x86-streams). General native runs
-and NEON streams remain work in progress.
+[SSE2, AVX2, AVX-512 and NEON stream subset](#native-cpu-streams).
+General native runs remain work in progress.
 
 A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks).
 It returns to vector mode at the closing brace. The block can't capture racks
@@ -73,8 +73,9 @@ reads sixteen byte records at once, and a `u8` column is its rack directly.
 The count is a uniform `i64`. A count of zero or less reads nothing. A count
 that isn't a multiple of the lane count ends with a tail chunk whose mask is
 `lane < count mod lanes`. Its transfers touch only active elements: lane-sized
-loads and stores on WebAssembly, masked vector transfers on AVX2 and
-AVX-512. These transfers avoid elements past the count. In the tail, a column's inactive lanes hold
+loads and stores on WebAssembly, count-guarded lane transfers on SSE2 and
+NEON, and masked vector transfers on AVX2 and AVX-512. These transfers avoid
+elements past the count. In the tail, a column's inactive lanes hold
 zero, so a shuffle that moves one into an active lane reads zero. Rack
 expressions run under the tail's mask, and a mutable location updates only
 its active lanes.
@@ -203,7 +204,7 @@ misaligned arrays, sentinels after the output, null pointers for empty
 counts, in-place output, storage ending at the last page of linear memory,
 mutable stacks and rack parameters, in both addressing modes.
 
-## Native x86 streams
+## Native CPU streams
 
 The unreleased development compiler supports a read-only stack and an `i64`
 count, followed by one `f32s` traversal that yields an `f32` stream. Its body
@@ -216,17 +217,18 @@ types.
 On Linux x86-64 the stream follows System V: the descriptor is in `rdi`, the
 count in `rsi`, and the output in `rdx`. It returns `void` under its source
 identifier, uses no stack frame and calls nothing. The AVX profiles execute
-`vzeroupper` before returning:
+`vzeroupper` before returning. On AArch64 it follows AAPCS64, with the
+descriptor in `x0`, count in `x1` and output in `x2`:
 
 ```c
 void roots(
-    const struct rake_stack_Samples_v1 *input, /* rdi */
-    int64_t count,                            /* rsi */
-    float *result                             /* rdx */
+    const struct rake_stack_Samples_v1 *input, /* rdi / x0 */
+    int64_t count,                            /* rsi / x1 */
+    float *result                             /* rdx / x2 */
 );
 ```
 
-The compiler owns the loop and increments its element index by four on SSE2,
+The compiler owns the loop and advances by four elements on SSE2 and NEON,
 eight on AVX2 or sixteen on AVX-512F. Full racks use unaligned vector loads
 and stores. AVX2 touches only active elements in the last rack through
 `vmaskmovps`. AVX-512F uses `vmovups` with the `k2` memory mask, independently
@@ -236,8 +238,12 @@ SSE2 has no fault-suppressing float load or store. For its last one to three
 elements, uniform count guards select the individual memory transfers. The
 compiler assembles those elements into one XMM rack, evaluates the expression
 once with vector arithmetic, and stores only its active elements. There is
-no scalar arithmetic cleanup loop. Inactive operands are made benign before
-exception-capable arithmetic on all three profiles.
+no scalar arithmetic cleanup loop. NEON's tail also uses uniform count
+guards, loading only existing elements into an initially zeroed vector
+through `ld1` lane transfers. It evaluates one masked rack and writes the
+active results through `st1` lane transfers. Both keep the arithmetic
+vectorised. Inactive operands are made benign before exception-capable
+arithmetic on all four profiles.
 
 Counts of zero or less touch no pointer, so null pointers are allowed then.
 For a positive count, each read column and the output must hold that many
@@ -247,8 +253,8 @@ The final-object verifier compares the complete traversal function with the
 separately assembled selection, including branch offsets, memory operands
 and embedded literals. Any difference or unresolved relocation is rejected.
 `test/native_stream_test.sh` checks independent C results, exact in-place
-output and guarded tails of every remainder for one to four columns.
-It runs AVX-512 on capable hardware or through Intel SDE. The AVX2 demonstration
-in `demo/safe-root/run.sh` also checks a million-element pass plus a
-three-element tail. Its timings compare both optimised and explicitly scalar
-C builds.
+output and guarded tails of every remainder for one to four columns. It also
+checks a million-element safe-root pass plus a three-element tail on each
+profile. AVX-512 runs on capable hardware or through Intel SDE, and NEON
+through AArch64 QEMU. The AVX2 demonstration in `demo/safe-root/run.sh`
+times both optimised and explicitly scalar C builds.

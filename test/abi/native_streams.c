@@ -8,7 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-/* Independently authored System V descriptor, including an unread byte
+/* Independently authored C descriptor for AMD64 and AAPCS64, including an unread byte
    column. Each populated column ends directly before inaccessible memory. */
 typedef struct {
     const float *first, *second, *third, *fourth;
@@ -17,6 +17,7 @@ typedef struct {
 extern void paired_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void three_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void four_roots(const rake_stack_Paired_v1 *, int64_t, float *);
+extern int rake_stream_program_main(void);
 
 static uint32_t bits(float value)
 {
@@ -32,6 +33,7 @@ static float root(float value)
 
 int main(void)
 {
+    if (rake_stream_program_main() != 14) abort();
     const size_t page = (size_t)sysconf(_SC_PAGESIZE);
     unsigned char *storage[5];
     for (size_t column = 0; column < 5; ++column) {

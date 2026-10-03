@@ -238,19 +238,34 @@ let select_function (func : N.func) =
           let dst = mask_result () in
           ensure_operand_f32 func.name environment index left;
           ensure_operand_f32 func.name environment index right;
-          (match comparison with
-          | N.Eq -> [ M.Compare { dst; predicate = M.Ceq; left; right; provenance } ]
-          | N.Lt -> [ M.Compare { dst; predicate = M.Cgt; left = right; right = left; provenance } ]
-          | N.Le -> [ M.Compare { dst; predicate = M.Cge; left = right; right = left; provenance } ]
-          | N.Gt -> [ M.Compare { dst; predicate = M.Cgt; left; right; provenance } ]
-          | N.Ge -> [ M.Compare { dst; predicate = M.Cge; left; right; provenance } ]
-          | N.Ne ->
-              let greater = fresh instruction.loc in
-              let less = fresh instruction.loc in
-              [ M.Compare { dst = greater; predicate = M.Cgt; left; right; provenance };
-                M.Compare
-                  { dst = less; predicate = M.Cgt; left = right; right = left; provenance };
-                M.Orr { dst; left = greater; right = less; provenance } ])
+          if comparison = N.Eq then
+            [ M.Compare { dst; predicate = M.Ceq; left; right; provenance } ]
+          else (
+            (* FCMEQ is quiet for QNaN; FCMGT/FCMGE are signaling. Clear
+               unordered operands before the comparison and mask its result,
+               keeping every ordered condition false for either NaN. *)
+            let left_ordered = fresh instruction.loc in
+            let right_ordered = fresh instruction.loc in
+            let ordered = fresh instruction.loc in
+            let safe_left = fresh instruction.loc in
+            let safe_right = fresh instruction.loc in
+            let compared = fresh instruction.loc in
+            let predicate, comparison_left, comparison_right = match comparison with
+              | N.Lt -> M.Cgt, safe_right, safe_left
+              | N.Le -> M.Cge, safe_right, safe_left
+              | N.Gt -> M.Cgt, safe_left, safe_right
+              | N.Ge -> M.Cge, safe_left, safe_right
+              | N.Ne -> M.Ceq, safe_left, safe_right
+              | N.Eq -> assert false in
+            let different = if comparison = N.Ne then fresh instruction.loc else compared in
+            [ M.Compare { dst = left_ordered; predicate = M.Ceq; left; right = left; provenance };
+              M.Compare { dst = right_ordered; predicate = M.Ceq; left = right; right; provenance };
+              M.And { dst = ordered; left = left_ordered; right = right_ordered; provenance };
+              M.And { dst = safe_left; left; right = ordered; provenance };
+              M.And { dst = safe_right; left = right; right = ordered; provenance };
+              M.Compare { dst = compared; predicate; left = comparison_left; right = comparison_right; provenance } ]
+            @ (if comparison = N.Ne then [ M.Mvn { dst = different; source = compared; provenance } ] else [])
+            @ [ M.And { dst; left = different; right = ordered; provenance } ])
       | N.Select { condition; if_true; if_false } ->
           let dst = rack_result () in
           ensure_mask func.name environment index condition;

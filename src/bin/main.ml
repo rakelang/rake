@@ -39,7 +39,8 @@ file with a C main entry point. External tools only assemble or compile Rake's t
 into an object file, which --verify-native then disassembles and checks.
 Native slow-only programs emit C and compile with the platform C compiler.
 Native programs may call register kernels through f32 C boundaries.
-Native AVX2 and AVX-512 support f32 streams; general native runs remain WIP.
+Native SSE2, AVX2, AVX-512 and NEON provide a restricted f32 stream traversal.
+General native runs remain WIP.
 
 |}
 
@@ -337,7 +338,7 @@ let () =
                     let expected = match Rake.Native_toolchain.assemble ~profile:config.profile
                       ~source:filename traversals.Rake.Native_traversal.assembly with
                       | Ok bytes -> bytes | Error e -> fail (Rake.Native_toolchain.format_error e) in
-                    match Rake.Native_verify.fixed_x86_functions ~source:filename
+                    match Rake.Native_verify.fixed_native_functions ~profile:config.profile ~source:filename
                       ~functions:traversals.functions ~expected bytes with
                     | Ok () -> () | Error e -> fail (Rake.Native_verify.format_error e)) selection.traversals) native_kernels;
                 write_output bytes (default ".o")

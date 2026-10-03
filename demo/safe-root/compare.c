@@ -75,11 +75,8 @@ static int order(const void *a, const void *b) {
 
 int main(int argc, char **argv) {
     check_tail_memory();
-    if (argc == 2 && strcmp(argv[1], "--check-only") == 0) {
-        puts("native safe-root guard-page and scalar-oracle checks passed");
-        return 0;
-    }
-    if (argc != 1) abort();
+    const int check_only = argc == 2 && strcmp(argv[1], "--check-only") == 0;
+    if (argc != 1 && !check_only) abort();
     const size_t count = 1000000;
     float *values = malloc((count + 3) * sizeof(float));
     float *expected = malloc((count + 3) * sizeof(float));
@@ -95,6 +92,11 @@ int main(int argc, char **argv) {
     roots(&stack, (int64_t)count + 3, actual);
     for (size_t i = 0; i < count + 3; ++i)
         if (bits(actual[i]) != bits(expected[i])) abort();
+    if (check_only) {
+        free(values); free(expected); free(actual);
+        puts("native safe-root guard-page and million-element scalar-oracle checks passed");
+        return 0;
+    }
     double c_time[31], rake_time[31];
     for (int repeat = -4; repeat < 31; ++repeat) {
         for (int turn = 0; turn < 2; ++turn) {

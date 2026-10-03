@@ -96,8 +96,10 @@ operations are written in the source or set by a documented calling
 convention. A traversal's tail never reads or writes past the count, and its
 inactive lanes raise no exception and have no effect.
 
-Today: runs, stacks and traversals compile on `wasm-simd128`, with the
-boundary in [packs and runs](spec/02_packs_and_run.md).
+Today: general runs, stacks and traversals compile on `wasm-simd128`.
+The development compiler adds read-only `f32` stream traversals on SSE2,
+AVX2, AVX-512 and NEON. [Packs and runs](spec/02_packs_and_run.md) defines
+their boundaries and checked tails.
 
 ## Scalar code stays scalar
 
@@ -113,8 +115,8 @@ tier](spec/08_slow_tier.md) describes. The unreleased development compiler
 also compiles slow orchestration with register kernels into native objects.
 Their C unit embeds Rake-selected assembly, which remains opaque to the
 platform C compiler. Slow callers currently take uniform `f32` arguments and
-receive `f32` results. Native memory runs and other scalar kernel boundaries
-remain work in progress.
+receive `f32` results. Native runs beyond the stream subset and other scalar
+kernel boundaries remain work in progress.
 
 ## Compilation is predictable
 

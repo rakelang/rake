@@ -36,8 +36,8 @@ supports native slow orchestration with register kernels. Their `--emit-asm`
 output is `.c`, with opaque Rake-selected assembly, and their `--emit-obj`
 output is a platform C object with verified kernels. `--verify-native` checks
 those kernels too. Native slow-only units have no vector function to verify,
-so they use `--emit-obj`. SSE2, AVX2 and AVX-512 additionally support the limited
-[native stream traversal](spec/02_packs_and_run.md#native-x86-streams). Other native runs remain work in progress. A
+so they use `--emit-obj`. SSE2, AVX2, AVX-512 and NEON additionally support the limited
+[native stream traversal](spec/02_packs_and_run.md#native-cpu-streams). Other native runs remain work in progress. A
 native kernel called from slow code currently takes uniform `f32` parameters
 and returns `f32`.
 

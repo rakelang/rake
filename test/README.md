@@ -61,11 +61,15 @@ signed-zero transfer through the scalar C boundary, and x86 reductions against
 both the selected-profile interpreter and hand-derived lane counts. Native
 general memory runs remain work in progress.
 
-`test/native_stream_test.sh` checks the SSE2, AVX2 and AVX-512 stream subset
+`test/native_stream_test.sh` checks the SSE2, AVX2, AVX-512 and NEON stream subset
 against independent scalar C. One to four input columns end at guard pages,
 as does the output, for counts from zero through 65. The checks cover every
 tail remainder, exact in-place output, inactive-lane arithmetic and an unread
-byte column in the descriptor. AVX-512 uses capable hardware or Intel SDE.
+byte column in the descriptor. Each profile also checks a million-element
+safe-root pass plus a three-element tail. AVX-512 uses capable hardware or
+Intel SDE, and NEON uses AArch64 QEMU. The shared independent C numerical
+oracle checks all six comparisons, including quiet NaNs and exception flags,
+on the x86 and NEON register kernels.
 
 The callback fixture uses independently authored C prototypes and padded
 structs. C retains and invokes Rake function pointers, and Rake invokes

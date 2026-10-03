@@ -7,6 +7,16 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Extend native `f32` streams to NEON: four-lane vector transfers and
+  count-guarded partial-rack memory operations, with vector arithmetic in
+  the tail. The final ELF function extent is checked against the selected
+  assembly. Independent C and guard pages check one to four columns, exact
+  in-place output and million-element results on all four CPU profiles.
+  NEON ordered comparisons preserve quiet-NaN behaviour through vector
+  operand sanitisation. The numerical oracle checks all six operators.
+- Correct the safe-root check-only command to include its million-element
+  comparison before returning. Earlier check-only runs covered short counts
+  and guarded tails.
 - Extend native `f32` streams to SSE2: four-lane racks with guarded memory
   transfers for partial racks and vector arithmetic throughout. Independent
   C and guard-page checks pass on SSE2, AVX2 and AVX-512F. SSE2 ordered

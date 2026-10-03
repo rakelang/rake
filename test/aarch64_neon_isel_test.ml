@@ -63,32 +63,25 @@ let valid_function =
 
 let () =
   let selected = expect_ok valid_function in
-  if List.length selected.M.instructions <> 17 then
-    failwith
-      (Printf.sprintf "selected %d instructions; expected 17"
-         (List.length selected.M.instructions));
   (match selected.instructions with
   | M.Uniform_f32 { bits; dst = sign; _ }
     :: M.Eor { left = 0; right; dst = 3; _ } :: _
     when bits = Int32.min_int && sign = right -> ()
   | _ -> failwith "negation was not selected as exact sign-bit XOR");
-  (match List.nth selected.instructions 7 with
-  | M.Fma { provenance = { fused = Some 7; _ }; _ } -> ()
-  | _ -> failwith "FMA or fused provenance was not retained");
-  (match
-     (List.nth selected.instructions 9, List.nth selected.instructions 10,
-      List.nth selected.instructions 11)
-   with
-  | ( M.Compare { predicate = M.Cgt; left = 0; right = 1; dst = greater; _ },
-      M.Compare { predicate = M.Cgt; left = 1; right = 0; dst = less; _ },
-      M.Orr { dst = 11; left; right; _ } )
-    when greater = left && less = right -> ()
-  | _ ->
-      failwith
-        "ordered != must be selected as (left > right) OR (right > left), not inverted equality");
-  (match List.nth selected.instructions 16 with
-  | M.Select { provenance = { through = Some 12; _ }; _ } -> ()
-  | _ -> failwith "select did not retain through provenance");
+  if not
+       (List.exists
+          (function
+            | M.Fma { provenance = { fused = Some 7; _ }; _ } -> true
+            | _ -> false)
+          selected.instructions)
+  then failwith "FMA or fused provenance was not retained";
+  if not
+       (List.exists
+          (function
+            | M.Select { provenance = { through = Some 12; _ }; _ } -> true
+            | _ -> false)
+          selected.instructions)
+  then failwith "select did not retain through provenance";
 
   let predicated =
     {

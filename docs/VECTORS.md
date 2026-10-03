@@ -217,6 +217,64 @@ operation spellings, so consult the instruction's element and sub-vector rules.
 | Tail / remainder | The final incomplete vector when a count is not divisible by the lane count. Masking or a separately specified cleanup handles it. |
 | Strip mining / chunking | Divide a longer loop into vector-sized chunks, then handle the remainder. |
 
+### Data streams and traversal
+
+A data stream is a sequence of elements to process, such as a column with a
+million floats. A stream traversal walks along that sequence one rack at a
+time. It loads the next rack, calculates the result, stores it and advances
+to the next group of elements. The sequence can be any length, so the final
+rack may have fewer active lanes.
+
+<figure class="diagram diagram-vector-ops">
+<div class="diagram-scroll" tabindex="0" role="region" aria-label="Stream traversal, scroll horizontally on a narrow screen">
+<svg viewBox="0 0 680 254" role="img" aria-labelledby="vector-stream-title vector-stream-desc">
+<title id="vector-stream-title">A traversal processes a stream one rack at a time</title>
+<desc id="vector-stream-desc">Eleven f32 elements on SSE2 form two full four-lane racks and a tail with three active lanes. The element indices are 0 through 3, 4 through 7, and 8 through 10. For each rack, the traversal loads its elements, calculates a vector result, stores the active results and advances to the next rack.</desc>
+<text class="diagram-label" x="16" y="24">11 f32 elements on SSE2: element indices in each rack</text>
+<rect class="diagram-cell diagram-cell-active" x="16" y="38" width="202" height="46" rx="4"/>
+<text class="diagram-value" x="117" y="61">[0, 1, 2, 3]</text>
+<rect class="diagram-cell diagram-cell-active" x="230" y="38" width="202" height="46" rx="4"/>
+<text class="diagram-value" x="331" y="61">[4, 5, 6, 7]</text>
+<rect class="diagram-cell" x="444" y="38" width="220" height="46" rx="4"/>
+<text class="diagram-value" x="554" y="61">[8, 9, 10, _]</text>
+<text class="diagram-label" x="16" y="116">For each rack</text>
+<rect class="diagram-cell" x="16" y="132" width="130" height="46" rx="4"/>
+<text class="diagram-instruction" x="81" y="155">Load</text>
+<path class="diagram-flow" d="M156 155 H180 l-7 -5 M180 155 l-7 5"/>
+<rect class="diagram-cell diagram-cell-active" x="190" y="132" width="144" height="46" rx="4"/>
+<text class="diagram-instruction" x="262" y="155">Vector work</text>
+<path class="diagram-flow" d="M344 155 H368 l-7 -5 M368 155 l-7 5"/>
+<rect class="diagram-cell" x="378" y="132" width="130" height="46" rx="4"/>
+<text class="diagram-instruction" x="443" y="155">Store</text>
+<path class="diagram-flow" d="M518 155 H542 l-7 -5 M542 155 l-7 5"/>
+<rect class="diagram-cell" x="552" y="132" width="112" height="46" rx="4"/>
+<text class="diagram-instruction" x="608" y="155">Advance</text>
+<path class="diagram-flow" d="M608 188 V222 H81 V188 l-5 7 M81 188 l5 7"/>
+<text class="diagram-instruction" x="340" y="207">Continue while elements remain</text>
+</svg>
+</div>
+<figcaption>The underscore marks an inactive lane. Loop control advances between racks. The arithmetic within each rack operates across its lanes, including the active lanes of the tail.</figcaption>
+</figure>
+
+A stream update transforms successive elements and writes the results.
+Writing into a separate output array is an out-of-place update. Writing back
+into the input array is an in-place update, which needs an overlap contract
+so stores don't replace inputs before they have been read.
+
+| Term | Meaning |
+| --- | --- |
+| Data stream | Successive data elements or records. The sequence can already be in memory and need not arrive from a file or network. |
+| Stream traversal | A pass over successive chunks of a sequence. A SIMD traversal processes each chunk as a rack, with a defined policy for the tail. |
+| Stream update | A traversal that writes transformed values, either to a separate output or back into the input. Traversals can also inspect or combine data without updating it. |
+| In-place / out-of-place update | Store into the input's storage, or into separate output storage. In-place vector work needs explicit rules for overlapping inputs and outputs. |
+
+Traversal and update describe a whole pass over data, rather than one SIMD
+instruction. In Rake, a [run](spec/02_packs_and_run.md#traversals) performs the
+traversal and applies rack expressions to its columns. Uniform loop control
+and address calculation advance through memory while the lane arithmetic
+stays vectorised. Traversal alone doesn't request non-temporal stores or
+guarantee a particular cache policy.
+
 ### Compilation and cost
 
 | Term | Meaning |
@@ -342,7 +400,8 @@ defines barriers, scopes and ordered communication.
 | Async copy / double buffering | Start a transfer and overlap useful calculation. Alternating buffers let loading and processing advance separately, with completion synchronisation. |
 | Unified memory / migration | A managed address space with data placement or movement handled by the runtime. A shared address does not imply free access or no transfer. |
 | Pinned memory / DMA | Host memory fixed for device transfers, and direct memory access. Pinning does not itself eliminate transfer time. |
-| Stream / queue / event | An ordered submission sequence and a completion marker used for dependencies. Separate queues do not guarantee overlap. |
+| CUDA stream / command queue | An ordered sequence of submitted operations, such as transfers and kernel launches. This is a queue of work, distinct from the data streams traversed above. Separate queues do not guarantee overlap. |
+| Event | A completion marker used to observe progress or establish dependencies between submitted operations. |
 | Tensor core / matrix engine | Hardware for supported matrix operations and precisions. It has a different data and execution contract from ordinary lane arithmetic. |
 | MMA / WMMA / matrix fragment | Matrix multiply-accumulate, a warp-level interface, and the distributed piece of a matrix held by participants. Fragment layout can be opaque or architecture-specific. |
 

@@ -1,4 +1,4 @@
-(** Native x86 stream traversals. The loop, addresses and partial-rack
+(** Native stream traversals. The loop, addresses and partial-rack
     memory operations are selected here; rack expressions use the existing
     SSA selector and allocator. There is no C loop or scalar arithmetic tail.
     General runs remain rejected until their control/storage contracts have
@@ -51,21 +51,31 @@ let compile_body ~profile program run traverse ~tail =
   let func = match Native_lower.lower_expression ~definitions:program.vector_defs
     ~name:run.run_name ~parameters ?mask ~fused:false run.run_loc expression with
     | Ok f -> f | Error e -> reject run.run_loc "%s" (Native_lower.format_error e) in
+  if func.result <> Some (Native_ir.Rack Native_ir.F32) then
+    reject run.run_loc "native stream expression must produce f32s";
   let ir = match Native_optimize.optimize ~profile [ func ] with
     | Ok ir -> ir | Error e -> reject run.run_loc "%s" (Native_optimize.format_error e) in
-  let allocated = match Native_backend.allocate_x86 ~profile ir with
-    | Ok (Native_backend.X86 (_, [ func ])) -> func
+  let allocation =
+    if Target.is_x86 profile then Native_backend.allocate_x86 ~profile ir
+    else Native_backend.allocate_neon ir in
+  let allocated = match allocation with
+    | Ok allocated -> allocated
     | Error e -> reject run.run_loc "%s" (Native_backend.format_error e)
-    | _ -> assert false in
-  (match allocated.result_type with Some (Native_ir.Rack Native_ir.F32) -> ()
-    | _ -> reject run.run_loc "native stream expression must produce f32s");
+  in
   (* Cross-lane operations need a separately defined participation contract
      for tails. Do not accept them through expression expansion. *)
-  if Native_backend.cross_lane_function_names (Native_backend.X86 (profile, [ allocated ])) <> [] then
+  if Native_backend.cross_lane_function_names allocated <> [] then
     reject run.run_loc "native stream reductions and scans are work in progress";
   allocated, !columns
 
-let emit_run ~profile program buffer (run : run) =
+let stream_traversal (run : run) =
+  match run.run_body, run.run_params, run.run_stream with
+    | [ { r = R_traverse t; _ } ], [ Run_stack (input, schema, false); Run_uniform (count, Types.SInt64) ], Some Types.SFloat
+      when t.t_stack = input && t.t_pack = schema && t.t_domain = Types.SFloat
+        && (match t.t_count.k with Var n -> n = count | _ -> false) -> t
+    | _ -> reject run.run_loc "native streams currently support one f32 stream traversal with a read-only stack and an i64 count; general native runs are work in progress"
+
+let emit_x86_run ~profile program buffer (run : run) =
   let sse2 = profile = Target.X86_sse2 in
   let avx512 = profile = Target.X86_avx512 in
   let lanes = (Target.info profile).f32_lanes in
@@ -73,13 +83,13 @@ let emit_run ~profile program buffer (run : run) =
   let register = X86_simd_asm.vector_register profile in
   let memory = if sse2 then "XMMWORD" else if avx512 then "ZMMWORD" else "YMMWORD" in
   let move = if sse2 then "movups" else "vmovups" in
-  let traverse = match run.run_body, run.run_params, run.run_stream with
-    | [ { r = R_traverse t; _ } ], [ Run_stack (input, schema, false); Run_uniform (count, Types.SInt64) ], Some Types.SFloat
-      when t.t_stack = input && t.t_pack = schema && t.t_domain = Types.SFloat
-        && (match t.t_count.k with Var n -> n = count | _ -> false) -> t
-    | _ -> reject run.run_loc "native streams currently support one f32 stream traversal with a read-only stack and an i64 count; general native runs are work in progress" in
+  let traverse = stream_traversal run in
   let full, columns = compile_body ~profile program run traverse ~tail:false in
   let tail, tail_columns = compile_body ~profile program run traverse ~tail:true in
+  let x86_function = function
+    | Native_backend.X86 (_, [ func ]) -> func
+    | _ -> assert false in
+  let full = x86_function full and tail = x86_function tail in
   if columns <> tail_columns then assert false;
   let schema = find_pack program traverse.t_pack in
   let pool = X86_simd_asm.create_pool () in
@@ -195,15 +205,96 @@ let emit_run ~profile program buffer (run : run) =
     done);
   Printf.bprintf buffer ".size %s, .-%s\n.att_syntax prefix\n" run.run_name run.run_name
 
+let emit_neon_run program buffer (run : run) =
+  let profile = Target.Aarch64_neon in
+  let traverse = stream_traversal run in
+  let full, columns = compile_body ~profile program run traverse ~tail:false in
+  let tail, tail_columns = compile_body ~profile program run traverse ~tail:true in
+  if columns <> tail_columns then assert false;
+  let schema = find_pack program traverse.t_pack in
+  let pool = Aarch64_neon_asm.create_pool () in
+  let emit format = Printf.bprintf buffer ("    " ^^ format ^^ "\n") in
+  let label suffix = ".Lrake_stream_" ^ run.run_name ^ "_" ^ suffix in
+  let pointer index = Printf.sprintf "x%d" (index + 3) in
+  let body = function
+    | Native_backend.Neon [ func ] ->
+        List.iter (Aarch64_neon_asm.emit_instruction pool buffer) func.instructions
+    | _ -> assert false in
+  Printf.bprintf buffer ".arch armv8-a+simd\n.text\n.p2align 4\n.globl %s\n.type %s, %%function\n%s:\n"
+    run.run_name run.run_name run.run_name;
+  emit "cmp x1, #0";
+  emit "b.le %s" (label "return");
+  List.iteri (fun index (_, field) ->
+    let rec offset n = function
+      | (f, _) :: _ when f = field -> n * 8
+      | _ :: rest -> offset (n + 1) rest
+      | [] -> assert false in
+    let displacement = offset 0 schema.pack_fields in
+    if displacement > 32760 then
+      reject run.run_loc "native NEON stream column exceeds the supported descriptor offset";
+    emit "ldr %s, [x0, #%d]" (pointer index) displacement) columns;
+  emit "cmp x1, #4";
+  emit "b.lt %s" (label "tail");
+  Printf.bprintf buffer "%s:\n" (label "loop");
+  List.iteri (fun index _ -> emit "ldr q%d, [%s], #16" index (pointer index)) columns;
+  body full;
+  emit "str q0, [x2], #16";
+  emit "sub x1, x1, #4";
+  emit "cmp x1, #4";
+  emit "b.ge %s" (label "loop");
+  Printf.bprintf buffer "%s:\n" (label "tail");
+  emit "cbz x1, %s" (label "return");
+  (* Count-guarded lane transfers cover the one-to-three-element tail.
+     Only the transfers are lane-sized: its arithmetic is one masked rack. *)
+  emit "adr x7, %s" (label "masks");
+  emit "add x7, x7, x1, lsl #4";
+  emit "ldr q%d, [x7]" (List.length columns);
+  List.iteri (fun index _ -> emit "movi v%d.4s, #0" index) columns;
+  for lane = 0 to 2 do
+    if lane > 0 then (
+      emit "cmp x1, #%d" (lane + 1);
+      emit "b.lt %s" (label "tail_loaded"));
+    List.iteri (fun index _ ->
+      emit "ld1 {v%d.s}[%d], [%s], #4" index lane (pointer index)) columns
+  done;
+  Printf.bprintf buffer "%s:\n" (label "tail_loaded");
+  body tail;
+  for lane = 0 to 2 do
+    if lane > 0 then (
+      emit "cmp x1, #%d" (lane + 1);
+      emit "b.lt %s" (label "return"));
+    emit "st1 {v0.s}[%d], [x2], #4" lane
+  done;
+  Printf.bprintf buffer "%s:\n" (label "return");
+  emit "ret";
+  (* PC-relative literals stay in the function's checked, relocation-free
+     extent, with identical alignment in isolated and mixed objects. *)
+  List.iter (fun (bits, constant_label) ->
+    Printf.bprintf buffer ".p2align 4\n%s:\n" constant_label;
+    for _ = 0 to 3 do Printf.bprintf buffer "    .long 0x%08lx\n" bits done) pool.entries;
+  Printf.bprintf buffer ".p2align 4\n%s:\n" (label "masks");
+  for active = 0 to 3 do
+    for lane = 0 to 3 do
+      Printf.bprintf buffer "    .long 0x%08lx\n" (if lane < active then -1l else 0l)
+    done
+  done;
+  Printf.bprintf buffer ".size %s, .-%s\n" run.run_name run.run_name
+
 let compile ~profile program =
-  if not (Target.is_x86 profile) then (
+  if not (Target.is_x86 profile || profile = Target.Aarch64_neon) then (
     match program.runs with
-    | run :: _ -> reject run.run_loc "native streams currently require an x86 SIMD profile; other native run profiles are work in progress"
+    | run :: _ -> reject run.run_loc "native streams require a physical x86 or NEON SIMD profile"
     | [] -> ());
   let parts = List.map (fun run ->
     let buffer = Buffer.create 2048 in
-    emit_run ~profile program buffer run;
-    Str.global_replace (Str.regexp_string ".Lrake_const_")
+    let constant_prefix = if profile = Target.Aarch64_neon then (
+      emit_neon_run program buffer run;
+      ".Lrake_neon_const_")
+    else (
+      emit_x86_run ~profile program buffer run;
+      ".Lrake_const_") in
+    Str.global_replace (Str.regexp_string constant_prefix)
       (".Lrake_stream_" ^ run.run_name ^ "_const_") (Buffer.contents buffer)) program.runs in
-  { assembly = String.concat "\n" parts ^ ".section .note.GNU-stack,\"\",@progbits\n";
+  let progbits = if profile = Target.Aarch64_neon then "%progbits" else "@progbits" in
+  { assembly = String.concat "\n" parts ^ ".section .note.GNU-stack,\"\"," ^ progbits ^ "\n";
     functions = List.map (fun run -> run.run_name) program.runs }

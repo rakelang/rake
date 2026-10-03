@@ -16,8 +16,8 @@ translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
 `wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
 compiler also emits native C and objects combining slow orchestration and
-register kernels on x86-64 and AArch64. SSE2, AVX2 and AVX-512 additionally support the
-[native stream subset](02_packs_and_run.md#native-x86-streams). General native
+register kernels on x86-64 and AArch64. SSE2, AVX2, AVX-512 and NEON additionally support the
+[native stream subset](02_packs_and_run.md#native-cpu-streams). General native
 runs remain work in progress.
 
 ### Native kernel calls
@@ -571,7 +571,8 @@ cleanup and are unsupported across active Rake frames.
 ## Verification
 
 For a native mixed program, both `--emit-obj` and `--verify-native` check each
-embedded register kernel in the final object. The ordinary slow functions
+embedded register kernel and supported stream traversal in the final object.
+The ordinary slow functions
 retain the platform compiler's C semantics and are outside that vector
 instruction contract. A slow-only unit uses `--emit-obj`.
 

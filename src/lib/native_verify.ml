@@ -158,7 +158,7 @@ let decode_functions text =
     literal bytes. Require a relocation-free extent, so a helper or external
     constant cannot silently change the verified instruction/data graph.
     Pure register functions retain the independent instruction allow-lists. *)
-let fixed_x86_functions ~source ~functions ~expected object_bytes =
+let fixed_native_functions ~profile ~source ~functions ~expected object_bytes =
   let malformed detail = invalid_arg detail in
   let slice bytes offset count =
     if offset < 0 || count < 0 || offset > String.length bytes - count then
@@ -173,8 +173,12 @@ let fixed_x86_functions ~source ~functions ~expected object_bytes =
     if !value < 0L || !value > Int64.of_int max_int then malformed "ELF extent exceeds host bounds";
     Int64.to_int !value in
   let extract bytes =
-    if slice bytes 0 6 <> "\x7fELF\x02\x01" || number bytes 16 2 <> 1 || number bytes 18 2 <> 62 then
-      malformed "requires a little-endian x86-64 relocatable ELF object";
+    let machine = match profile with
+      | Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512 -> 62
+      | Target.Aarch64_neon -> 183
+      | _ -> malformed "selected traversal verification requires a physical CPU profile" in
+    if slice bytes 0 6 <> "\x7fELF\x02\x01" || number bytes 16 2 <> 1 || number bytes 18 2 <> machine then
+      malformed (Printf.sprintf "requires a little-endian relocatable ELF object for %s" (Target.profile_name profile));
     let start = number bytes 40 8 and width = number bytes 58 2 and count = number bytes 60 2 in
     if width <> 64 || count = 0 then malformed "unsupported ELF section table";
     let section index =

@@ -129,6 +129,19 @@ neon_scalar:
 .section .note.GNU-stack,"",%progbits
 |}
 
+let check_selected_traversal ~profile ~traversal ~mutations ~kernel ~helper =
+  let expected = assemble ~profile ~source:"traversal-selection" traversal in
+  let check actual = Rake.Native_verify.fixed_native_functions ~profile ~source:"traversal-selection"
+    ~functions:[ "exact_stream" ] ~expected actual in
+  expect_ok (check expected);
+  List.iter (fun (before, after) ->
+    let changed = Str.global_replace (Str.regexp_string before) after traversal in
+    expect_obligation "exact traversal selection"
+      (check (assemble ~profile ~source:"mutated-traversal" changed))) mutations;
+  let opaque = Str.global_replace (Str.regexp_string kernel) helper traversal in
+  expect_obligation "closed traversal artifact"
+    (check (assemble ~profile ~source:"opaque-traversal" opaque))
+
 let () =
   (* A selected traversal extent includes control flow and embedded literals.
      Independent mutations must fail even if their mnemonics look harmless. *)
@@ -149,22 +162,35 @@ exact_stream:
     .long 0x3f800000
 .size exact_stream, .-exact_stream
 |} in
-  let expected = assemble ~source:"traversal-selection" traversal in
-  let check actual = Rake.Native_verify.fixed_x86_functions ~source:"traversal-selection"
-    ~functions:[ "exact_stream" ] ~expected actual in
-  expect_ok (check expected);
-  List.iter (fun (before, after) ->
-    let changed = Str.global_replace (Str.regexp_string before) after traversal in
-    expect_obligation "exact traversal selection"
-      (check (assemble ~source:"mutated-traversal" changed)))
-    [ "je .Ldone", "jne .Ldone";
+  check_selected_traversal ~profile:Rake.Target.X86_avx2 ~traversal
+    ~mutations:[ "je .Ldone", "jne .Ldone";
       "[rdi]", "[rdi + 4]";
       "vsqrtps ymm0, ymm0", "vmulps ymm0, ymm0, ymm0";
-      "0x3f800000", "0x40000000" ];
-  let helper = Str.global_replace (Str.regexp_string "vsqrtps ymm0, ymm0")
-    "call opaque_helper" traversal in
-  expect_obligation "closed traversal artifact"
-    (check (assemble ~source:"opaque-traversal" helper));
+      "0x3f800000", "0x40000000" ]
+    ~kernel:"vsqrtps ymm0, ymm0" ~helper:"call opaque_helper";
+  let neon_traversal = {|
+.arch armv8-a+simd
+.text
+.p2align 4
+.globl exact_stream
+.type exact_stream, %function
+exact_stream:
+    cmp x1, #0
+    b.le .Ldone
+    ldr q0, [x0]
+    fsqrt v0.4s, v0.4s
+    str q0, [x2]
+.Ldone:
+    ret
+    .long 0x3f800000
+.size exact_stream, .-exact_stream
+|} in
+  check_selected_traversal ~profile:Rake.Target.Aarch64_neon ~traversal:neon_traversal
+    ~mutations:[ "b.le .Ldone", "b.lt .Ldone";
+      "[x0]", "[x0, #16]";
+      "fsqrt v0.4s, v0.4s", "fmul v0.4s, v0.4s, v0.4s";
+      "0x3f800000", "0x40000000" ]
+    ~kernel:"fsqrt v0.4s, v0.4s" ~helper:"bl opaque_helper";
   let valid = assemble ~source:"valid-verifier-fixture" valid in
   expect_ok
     (Rake.Native_verify.verify ~source:"valid-verifier-fixture"

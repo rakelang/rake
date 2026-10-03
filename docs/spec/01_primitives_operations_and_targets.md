@@ -178,11 +178,12 @@ Float arithmetic is IEEE 754 binary32, rounded to nearest with ties to even.
 Every comparison with a NaN operand is false, `!=` included, so `a != b`
 means that `a` and `b` are ordered and different.
 
-Native x86 comparisons don't raise invalid-operation exceptions for quiet
+Native CPU comparisons don't raise invalid-operation exceptions for quiet
 NaNs. SSE2 implements `<` and `<=` by checking for ordered operands, making
-unordered operands benign, then comparing the racks. Its `<=` sequence
-retains an additional mask register, which the allocator includes in its
-pressure check. Signalling NaNs can still raise an invalid-operation exception.
+unordered operands benign, then comparing the racks. NEON uses that approach
+for its ordered inequalities and `!=`. Their extra mask and operand registers
+are included in the allocator's pressure check. Signalling NaNs can still
+raise an invalid-operation exception.
 
 `wasm-simd128` contracts nothing, so the target and `rakec --interpret`
 agree on every result bit that isn't a NaN. `x86-avx2`, `x86-avx512` and `aarch64-neon`
@@ -265,14 +266,14 @@ and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
 backends in the 0.6.0-beta tag compile neither runs nor slow code. The
 unreleased development compiler adds native C programs with slow orchestration
 and Rake-selected register kernels. Slow callers can pass uniform `f32`
-arguments and receive `f32` results. SSE2, AVX2 and AVX-512 also support the
-[native stream subset](02_packs_and_run.md#native-x86-streams).
+arguments and receive `f32` results. SSE2, AVX2, AVX-512 and NEON also support the
+[native stream subset](02_packs_and_run.md#native-cpu-streams).
 General native runs and other scalar kernel boundaries remain work in progress.
 
 ## Verification
 
 `--verify-native` assembles the emitted code, or compiles the emitted C,
-then disassembles the object and checks every function:
+then disassembles the object and checks register kernels:
 
 - x86 profiles: only instructions from the profile's list, no calls, no stack
   register, no memory operand except a constant load relative to `rip`, every
@@ -290,3 +291,9 @@ The C compiler and disassembler are `$RAKE_WASM_CC` (default `clang`) and
 instruction for an equivalent one, such as a splatted zero for a constant, or
 compute arithmetic on splats of uniforms as scalars and splat the result. The
 verifier accepts both, because both stay in registers.
+
+Native streams have explicit loop and memory instructions. Their verifier
+compares each complete function with the separately assembled selection,
+including its literal bytes, and rejects unresolved relocations. The
+[native CPU stream contract](02_packs_and_run.md#native-cpu-streams)
+defines their supported transfers and caller obligations.
