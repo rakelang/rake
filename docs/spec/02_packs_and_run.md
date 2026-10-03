@@ -3,8 +3,8 @@
 A run is vector code over memory. It traverses columnar data a rack at a
 time, loops over views, and writes its results to memory. Runs are
 implemented for `wasm-simd128`. The unreleased compiler also implements the
-[AVX2 and AVX-512 stream subset](#native-x86-streams). General native runs
-and streams on SSE2 and NEON remain work in progress.
+[SSE2, AVX2 and AVX-512 stream subset](#native-x86-streams). General native runs
+and NEON streams remain work in progress.
 
 A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks).
 It returns to vector mode at the closing brace. The block can't capture racks
@@ -215,8 +215,8 @@ types.
 
 On Linux x86-64 the stream follows System V: the descriptor is in `rdi`, the
 count in `rsi`, and the output in `rdx`. It returns `void` under its source
-identifier, uses no stack frame, calls nothing, and executes `vzeroupper`
-before returning:
+identifier, uses no stack frame and calls nothing. The AVX profiles execute
+`vzeroupper` before returning:
 
 ```c
 void roots(
@@ -226,21 +226,28 @@ void roots(
 );
 ```
 
-The compiler owns the loop and increments its element index by eight on
-AVX2 or sixteen on AVX-512F. Full racks use unaligned vector loads and stores.
-The last one uses `vmaskmovps` on AVX2, or `vmovups` with an opmask on
-AVX-512F, so it touches only active elements. The AVX-512 memory mask uses
-`k2`, independently of the expression selector's `k1`. Inactive operands are
-made benign before exception-capable arithmetic. There is no scalar cleanup
-loop. Counts of zero or less touch no pointer, so null pointers are allowed
-then. For a positive count, each read column and the output must hold that
-many floats. The same overlap rules as the wasm32 boundary apply.
+The compiler owns the loop and increments its element index by four on SSE2,
+eight on AVX2 or sixteen on AVX-512F. Full racks use unaligned vector loads
+and stores. AVX2 touches only active elements in the last rack through
+`vmaskmovps`. AVX-512F uses `vmovups` with the `k2` memory mask, independently
+of the expression selector's `k1`.
+
+SSE2 has no fault-suppressing float load or store. For its last one to three
+elements, uniform count guards select the individual memory transfers. The
+compiler assembles those elements into one XMM rack, evaluates the expression
+once with vector arithmetic, and stores only its active elements. There is
+no scalar arithmetic cleanup loop. Inactive operands are made benign before
+exception-capable arithmetic on all three profiles.
+
+Counts of zero or less touch no pointer, so null pointers are allowed then.
+For a positive count, each read column and the output must hold that many
+floats. The same overlap rules as the wasm32 boundary apply.
 
 The final-object verifier compares the complete traversal function with the
 separately assembled selection, including branch offsets, memory operands
 and embedded literals. Any difference or unresolved relocation is rejected.
 `test/native_stream_test.sh` checks independent C results, exact in-place
-output and guarded tails of every remainder for one, two and four columns.
+output and guarded tails of every remainder for one to four columns.
 It runs AVX-512 on capable hardware or through Intel SDE. The AVX2 demonstration
 in `demo/safe-root/run.sh` also checks a million-element pass plus a
 three-element tail. Its timings compare both optimised and explicitly scalar

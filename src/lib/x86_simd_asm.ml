@@ -44,7 +44,6 @@ let registers = function
   | A.Subps { dst; left; right }
   | A.Mulps { dst; left; right }
   | A.Divps { dst; left; right }
-  | A.Cmpps { dst; left; right; _ }
   | A.Mask_andps { dst; left; right }
   | A.Mask_orps { dst; left; right }
   | A.Mask_xorps { dst; left; right } -> [ dst; left; right ]
@@ -52,6 +51,8 @@ let registers = function
   | A.Negps { dst; source }
   | A.Mask_notps { dst; source }
   | A.Moveaps { dst; source } -> [ dst; source ]
+  | A.Cmpps { dst; left; right; ordered_mask; _ } ->
+      [ dst; left; right ] @ Option.to_list ordered_mask
   | A.Fma213ps { dst; multiplier; addend } -> [ dst; multiplier; addend ]
   | A.Fma231ps { dst; multiplicand; multiplier } ->
       [ dst; multiplicand; multiplier ]
@@ -136,9 +137,30 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       let label = intern pool (Splat_f32 bits) in
       emit "vbroadcastss %s, DWORD PTR [rip + %s]" (ymm dst) label)
   in
-  let compare predicate dst left right =
+  let compare ?ordered_mask predicate dst left right =
     if sse then (
-      if predicate = M.One then (
+      if predicate = M.Olt || predicate = M.Ole then (
+        (* Legacy LT/LE signal on quiet NaNs. First identify ordered lanes
+           with quiet ORD, then compare benign operands in every gap.
+           LT's zero/zero gap is false; LE must retain and reapply ORD. *)
+        move 15 left;
+        emit "cmpps xmm15, %s, 0x07" (ymm right);
+        if predicate = M.Olt then (
+          move dst left;
+          emit "andps %s, xmm15" (ymm dst);
+          emit "andps xmm15, %s" (ymm right);
+          emit "cmpps %s, xmm15, 0x01" (ymm dst))
+        else (
+          let ordered = match ordered_mask with
+            | Some register -> register
+            | None -> invalid_arg "SSE2 quiet LE requires an allocated ordered mask" in
+          move ordered 15;
+          emit "andps xmm15, %s" (ymm right);
+          move dst left;
+          emit "andps %s, %s" (ymm dst) (ymm ordered);
+          emit "cmpps %s, xmm15, 0x02" (ymm dst);
+          emit "andps %s, %s" (ymm dst) (ymm ordered)))
+      else if predicate = M.One then (
         move 15 left;
         emit "cmpps xmm15, %s, 0x07" (ymm right);
         move dst left;
@@ -146,7 +168,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
         emit "andps %s, xmm15" (ymm dst))
       else (
         move dst left;
-        let immediate = match predicate with M.Oeq -> 0 | M.Olt -> 1 | M.Ole -> 2 | M.Ounord -> 3 | M.One -> assert false in
+        let immediate = match predicate with M.Oeq -> 0 | M.Ounord -> 3 | M.Olt | M.Ole | M.One -> assert false in
         emit "cmpps %s, %s, 0x%02x" (ymm dst) (ymm right) immediate))
     else if avx512 then (
       emit "vcmpps k1, %s, %s, 0x%02x" (ymm left) (ymm right) (M.comparison_immediate predicate);
@@ -281,8 +303,8 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       emit "vfmadd213ps %s, %s, %s" (ymm dst) (ymm multiplier) (ymm addend)
   | A.Fma231ps { dst; multiplicand; multiplier } ->
       emit "vfmadd231ps %s, %s, %s" (ymm dst) (ymm multiplicand) (ymm multiplier)
-  | A.Cmpps { dst; predicate; left; right } ->
-      compare predicate dst left right
+  | A.Cmpps { dst; predicate; left; right; ordered_mask } ->
+      compare ?ordered_mask predicate dst left right
   | A.Blendvps { dst; mask; if_true; if_false } ->
       blend dst mask if_true if_false
   | A.Mask_andps { dst; left; right } ->

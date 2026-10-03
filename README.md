@@ -62,8 +62,8 @@ objects. It embeds Rake's selected assembly, checks the kernels in the final
 object, and supports uniform `f32` parameters and `f32` results at the boundary
 from slow code. Other native scalar kernel boundaries remain WIP. Platform C
 imports and exports, header-backed unions, typed C callbacks and process
-arguments are supported too. AVX2 and AVX-512 also support read-only stacks with
-immutable `f32s` stream traversals and masked tails. These
+arguments are supported too. SSE2, AVX2 and AVX-512 also support read-only stacks with
+immutable `f32s` stream traversals and checked partial racks. These
 development additions are absent from the 0.6.0-beta source tag. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one

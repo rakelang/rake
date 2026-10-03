@@ -41,9 +41,17 @@ static void check_tail_memory(void) {
         rake_stack_Samples_v1 stack = { values };
         feclearexcept(FE_ALL_EXCEPT);
         roots(&stack, (int64_t)count, results);
-        if (fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW)) abort();
+        const int raised = fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW);
+        if (raised) {
+            fprintf(stderr, "roots raised floating exceptions 0x%x at count %zu\n", raised, count);
+            abort();
+        }
         for (size_t i = 0; i < count; ++i)
-            if (bits(results[i]) != bits(expected[i])) abort();
+            if (bits(results[i]) != bits(expected[i])) {
+                fprintf(stderr, "roots mismatch at count %zu, element %zu: %08x != %08x\n",
+                    count, i, bits(results[i]), bits(expected[i]));
+                abort();
+            }
         /* Exact in-place operation is defined. Other overlaps are excluded. */
         roots(&stack, (int64_t)count, values);
         for (size_t i = 0; i < count; ++i)

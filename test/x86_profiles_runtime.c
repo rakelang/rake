@@ -25,6 +25,12 @@ extern rack choose_positive(rack, rack);
 extern rack scale_and_add(rack, float, rack);
 extern rack guarded_roots(rack);
 extern rack ordered_difference(rack, rack);
+extern rack quiet_less(rack, rack);
+extern rack quiet_less_equal(rack, rack);
+extern rack quiet_greater(rack, rack);
+extern rack quiet_greater_equal(rack, rack);
+extern rack quiet_equal(rack, rack);
+extern rack quiet_different(rack, rack);
 extern float strict_reduce_add(rack);
 extern float strict_reduce_mul(rack);
 extern float strict_reduce_min(rack);
@@ -82,6 +88,31 @@ int main(void) {
     store(result, ordered_difference(load(a), load(b)));
     for (int i = 0; i < LANES; i++)
         if (!equal(result[i], !isnan(a[i]) && !isnan(b[i]) && a[i] != b[i] ? 1 : 0)) return 6;
+
+    /* Quiet ordered comparisons use scalar IEEE predicates as an independent
+       oracle, including both operand positions, infinities and signed zeros. */
+    const float compare_seed[] = {-INFINITY, -1, -0.0f, 0.0f, 1, INFINITY, NAN};
+    rack (*comparisons[])(rack, rack) = {quiet_less, quiet_less_equal,
+        quiet_greater, quiet_greater_equal, quiet_equal, quiet_different};
+    for (int op = 0; op < 6; ++op) {
+        for (int pair = 0; pair < 49; ++pair) {
+            float expected[LANES];
+            for (int i = 0; i < LANES; ++i) {
+                const int offset = (pair + i) % 49;
+                a[i] = compare_seed[offset / 7];
+                b[i] = compare_seed[offset % 7];
+                expected[i] = !isnan(a[i]) && !isnan(b[i])
+                    && (op == 0 ? a[i] < b[i] : op == 1 ? a[i] <= b[i]
+                        : op == 2 ? a[i] > b[i] : op == 3 ? a[i] >= b[i]
+                        : op == 4 ? a[i] == b[i] : a[i] != b[i]) ? 1 : 0;
+            }
+            feclearexcept(FE_ALL_EXCEPT);
+            store(result, comparisons[op](load(a), load(b)));
+            if (fetestexcept(FE_INVALID)) return 15 + op;
+            for (int i = 0; i < LANES; ++i)
+                if (!equal(result[i], expected[i])) return 21 + op;
+        }
+    }
 
     for (int op = 0; op < 4; op++) {
         for (int i = 0; i < LANES; i++)

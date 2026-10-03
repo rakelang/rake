@@ -1,6 +1,6 @@
 (** Shared virtual-register machine IR for x86-64 SIMD profiles.
 
-    Every value in this IR occupies one YMM register.  Destructive FMA form
+    Every value in this IR occupies one profile-width vector register. Destructive FMA form
     selection and physical register allocation deliberately happen later. *)
 
 type vreg = int

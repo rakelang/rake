@@ -15,6 +15,7 @@ typedef struct {
     const uint8_t *tag;
 } rake_stack_Paired_v1;
 extern void paired_roots(const rake_stack_Paired_v1 *, int64_t, float *);
+extern void three_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void four_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 
 static uint32_t bits(float value)
@@ -45,13 +46,13 @@ int main(void)
         float *columns[5];
         for (size_t column = 0; column < 5; ++column)
             columns[column] = (float *)(storage[column] + page) - count;
-        float expected_pair[65], expected_four[65];
+        float expected_pair[65], expected_three[65], expected_four[65];
         for (size_t i = 0; i < count; ++i) {
             for (size_t column = 0; column < 4; ++column)
                 columns[column][i] = inputs[(i + column * 3) % 11];
             expected_pair[i] = root(columns[0][i]) + root(columns[1][i]);
-            expected_four[i] = (expected_pair[i] + root(columns[2][i]))
-                              + root(columns[3][i]);
+            expected_three[i] = expected_pair[i] + root(columns[2][i]);
+            expected_four[i] = expected_three[i] + root(columns[3][i]);
         }
         rake_stack_Paired_v1 stack = {
             columns[0], columns[1], columns[2], columns[3], NULL
@@ -60,6 +61,9 @@ int main(void)
         paired_roots(&stack, (int64_t)count, columns[4]);
         for (size_t i = 0; i < count; ++i)
             if (bits(columns[4][i]) != bits(expected_pair[i])) abort();
+        three_roots(&stack, (int64_t)count, columns[4]);
+        for (size_t i = 0; i < count; ++i)
+            if (bits(columns[4][i]) != bits(expected_three[i])) abort();
         four_roots(&stack, (int64_t)count, columns[4]);
         for (size_t i = 0; i < count; ++i)
             if (bits(columns[4][i]) != bits(expected_four[i])) abort();

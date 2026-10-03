@@ -29,6 +29,7 @@ let function_ =
                predicate = Rake.X86_simd_mir.Olt;
                left = 6;
                right = 7;
+               ordered_mask = None;
              });
         instruction 13
           (A.Blendvps { dst = 9; mask = 8; if_true = 6; if_false = 7 });

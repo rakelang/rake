@@ -1,4 +1,4 @@
-(** Native AVX2 and AVX-512 stream traversals. The loop, addresses and partial-rack
+(** Native x86 stream traversals. The loop, addresses and partial-rack
     memory operations are selected here; rack expressions use the existing
     SSA selector and allocator. There is no C loop or scalar arithmetic tail.
     General runs remain rejected until their control/storage contracts have
@@ -66,11 +66,13 @@ let compile_body ~profile program run traverse ~tail =
   allocated, !columns
 
 let emit_run ~profile program buffer (run : run) =
+  let sse2 = profile = Target.X86_sse2 in
   let avx512 = profile = Target.X86_avx512 in
   let lanes = (Target.info profile).f32_lanes in
-  let alignment = if avx512 then 6 else 5 in
+  let alignment = if sse2 then 4 else if avx512 then 6 else 5 in
   let register = X86_simd_asm.vector_register profile in
-  let memory = if avx512 then "ZMMWORD" else "YMMWORD" in
+  let memory = if sse2 then "XMMWORD" else if avx512 then "ZMMWORD" else "YMMWORD" in
+  let move = if sse2 then "movups" else "vmovups" in
   let traverse = match run.run_body, run.run_params, run.run_stream with
     | [ { r = R_traverse t; _ } ], [ Run_stack (input, schema, false); Run_uniform (count, Types.SInt64) ], Some Types.SFloat
       when t.t_stack = input && t.t_pack = schema && t.t_domain = Types.SFloat
@@ -107,9 +109,9 @@ let emit_run ~profile program buffer (run : run) =
   emit "cmp rsi, %d" lanes;
   emit "jl %s" (label "tail");
   Printf.bprintf buffer "%s:\n" (label "loop");
-  List.iteri (fun index _ -> emit "vmovups %s, %s PTR [%s + rax*4]" (register index) memory pointers.(index)) columns;
+  List.iteri (fun index _ -> emit "%s %s, %s PTR [%s + rax*4]" move (register index) memory pointers.(index)) columns;
   body full;
-  emit "vmovups %s PTR [rdx + rax*4], %s" memory (register 0);
+  emit "%s %s PTR [rdx + rax*4], %s" move memory (register 0);
   emit "add rax, %d" lanes;
   emit "sub rsi, %d" lanes;
   emit "cmp rsi, %d" lanes;
@@ -118,7 +120,28 @@ let emit_run ~profile program buffer (run : run) =
   emit "test rsi, rsi";
   emit "je %s" (label "return");
   let mask_register = List.length columns in
-  if avx512 then (
+  if sse2 then (
+    (* SSE2 has no fault-suppressing f32 vector load. Guard the three possible
+       lane transfers by the uniform count, then evaluate one masked rack.
+       xmm15 is the SSE selector's reserved instruction-local temporary. *)
+    emit "lea rcx, [rip + %s]" (label "masks");
+    emit "mov edi, esi";
+    emit "shl edi, %d" alignment;
+    emit "add rcx, rdi";
+    emit "movaps %s, %s PTR [rcx]" (register mask_register) memory;
+    for lane = 0 to lanes - 2 do
+      if lane > 0 then (
+        emit "cmp rsi, %d" (lane + 1);
+        emit "jl %s" (label "tail_loaded"));
+      List.iteri (fun index _ ->
+        if lane = 0 then
+          emit "movss %s, DWORD PTR [%s + rax*4]" (register index) pointers.(index)
+        else (
+          emit "movss xmm15, DWORD PTR [%s + rax*4 + %d]" pointers.(index) (lane * 4);
+          emit "%s %s, xmm15" (if lane = 1 then "unpcklps" else "movlhps") (register index))) columns
+    done;
+    Printf.bprintf buffer "%s:\n" (label "tail_loaded"))
+  else if avx512 then (
     (* k1 belongs to the register selector. k2 preserves the memory
        participation mask through comparisons and blends in the body. *)
     emit "mov ecx, esi";
@@ -140,12 +163,22 @@ let emit_run ~profile program buffer (run : run) =
   body tail;
   (* AVX2 allocation may reuse the input mask register; reload it only after
      the result has reached its ABI register. ymm1 is dead at this point. *)
-  if avx512 then emit "vmovups %s PTR [rdx + rax*4]{k2}, %s" memory (register 0)
+  if sse2 then (
+    for lane = 0 to lanes - 2 do
+      if lane = 0 then emit "movss DWORD PTR [rdx + rax*4], xmm0"
+      else (
+        emit "cmp rsi, %d" (lane + 1);
+        emit "jl %s" (label "return");
+        emit "movaps xmm15, xmm0";
+        emit "shufps xmm15, xmm15, 0x%02x" (lane * 0x55);
+        emit "movss DWORD PTR [rdx + rax*4 + %d], xmm15" (lane * 4))
+    done)
+  else if avx512 then emit "vmovups %s PTR [rdx + rax*4]{k2}, %s" memory (register 0)
   else (
     emit "vmovups ymm1, YMMWORD PTR [rcx]";
     emit "vmaskmovps YMMWORD PTR [rdx + rax*4], ymm1, ymm0");
   Printf.bprintf buffer "%s:\n" (label "return");
-  emit "vzeroupper";
+  if not sse2 then emit "vzeroupper";
   emit "ret";
   (* Constant labels emitted by the register selector need per-run scopes.
      Rewrite its private label prefix once, including their references. *)
@@ -163,9 +196,9 @@ let emit_run ~profile program buffer (run : run) =
   Printf.bprintf buffer ".size %s, .-%s\n.att_syntax prefix\n" run.run_name run.run_name
 
 let compile ~profile program =
-  if not (List.mem profile [ Target.X86_avx2; Target.X86_avx512 ]) then (
+  if not (Target.is_x86 profile) then (
     match program.runs with
-    | run :: _ -> reject run.run_loc "native streams currently require x86-avx2 or x86-avx512; other native run profiles are work in progress"
+    | run :: _ -> reject run.run_loc "native streams currently require an x86 SIMD profile; other native run profiles are work in progress"
     | [] -> ());
   let parts = List.map (fun run ->
     let buffer = Buffer.create 2048 in

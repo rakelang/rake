@@ -178,6 +178,12 @@ Float arithmetic is IEEE 754 binary32, rounded to nearest with ties to even.
 Every comparison with a NaN operand is false, `!=` included, so `a != b`
 means that `a` and `b` are ordered and different.
 
+Native x86 comparisons don't raise invalid-operation exceptions for quiet
+NaNs. SSE2 implements `<` and `<=` by checking for ordered operands, making
+unordered operands benign, then comparing the racks. Its `<=` sequence
+retains an additional mask register, which the allocator includes in its
+pressure check. Signalling NaNs can still raise an invalid-operation exception.
+
 `wasm-simd128` contracts nothing, so the target and `rakec --interpret`
 agree on every result bit that isn't a NaN. `x86-avx2`, `x86-avx512` and `aarch64-neon`
 contract a multiply and an add into one fused multiply-add when both are in
@@ -259,7 +265,7 @@ and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
 backends in the 0.6.0-beta tag compile neither runs nor slow code. The
 unreleased development compiler adds native C programs with slow orchestration
 and Rake-selected register kernels. Slow callers can pass uniform `f32`
-arguments and receive `f32` results. AVX2 and AVX-512 also support the
+arguments and receive `f32` results. SSE2, AVX2 and AVX-512 also support the
 [native stream subset](02_packs_and_run.md#native-x86-streams).
 General native runs and other scalar kernel boundaries remain work in progress.
 

@@ -1,3 +1,21 @@
 scratch choose_positive(values: f32s, fallback: f32s) -> f32s:
   let positive = values > <0.0>
   select(positive, values, fallback)
+
+scratch quiet_less(left: f32s, right: f32s) -> f32s:
+  select(left < right, <1.0>, <0.0>)
+
+scratch quiet_less_equal(left: f32s, right: f32s) -> f32s:
+  select(left <= right, <1.0>, <0.0>)
+
+scratch quiet_greater(left: f32s, right: f32s) -> f32s:
+  select(left > right, <1.0>, <0.0>)
+
+scratch quiet_greater_equal(left: f32s, right: f32s) -> f32s:
+  select(left >= right, <1.0>, <0.0>)
+
+scratch quiet_equal(left: f32s, right: f32s) -> f32s:
+  select(left = right, <1.0>, <0.0>)
+
+scratch quiet_different(left: f32s, right: f32s) -> f32s:
+  select(left != right, <1.0>, <0.0>)

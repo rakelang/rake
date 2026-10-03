@@ -17,6 +17,13 @@ run paired_roots(input: stack Paired, <count: i64>) -> f32:
     let second = nonnegative_root(row.second)
     yield first + second
 
+run three_roots(input: stack Paired, <count: i64>) -> f32:
+  for row in input using f32s up to <count>:
+    let first = nonnegative_root(row.first)
+    let second = nonnegative_root(row.second)
+    let third = nonnegative_root(row.third)
+    yield (first + second) + third
+
 run four_roots(input: stack Paired, <count: i64>) -> f32:
   for row in input using f32s up to <count>:
     let first = nonnegative_root(row.first)

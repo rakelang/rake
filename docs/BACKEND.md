@@ -102,7 +102,7 @@ explicit slow code -> scalar C and C ABI declarations ────────�
                                                               register-kernel verifier
 ```
 
-This development path supports the limited AVX2 and AVX-512 stream traversal below.
+This development path supports the limited SSE2, AVX2 and AVX-512 stream traversal.
 General native runs remain work in progress. Slow callers can pass
 uniform `f32` arguments and receive `f32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
@@ -202,7 +202,7 @@ relocations, linking and start-up. Debug information and exception unwinding
 aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile scratches
 and rakes only. The development compiler adds native mixed programs through
 the limited scalar C boundary above. General runs compile on WebAssembly;
-AVX2 and AVX-512 implement the stream subset. Other native run profiles remain WIP.
+SSE2, AVX2 and AVX-512 implement the stream subset. NEON traversal remains WIP.
 
 ## Planned GPU pipeline
 

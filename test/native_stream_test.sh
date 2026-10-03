@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Independent scalar C and guard pages check the selected traversal's values,
-# descriptor ABI and active-lane memory effects for both x86 stream profiles.
+# descriptor ABI and active-lane memory effects for the x86 stream profiles.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 rakec="${RAKEC:-${root}/_build/default/src/bin/main.exe}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
-for profile in x86-avx2 x86-avx512; do
-  if [[ "${profile}" = x86-avx2 ]]; then
-    flags=(-mavx2 -mfma)
-  else
-    flags=(-mavx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl)
-  fi
+for profile in x86-sse2 x86-avx2 x86-avx512; do
+  case "${profile}" in
+    x86-sse2) flags=(-msse2 -mno-avx -mno-fma) ;;
+    x86-avx2) flags=(-mavx2 -mfma) ;;
+    x86-avx512) flags=(-mavx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl) ;;
+  esac
   runner=()
   if [[ "${profile}" = x86-avx512 ]] && ! grep -qw avx512f /proc/cpuinfo; then
     : "${RAKE_SDE:?AVX-512 streams need AVX-512F hardware or the pinned Intel SDE oracle}"

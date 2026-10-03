@@ -16,7 +16,7 @@ translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
 `wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
 compiler also emits native C and objects combining slow orchestration and
-register kernels on x86-64 and AArch64. AVX2 and AVX-512 additionally support the
+register kernels on x86-64 and AArch64. SSE2, AVX2 and AVX-512 additionally support the
 [native stream subset](02_packs_and_run.md#native-x86-streams). General native
 runs remain work in progress.
 

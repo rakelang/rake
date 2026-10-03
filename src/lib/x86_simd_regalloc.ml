@@ -35,6 +35,7 @@ type operation =
       predicate : M.ordered_comparison;
       left : vector_register;
       right : vector_register;
+      ordered_mask : vector_register option;
     }
   | Blendvps of { dst : vector_register; mask : vector_register; if_true : vector_register; if_false : vector_register }
   | Mask_andps of { dst : vector_register; left : vector_register; right : vector_register }
@@ -249,6 +250,7 @@ let allocate_function ?(profile = Target.X86_avx2) func =
               let p = physical in
               let scratch_count =
                 match instruction with
+                | M.Cmpps { predicate = M.Ole; _ } when profile = Target.X86_sse2 -> 1
                 | M.Reduce_f32 { operation = (Native_ir.Reduce_add | Native_ir.Reduce_mul); _ } -> 1
                 | M.Scan_f32 { operation = (Native_ir.Scan_add | Native_ir.Scan_mul); _ } -> 2
                 | M.Reduce_f32 _ -> 6
@@ -270,8 +272,8 @@ let allocate_function ?(profile = Target.X86_avx2) func =
                     fused = false;
                     message =
                       Printf.sprintf
-                        "strict cross-lane operation requires %d simultaneous YMM registers; profile provides %d; no spill fallback is permitted"
-                        required physical_register_count;
+                        "strict native operation requires %d simultaneous %s registers; profile provides %d; no spill fallback is permitted"
+                        required register_class physical_register_count;
                   }
               else (
               let destination_growth = if reused = None then 1 else 0 in
@@ -296,7 +298,8 @@ let allocate_function ?(profile = Target.X86_avx2) func =
               | M.Sqrtps { source; _ } -> emit loc provenance (Sqrtps { dst; source = p source })
               | M.Negps { source; _ } -> emit loc provenance (Negps { dst; source = p source })
               | M.Cmpps { predicate; left; right; _ } ->
-                  emit loc provenance (Cmpps { dst; predicate; left = p left; right = p right })
+                  let ordered_mask = match scratch with [] -> None | register :: _ -> Some register in
+                  emit loc provenance (Cmpps { dst; predicate; left = p left; right = p right; ordered_mask })
               | M.Blendvps { mask; if_true; if_false; _ } ->
                   emit loc provenance
                     (Blendvps { dst; mask = p mask; if_true = p if_true; if_false = p if_false })

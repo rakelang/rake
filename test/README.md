@@ -38,7 +38,9 @@ website.
 
 `test/x86_profiles_test.sh` checks SSE2, AVX2 and AVX-512 against independent
 scalar results, including ordered reductions, masked partial operations and
-NaNs. SSE2 and AVX2 execute on the test host. AVX-512 executes on hardware with
+NaNs. All six comparison operators agree with scalar ordered predicates
+without raising invalid-operation exceptions for quiet NaNs. SSE2 and AVX2
+execute on the test host. AVX-512 executes on hardware with
 AVX-512F, or through Intel SDE supplied as `RAKE_SDE=/absolute/path/to/sde64`.
 The suite fails if neither is available, rather than treating object
 verification as runtime agreement.
@@ -59,8 +61,8 @@ signed-zero transfer through the scalar C boundary, and x86 reductions against
 both the selected-profile interpreter and hand-derived lane counts. Native
 general memory runs remain work in progress.
 
-`test/native_stream_test.sh` checks the AVX2 and AVX-512 stream subset against
-independent scalar C. One, two and four input columns end at guard pages,
+`test/native_stream_test.sh` checks the SSE2, AVX2 and AVX-512 stream subset
+against independent scalar C. One to four input columns end at guard pages,
 as does the output, for counts from zero through 65. The checks cover every
 tail remainder, exact in-place output, inactive-lane arithmetic and an unread
 byte column in the descriptor. AVX-512 uses capable hardware or Intel SDE.
