@@ -101,10 +101,12 @@ Float reductions and scans now compile on NEON too. All four physical profiles
 preserve the specified left-to-right fold, including each binary32 rounding.
 The shared scalar oracle checks NaNs at every position and signed-zero extrema.
 
-Literal-index float extraction and insertion now compile on all four
-physical profiles.
+Literal-index extraction and insertion now compile on all four physical
+profiles for floats and signed or unsigned 32-bit integers.
 Their lane bounds follow each profile's rack width. Independent C checks every
-lane's bits, scalar argument and return values, and reuse of the original rack.
+lane's bits, scalar argument and return values, and reuse of the original rack
+and replacement uniform. Integer results cross the platform's integer C ABI
+without floating-point conversion.
 Insertion accepts a uniform argument, literal or extracted value. Native
 streams still reject both operations until tail participation is specified.
 
@@ -223,8 +225,8 @@ We will extend the remaining column and output widths, then define participation
 admitting them in tails.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
-integer extraction and insertion, the remaining scalar expressions and
-gather. A CPU profile
+extraction and insertion at other integer widths, the remaining scalar
+expressions and gather. A CPU profile
 will gain an operation only when its compiled result matches the interpreter
 and its object verifier proves the selected vector sequence.
 

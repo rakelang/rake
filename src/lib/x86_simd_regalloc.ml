@@ -13,12 +13,12 @@ type operation =
   | Uniform_mask of { dst : vector_register; value : bool }
   | Broadcastss of { dst : vector_register; source : vector_register }
   | Broadcast_bool of { dst : vector_register; source : vector_register }
-  | Extract_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
-  | Insert_f32 of {
+  | Extract_word32 of { dst : vector_register; source : vector_register; lane : M.word32_lane }
+  | Insert_word32 of {
       dst : vector_register;
       previous : vector_register;
       inserted : vector_register;
-      lane : M.f32_lane;
+      lane : M.word32_lane;
       broadcast : vector_register;
     }
   | Shuffle_word of {
@@ -313,7 +313,7 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
             | M.Neg_i32 _ -> []
             | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> []
             | M.Broadcastss { source; _ } | M.Broadcast_bool { source; _ } -> [ source ]
-            | M.Insert_f32 { previous; _ } -> [ previous ]
+            | M.Insert_word32 { previous; _ } -> [ previous ]
             (* Two permutations still need both original racks. *)
             | M.Shuffle_word { racks = [ source ]; _ } -> [ source ]
             | M.Shuffle_word _ -> []
@@ -337,7 +337,7 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                 match instruction with
                 | M.Compare_i32 { unsigned = true; predicate = (Native_ir.Lt | Native_ir.Le | Native_ir.Gt | Native_ir.Ge); _ }
                     when profile <> Target.X86_avx512 -> 2
-                | M.Insert_f32 _ -> 1
+                | M.Insert_word32 _ -> 1
                 | M.Reduce_mask _ -> 1
                 | M.Mul_i32 _ when profile = Target.X86_sse2 -> 2
                 | M.Extreme_i32 { unsigned; _ } when profile = Target.X86_sse2 -> if unsigned then 3 else 1
@@ -391,10 +391,10 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                   emit loc provenance (Broadcastss { dst; source = p source })
               | M.Broadcast_bool { source; _ } ->
                   emit loc provenance (Broadcast_bool { dst; source = p source })
-              | M.Extract_f32 { source; lane; _ } ->
-                  emit loc provenance (Extract_f32 { dst; source = p source; lane })
-              | M.Insert_f32 { previous; inserted; lane; _ } ->
-                  emit loc provenance (Insert_f32 { dst; previous = p previous; inserted = p inserted; lane; broadcast = List.hd scratch })
+              | M.Extract_word32 { source; lane; _ } ->
+                  emit loc provenance (Extract_word32 { dst; source = p source; lane })
+              | M.Insert_word32 { previous; inserted; lane; _ } ->
+                  emit loc provenance (Insert_word32 { dst; previous = p previous; inserted = p inserted; lane; broadcast = List.hd scratch })
               | M.Shuffle_word { racks; indices; _ } ->
                   emit loc provenance (Shuffle_word { dst; racks = List.map p racks; indices; scratch })
               | M.Reduce_mask { source; operation; _ } ->

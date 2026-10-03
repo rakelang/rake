@@ -22,6 +22,17 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         printf 'scratch insert_keep_source_lane_%d(values: f32s, <replacement: f32>) -> f32s:\n  let changed = insert(values, %d, <replacement>)\n  changed + values\n\n' "$lane" "$lane"
         printf 'scratch insert_keep_scalar_lane_%d(values: f32s, <replacement: f32>) -> f32s:\n  let changed = insert(values, %d, <replacement>)\n  changed + <replacement>\n\n' "$lane" "$lane"
         printf 'scratch relocate_lane_%d(values: f32s) -> f32s:\n  let <picked: f32> = extract(values, %d)\n  insert(values, %d, <picked>)\n\n' "$lane" "$(((lane + 1) % lanes))" "$lane"
+        for kind in signed unsigned; do
+            if [[ "$kind" == signed ]]; then scalar=i32; else scalar=u32; fi
+            printf 'scratch extract_%s_lane_%d(values: %ss) -> %s:\n  extract(values, %d)\n\n' "$kind" "$lane" "$scalar" "$scalar" "$lane"
+            printf 'scratch broadcast_%s_lane_%d(values: %ss) -> %ss:\n  let <picked: %s> = extract(values, %d)\n  <picked>\n\n' "$kind" "$lane" "$scalar" "$scalar" "$scalar" "$lane"
+            printf 'scratch keep_%s_lane_%d(values: %ss) -> %ss:\n  let <picked: %s> = extract(values, %d)\n  bit_xor(values, <picked>)\n\n' "$kind" "$lane" "$scalar" "$scalar" "$scalar" "$lane"
+            printf 'scratch insert_%s_lane_%d(values: %ss, <replacement: %s>) -> %ss:\n  insert(values, %d, <replacement>)\n\n' "$kind" "$lane" "$scalar" "$scalar" "$scalar" "$lane"
+            printf 'scratch insert_keep_%s_lane_%d(values: %ss, <replacement: %s>) -> %ss:\n  let changed = insert(values, %d, <replacement>)\n  bit_xor(bit_xor(changed, values), <replacement>)\n\n' "$kind" "$lane" "$scalar" "$scalar" "$scalar" "$lane"
+            printf 'scratch relocate_%s_lane_%d(values: %ss) -> %ss:\n  let <picked: %s> = extract(values, %d)\n  insert(values, %d, <picked>)\n\n' "$kind" "$lane" "$scalar" "$scalar" "$scalar" "$(((lane + 1) % lanes))" "$lane"
+            if [[ "$kind" == signed ]]; then constant=-2147483648; else constant=4294967295; fi
+            printf 'scratch insert_constant_%s_lane_%d(values: %ss) -> %ss:\n  insert(values, %d, <%s>)\n\n' "$kind" "$lane" "$scalar" "$scalar" "$lane" "$constant"
+        done
     done > "$source"
     printf 'scratch mask_all(values: f32s) -> bool:\n  all(values > <0.0>)\n\nscratch mask_any(values: f32s) -> bool:\n  any(values > <0.0>)\n\nscratch mask_bits(values: f32s) -> u32:\n  bitmask(values > <0.0>)\n\nscratch mask_gap_bits(values: f32s) -> u32:\n  bitmask(not (values > <0.0>))\n\nscratch mask_composed(values: f32s) -> u32:\n  let positive = values > <0.0>\n  let combined = positive or (values = <0.0>)\n  bitmask(combined and positive)\n\n' >> "$source"
     for comparison in lt le gt ge eq ne; do
@@ -76,13 +87,13 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         printf '.section .note.GNU-stack,"",@progbits\n' >> "${tmp}/boolean-caller.s"
     fi
     if [[ "$profile" == aarch64-neon ]]; then
-        aarch64-unknown-linux-gnu-gcc -O1 -static -ffp-contract=off -DLANES="$lanes" \
+        aarch64-unknown-linux-gnu-gcc -O1 -Wall -Wextra -Werror -static -ffp-contract=off -DLANES="$lanes" \
             -isystem "${RAKE_AARCH64_LIBC_DEV}/include" \
             -B"${RAKE_AARCH64_LIBC}/lib" -L"${RAKE_AARCH64_LIBC_STATIC}/lib" \
             "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
         qemu-aarch64 "${tmp}/${profile}"
     else
-        cc -O1 -ffp-contract=off "${flags[@]}" -DLANES="$lanes" \
+        cc -O1 -Wall -Wextra -Werror -ffp-contract=off "${flags[@]}" -DLANES="$lanes" \
             "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
         if [[ "$profile" == x86-avx512 ]] && ! grep -qw avx512f /proc/cpuinfo; then
             if [[ -z "${RAKE_SDE:-}" ]]; then

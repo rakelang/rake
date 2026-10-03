@@ -203,8 +203,8 @@ let cross_lane_function_names = function
                 | X86_simd_regalloc.Reduce_f32 _
                 | X86_simd_regalloc.Reduce_mask _
                 | X86_simd_regalloc.Scan_f32 _
-                | X86_simd_regalloc.Extract_f32 _
-                | X86_simd_regalloc.Insert_f32 _
+                | X86_simd_regalloc.Extract_word32 _
+                | X86_simd_regalloc.Insert_word32 _
                 | X86_simd_regalloc.Shuffle_word _ -> true
                 (* SSE2's packed low-word multiplication permutes two sets
                    of products back into their original lane order. *)
@@ -218,8 +218,8 @@ let cross_lane_function_names = function
       List.filter_map (fun (func : Aarch64_neon_regalloc.func) ->
         if List.exists (fun (instruction : Aarch64_neon_regalloc.instruction) ->
           match instruction.operation with
-          | Aarch64_neon_regalloc.Broadcast_f32 { lane; _ } -> lane <> Aarch64_neon_mir.Lane0
-          | Aarch64_neon_regalloc.Insert_f32 _ | Aarch64_neon_regalloc.Reduce_mask _ -> true
+          | Aarch64_neon_regalloc.Broadcast_word32 { lane; _ } -> lane <> Aarch64_neon_mir.Lane0
+          | Aarch64_neon_regalloc.Insert_word32 _ | Aarch64_neon_regalloc.Reduce_mask _ -> true
           | _ -> false) func.instructions
         then Some func.name else None) allocated
   | Wasm _ -> []

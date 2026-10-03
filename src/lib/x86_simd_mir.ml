@@ -9,17 +9,17 @@ type provenance = Native_ir.provenance
 
 type ordered_comparison = Oeq | One | Olt | Ole | Ounord
 type extremum = Minimum | Maximum
-type f32_lane =
+type word32_lane =
   | Lane0 | Lane1 | Lane2 | Lane3 | Lane4 | Lane5 | Lane6 | Lane7
   | Lane8 | Lane9 | Lane10 | Lane11 | Lane12 | Lane13 | Lane14 | Lane15
 
-let f32_lane_index = function
+let word32_lane_index = function
   | Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
   | Lane4 -> 4 | Lane5 -> 5 | Lane6 -> 6 | Lane7 -> 7
   | Lane8 -> 8 | Lane9 -> 9 | Lane10 -> 10 | Lane11 -> 11
   | Lane12 -> 12 | Lane13 -> 13 | Lane14 -> 14 | Lane15 -> 15
 
-let f32_lane_of_int = function
+let word32_lane_of_int = function
   | 0 -> Some Lane0 | 1 -> Some Lane1 | 2 -> Some Lane2 | 3 -> Some Lane3
   | 4 -> Some Lane4 | 5 -> Some Lane5 | 6 -> Some Lane6 | 7 -> Some Lane7
   | 8 -> Some Lane8 | 9 -> Some Lane9 | 10 -> Some Lane10 | 11 -> Some Lane11
@@ -33,8 +33,8 @@ type instruction =
   | Uniform_mask of { dst : vreg; value : bool; provenance : provenance }
   | Broadcastss of { dst : vreg; source : vreg; provenance : provenance }
   | Broadcast_bool of { dst : vreg; source : vreg; provenance : provenance }
-  | Extract_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
-  | Insert_f32 of { dst : vreg; previous : vreg; inserted : vreg; lane : f32_lane; provenance : provenance }
+  | Extract_word32 of { dst : vreg; source : vreg; lane : word32_lane; provenance : provenance }
+  | Insert_word32 of { dst : vreg; previous : vreg; inserted : vreg; lane : word32_lane; provenance : provenance }
   | Shuffle_word of { dst : vreg; racks : vreg list; indices : int list; provenance : provenance }
   | Reduce_mask of { dst : vreg; source : vreg; operation : Native_ir.mask_reduction; provenance : provenance }
   | Reduce_f32 of {
@@ -120,8 +120,8 @@ let def = function
   | Uniform_mask { dst; _ }
   | Broadcastss { dst; _ }
   | Broadcast_bool { dst; _ }
-  | Extract_f32 { dst; _ }
-  | Insert_f32 { dst; _ }
+  | Extract_word32 { dst; _ }
+  | Insert_word32 { dst; _ }
   | Shuffle_word { dst; _ }
   | Reduce_mask { dst; _ }
   | Reduce_f32 { dst; _ }
@@ -158,13 +158,13 @@ let operands = function
   | Copy_word { source; _ }
   | Broadcastss { source; _ }
   | Broadcast_bool { source; _ }
-  | Extract_f32 { source; _ }
+  | Extract_word32 { source; _ }
   | Reduce_mask { source; _ }
   | Reduce_f32 { source; _ }
   | Scan_f32 { source; _ }
   | Round_f32 { source; _ } -> [ source ]
   | Shift_i32 { source; _ } -> [ source ]
-  | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
+  | Insert_word32 { previous; inserted; _ } -> [ previous; inserted ]
   | Shuffle_word { racks; _ } -> racks
   | Addps { left; right; _ }
   | Subps { left; right; _ }
@@ -192,8 +192,8 @@ let provenance = function
   | Uniform_mask { provenance; _ }
   | Broadcastss { provenance; _ }
   | Broadcast_bool { provenance; _ }
-  | Extract_f32 { provenance; _ }
-  | Insert_f32 { provenance; _ }
+  | Extract_word32 { provenance; _ }
+  | Insert_word32 { provenance; _ }
   | Shuffle_word { provenance; _ }
   | Reduce_mask { provenance; _ }
   | Reduce_f32 { provenance; _ }
@@ -240,8 +240,8 @@ let instruction_name = function
   | Uniform_mask _ -> "mask.constant"
   | Broadcastss _ -> "vbroadcastss.xmm"
   | Broadcast_bool _ -> "broadcast.boolean.mask"
-  | Extract_f32 _ -> "extract.f32"
-  | Insert_f32 _ -> "insert.f32"
+  | Extract_word32 _ -> "extract.word32"
+  | Insert_word32 _ -> "insert.word32"
   | Shuffle_word _ -> "shuffle.32"
   | Reduce_mask _ -> "reduce.mask"
   | Reduce_f32 _ -> "strict.reduce.f32"

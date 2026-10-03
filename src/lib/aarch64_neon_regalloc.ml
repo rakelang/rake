@@ -15,9 +15,9 @@ type operation =
   | Integer_parameter of { dst : vector_register; argument : int }
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Mask_const of { dst : vector_register; value : bool }
-  | Broadcast_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
+  | Broadcast_word32 of { dst : vector_register; source : vector_register; lane : M.word32_lane }
   | Broadcast_bool of { dst : vector_register; source : vector_register }
-  | Insert_f32 of { dst : vector_register; inserted : vector_register; lane : M.f32_lane }
+  | Insert_word32 of { dst : vector_register; inserted : vector_register; lane : M.word32_lane }
   | Reduce_mask of {
       dst : vector_register;
       source : vector_register;
@@ -269,9 +269,9 @@ let allocate_function ?parameter_assignment func =
             match instruction with
             | M.Uniform_f32 _ | M.Mask_const _ -> []
             | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> []
-            | M.Broadcast_f32 { source; _ } -> [ source ]
+            | M.Broadcast_word32 { source; _ } -> [ source ]
             | M.Broadcast_bool { source; _ } -> [ source ]
-            | M.Insert_f32 { previous; _ } -> [ previous ]
+            | M.Insert_word32 { previous; _ } -> [ previous ]
             | M.Fma { addend; _ } -> [ addend ]
             | M.Select { mask; if_false; if_true; _ } -> [ mask; if_false; if_true ]
             | _ -> operands
@@ -300,14 +300,14 @@ let allocate_function ?parameter_assignment func =
                     emit loc provenance (Move { dst; source = p source })
               | M.Uniform_f32 { bits; _ } -> emit loc provenance (Uniform_f32 { dst; bits })
               | M.Mask_const { value; _ } -> emit loc provenance (Mask_const { dst; value })
-              | M.Broadcast_f32 { source; lane; _ } ->
-                  emit loc provenance (Broadcast_f32 { dst; source = p source; lane })
+              | M.Broadcast_word32 { source; lane; _ } ->
+                  emit loc provenance (Broadcast_word32 { dst; source = p source; lane })
               | M.Broadcast_bool { source; _ } ->
                   emit loc provenance (Broadcast_bool { dst; source = p source })
-              | M.Insert_f32 { previous; inserted; lane; _ } ->
+              | M.Insert_word32 { previous; inserted; lane; _ } ->
                   if reused <> Some previous then
                     emit loc provenance (Move { dst; source = p previous });
-                  emit loc provenance (Insert_f32 { dst; inserted = p inserted; lane })
+                  emit loc provenance (Insert_word32 { dst; inserted = p inserted; lane })
               | M.Reduce_mask { source; operation; _ } ->
                   emit loc provenance (Reduce_mask { dst; source = p source; operation; scratch = List.hd scratch })
               | M.Fadd { left; right; _ } -> emit loc provenance (Fadd { dst; left = p left; right = p right })

@@ -4,6 +4,7 @@
 # the C rakec emits, in both run addressings, under wasmtime; the results
 # must agree. Each program's verified object must also pass verification.
 # Programs under test/program/trap/ must trap in both.
+# The mixed native ABI fixture also checks its scalar/vector composition on WASM.
 set -euo pipefail
 shopt -s nullglob
 
@@ -29,7 +30,7 @@ run_wasm() {
 }
 
 count=0
-for source in "${test_dir}"/program/*.rk; do
+for source in "${test_dir}"/program/*.rk "${test_dir}"/abi/native_mixed.rk; do
   name="$(basename "${source}" .rk)"
   expected="$("${rakec}" --interpret "${source}")" || fail "${name}: interpreter failed"
   for addressing in barrier plain; do

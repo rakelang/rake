@@ -7,18 +7,18 @@ type vreg = int
 type provenance = Native_ir.provenance
 
 type comparison = Ceq | Cgt | Cge
-type f32_lane = Lane0 | Lane1 | Lane2 | Lane3
+type word32_lane = Lane0 | Lane1 | Lane2 | Lane3
 
-let f32_lane_index = function Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
+let word32_lane_index = function Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
 
 type instruction =
   | Convert_word_f32 of { dst : vreg; source : vreg; conversion : Native_ir.word_conversion; provenance : provenance }
   | Copy_word of { dst : vreg; source : vreg; provenance : provenance }
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Mask_const of { dst : vreg; value : bool; provenance : provenance }
-  | Broadcast_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
+  | Broadcast_word32 of { dst : vreg; source : vreg; lane : word32_lane; provenance : provenance }
   | Broadcast_bool of { dst : vreg; source : vreg; provenance : provenance }
-  | Insert_f32 of { dst : vreg; previous : vreg; inserted : vreg; lane : f32_lane; provenance : provenance }
+  | Insert_word32 of { dst : vreg; previous : vreg; inserted : vreg; lane : word32_lane; provenance : provenance }
   | Reduce_mask of { dst : vreg; source : vreg; operation : Native_ir.mask_reduction; provenance : provenance }
   | Fadd of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fsub of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -83,9 +83,9 @@ let def = function
   | Copy_word { dst; _ }
   | Uniform_f32 { dst; _ }
   | Mask_const { dst; _ }
-  | Broadcast_f32 { dst; _ }
+  | Broadcast_word32 { dst; _ }
   | Broadcast_bool { dst; _ }
-  | Insert_f32 { dst; _ }
+  | Insert_word32 { dst; _ }
   | Reduce_mask { dst; _ }
   | Fadd { dst; _ }
   | Fsub { dst; _ }
@@ -117,11 +117,11 @@ let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
   | Convert_word_f32 { source; _ } -> [ source ]
   | Copy_word { source; _ } -> [ source ]
-  | Broadcast_f32 { source; _ } -> [ source ]
+  | Broadcast_word32 { source; _ } -> [ source ]
   | Broadcast_bool { source; _ } -> [ source ]
   | Reduce_mask { source; _ } -> [ source ]
   | Shift_i32 { source; _ } -> [ source ]
-  | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
+  | Insert_word32 { previous; inserted; _ } -> [ previous; inserted ]
   | Fadd { left; right; _ }
   | Fsub { left; right; _ }
   | Add_i32 { left; right; _ }
@@ -149,9 +149,9 @@ let provenance = function
   | Copy_word { provenance; _ }
   | Uniform_f32 { provenance; _ }
   | Mask_const { provenance; _ }
-  | Broadcast_f32 { provenance; _ }
+  | Broadcast_word32 { provenance; _ }
   | Broadcast_bool { provenance; _ }
-  | Insert_f32 { provenance; _ }
+  | Insert_word32 { provenance; _ }
   | Reduce_mask { provenance; _ }
   | Fadd { provenance; _ }
   | Fsub { provenance; _ }
@@ -190,9 +190,9 @@ let instruction_name = function
   | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"
-  | Broadcast_f32 _ -> "dup.lane.f32"
+  | Broadcast_word32 _ -> "dup.lane.word32"
   | Broadcast_bool _ -> "broadcast.boolean.mask"
-  | Insert_f32 _ -> "insert.f32"
+  | Insert_word32 _ -> "insert.word32"
   | Reduce_mask _ -> "reduce.mask"
   | Fadd _ -> "fadd"
   | Fsub _ -> "fsub"

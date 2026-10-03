@@ -135,8 +135,10 @@ and stack use remain rejected.
 
 `test/native_lane_transfer_test.sh` generates extraction, insertion and shuffle
 fixtures for every lane on all four physical profiles. Independent C checks
-the exact binary32 bits through scalar arguments, returns and rebroadcasts,
-including signalling NaNs without floating-point exceptions.
+the exact float and signed/unsigned 32-bit integer bits through scalar
+arguments, returns and rebroadcasts, including signalling NaNs without
+floating-point exceptions. Integer signatures independently check the
+platform's integer argument and return registers, including high-bit values.
 Composed arithmetic checks that extracting
 or inserting a lane preserves a still-live source rack and uniform argument.
 Replacement literals and values extracted from another lane agree bit for bit

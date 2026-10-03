@@ -98,15 +98,19 @@ Scans insert the new prefix with `ins`, and extrema explicitly select the
 language's canonical NaN. The [reduction contract](spec/06_reductions_and_scans.md)
 specifies their order and the permitted lane transfers.
 
-Float extraction consumes its literal index during instruction selection.
+Extraction from a 32-bit float or integer rack consumes its literal index
+during instruction selection.
 SSE2 uses a full-width `shufps`. AVX2 selects the containing 128-bit group
 with `vperm2f128`, then uses `vpermilps` within that group. AVX-512F uses
 `vshuff32x4` and `vpermilps`, and NEON uses `dup`. The selected bits occupy
-the whole destination register, with its low `f32` returned through the
-scalar ABI. No scalar arithmetic or memory temporary is introduced. Bounds
+the whole destination register. A float returns its low lane through the
+scalar floating-point ABI. Signed and unsigned integers transfer those low
+bits into `eax` on x86-64 or `w0` on AArch64 at the return boundary. No scalar
+arithmetic or memory temporary is introduced. Bounds
 follow the selected profile, and the allocator preserves a still-live source.
 
-Float insertion replaces one literal-index lane with a uniform's bits.
+Insertion into a 32-bit float or integer rack replaces one literal-index lane
+with a uniform of the same element type.
 SSE2 broadcasts the scalar and merges it through a literal one-lane mask.
 AVX2 uses `vbroadcastss` and immediate `vblendps`. AVX-512F uses
 `vbroadcastss` and a one-bit `k1` mask with `vmovaps`, without requiring
@@ -114,6 +118,9 @@ AVX-512DQ, BW or VL. The x86 allocator counts the broadcast temporary and
 reuses only a dying input rack for the destination. NEON uses `ins` from
 the scalar argument's low lane, copying the input rack when it remains live.
 The insertion sequence is shared with scan accumulation on each architecture.
+Integer uniforms enter through the platform's integer argument registers and
+move into allocated vector registers. The same bit-preserving lane sequence
+then handles their insertion, including unsigned values above bit 31.
 
 Static 32-bit shuffles select a complete output rack from one or two input
 racks of the same type: `f32s`, `i32s` or `u32s`. SSE2 uses immediate

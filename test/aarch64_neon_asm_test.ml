@@ -14,7 +14,7 @@ let function_ =
     instructions =
       [ instruction 2 (A.Uniform_f32 { dst = 2; bits = Int32.zero });
         instruction 2 (A.Mask_const { dst = 21; value = true });
-        instruction 2 (A.Broadcast_f32 { dst = 22; source = 3; lane = M.Lane0 });
+        instruction 2 (A.Broadcast_word32 { dst = 22; source = 3; lane = M.Lane0 });
         instruction 3
           (A.Uniform_f32 { dst = 3; bits = Int32.bits_of_float 2.0 });
         instruction 4

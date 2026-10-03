@@ -393,24 +393,28 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           Some (M.Scan_f32 { dst; source; operation; provenance })
       | N.Extract { rack; lane } ->
           let dst, typ = result func.name index instruction in
-          if typ <> N.Scalar N.F32 then
-            fail func.name ~instruction:index "f32 extraction must produce scalar<f32>";
-          ensure_operand_f32 func.name environment index rack;
+          let rack_type = find_type func.name environment index rack in
+          require_word_rack func.name ~instruction:index "extraction input" rack_type;
+          (match rack_type with
+          | N.Rack element when typ = N.Scalar element -> ()
+          | _ -> fail func.name ~instruction:index "extraction must preserve the lane's scalar type");
           (match N.IntMap.find_opt lane integer_constants with
           | Some lane when lane >= 0l && lane < Int32.of_int (Target.info profile).f32_lanes ->
-              let lane = Option.get (M.f32_lane_of_int (Int32.to_int lane)) in
-              Some (M.Extract_f32 { dst; source = rack; lane; provenance })
+              let lane = Option.get (M.word32_lane_of_int (Int32.to_int lane)) in
+              Some (M.Extract_word32 { dst; source = rack; lane; provenance })
           | _ -> fail func.name ~instruction:index
               "extract requires a literal lane within the selected profile's rack")
       | N.Insert { rack; inserted; lane } ->
-          let dst = rack_result () in
-          ensure_operand_f32 func.name environment index rack;
-          if find_type func.name environment index inserted <> N.Scalar N.F32 then
-            fail func.name ~instruction:index "f32 insertion requires scalar<f32>";
+          let dst = word_rack_result () in
+          let rack_type = find_type func.name environment index rack in
+          require_word_rack func.name ~instruction:index "insertion input" rack_type;
+          (match rack_type with
+          | N.Rack element when find_type func.name environment index inserted = N.Scalar element -> ()
+          | _ -> fail func.name ~instruction:index "insertion requires the lane's scalar type");
           (match N.IntMap.find_opt lane integer_constants with
           | Some lane when lane >= 0l && lane < Int32.of_int (Target.info profile).f32_lanes ->
-              let lane = Option.get (M.f32_lane_of_int (Int32.to_int lane)) in
-              Some (M.Insert_f32 { dst; previous = rack; inserted; lane; provenance })
+              let lane = Option.get (M.word32_lane_of_int (Int32.to_int lane)) in
+              Some (M.Insert_word32 { dst; previous = rack; inserted; lane; provenance })
           | _ -> fail func.name ~instruction:index
               "insert requires a literal lane within the selected profile's rack")
       | N.Shuffle { racks; indices } ->

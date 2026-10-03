@@ -68,6 +68,20 @@ scratch native_unsigned_bits(<factor: f32>, <value: u32>, <limit: u32>) -> u32:
   let values: u32s = <value>
   bitmask(values >= <limit>)
 
+scratch native_extract_signed(<value: i32>) -> i32:
+  let values: i32s = <value>
+  extract(values, 3)
+
+scratch native_insert_unsigned(<value: u32>, <replacement: u32>) -> u32:
+  let values: u32s = <value>
+  let changed = insert(values, 3, <replacement>)
+  extract(changed, 3)
+
+scratch native_relocate_unsigned(<value: u32>) -> u32:
+  let values: u32s = <value>
+  let <picked: u32> = extract(values, 0)
+  extract(insert(values, 3, <picked>), 3)
+
 slow main() -> i32:
   let original: f32 = -0.0
   let carried = native_identity(<original>)
@@ -105,4 +119,10 @@ slow main() -> i32:
     return 10
   if native_reduced_choice(<3.5>) != 3.5 or bitcast(u32, native_reduced_choice(<-3.5>)) != bitcast(u32, original):
     return 11
+  if native_extract_signed(<-2147483648>) != -2147483648:
+    return 12
+  if native_insert_unsigned(<0>, <4294967295>) != 4294967295:
+    return 13
+  if native_relocate_unsigned(<2147483648>) != 2147483648:
+    return 14
   return i32(native_identity(<3.5>))

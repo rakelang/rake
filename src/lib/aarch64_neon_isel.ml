@@ -198,12 +198,12 @@ let select_function (func : N.func) =
             let lane = fresh loc in
             let combined = if rest = [] && not scan then dst else fresh loc in
             let accumulated = if not scan then previous else if rest = [] then dst else fresh loc in
-            [ M.Broadcast_f32 { dst = lane; source; lane = lane_index; provenance } ]
+            [ M.Broadcast_word32 { dst = lane; source; lane = lane_index; provenance } ]
             @ combine prefix lane combined
-            @ (if scan then [ M.Insert_f32 { dst = accumulated; previous; inserted = combined; lane = lane_index; provenance } ] else [])
+            @ (if scan then [ M.Insert_word32 { dst = accumulated; previous; inserted = combined; lane = lane_index; provenance } ] else [])
             @ steps combined accumulated rest
       in
-      [ M.Broadcast_f32 { dst = initial; source; lane = M.Lane0; provenance } ]
+      [ M.Broadcast_word32 { dst = initial; source; lane = M.Lane0; provenance } ]
       @ (match canonical_nan with None -> [] | Some dst -> [ M.Uniform_f32 { dst; bits = 0x7fc00000l; provenance } ])
       @ steps initial source [ M.Lane1; M.Lane2; M.Lane3 ]
     in
@@ -276,7 +276,7 @@ let select_function (func : N.func) =
           | None -> (
               match find_type func.name environment index scalar with
               | N.Scalar (N.F32 | N.I32 | N.U32) ->
-                  [ M.Broadcast_f32 { dst; source = scalar; lane = M.Lane0; provenance } ]
+                  [ M.Broadcast_word32 { dst; source = scalar; lane = M.Lane0; provenance } ]
               | typ ->
                   fail func.name ~instruction:index
                     (Printf.sprintf "rack.broadcast requires a 32-bit uniform, got %s"
@@ -464,26 +464,30 @@ let select_function (func : N.func) =
             "loops are not part of this isolated NEON register-selection slice"
       | N.Extract { rack; lane } ->
           let dst, typ = result func.name index instruction in
-          if typ <> N.Scalar N.F32 then
-            fail func.name ~instruction:index "f32 extraction must produce scalar<f32>";
-          ensure_operand_f32 func.name environment index rack;
+          let rack_type = find_type func.name environment index rack in
+          require_word_rack func.name ~instruction:index "extraction input" rack_type;
+          (match rack_type with
+          | N.Rack element when typ = N.Scalar element -> ()
+          | _ -> fail func.name ~instruction:index "extraction must preserve the lane's scalar type");
           let lane = match N.IntMap.find_opt lane integer_constants with
             | Some 0l -> M.Lane0 | Some 1l -> M.Lane1
             | Some 2l -> M.Lane2 | Some 3l -> M.Lane3
             | _ -> fail func.name ~instruction:index
                 "extract requires a literal lane within the four-lane NEON rack" in
-          [ M.Broadcast_f32 { dst; source = rack; lane; provenance } ]
+          [ M.Broadcast_word32 { dst; source = rack; lane; provenance } ]
       | N.Insert { rack; inserted; lane } ->
-          let dst = rack_result () in
-          ensure_operand_f32 func.name environment index rack;
-          if find_type func.name environment index inserted <> N.Scalar N.F32 then
-            fail func.name ~instruction:index "f32 insertion requires scalar<f32>";
+          let dst = word_rack_result () in
+          let rack_type = find_type func.name environment index rack in
+          require_word_rack func.name ~instruction:index "insertion input" rack_type;
+          (match rack_type with
+          | N.Rack element when find_type func.name environment index inserted = N.Scalar element -> ()
+          | _ -> fail func.name ~instruction:index "insertion requires the lane's scalar type");
           let lane = match N.IntMap.find_opt lane integer_constants with
             | Some 0l -> M.Lane0 | Some 1l -> M.Lane1
             | Some 2l -> M.Lane2 | Some 3l -> M.Lane3
             | _ -> fail func.name ~instruction:index
                 "insert requires a literal lane within the four-lane NEON rack" in
-          [ M.Insert_f32 { dst; previous = rack; inserted; lane; provenance } ]
+          [ M.Insert_word32 { dst; previous = rack; inserted; lane; provenance } ]
       | N.Shuffle { racks; indices } ->
           let dst = word_rack_result () in
           List.iter (fun rack -> require_word_rack func.name ~instruction:index "shuffle input"
@@ -501,14 +505,14 @@ let select_function (func : N.func) =
           let rec steps previous = function
             | [] -> []
             | output_lane :: rest ->
-                let index = M.f32_lane_index output_lane in
+                let index = M.word32_lane_index output_lane in
                 let source, lane = selected index in
                 let picked = fresh instruction.loc in
                 let accumulated = if rest = [] then dst else fresh instruction.loc in
-                [ M.Broadcast_f32 { dst = picked; source; lane; provenance };
-                  M.Insert_f32 { dst = accumulated; previous; inserted = picked; lane = output_lane; provenance } ]
+                [ M.Broadcast_word32 { dst = picked; source; lane; provenance };
+                  M.Insert_word32 { dst = accumulated; previous; inserted = picked; lane = output_lane; provenance } ]
                 @ steps accumulated rest in
-          [ M.Broadcast_f32 { dst = initial; source; lane; provenance } ]
+          [ M.Broadcast_word32 { dst = initial; source; lane; provenance } ]
           @ steps initial [ M.Lane1; M.Lane2; M.Lane3 ]
       | N.Convert { operand; element = N.F32 } ->
           let dst = rack_result () in

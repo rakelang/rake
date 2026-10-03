@@ -41,8 +41,8 @@ let registers = function
   | A.Uniform_mask { dst; _ } -> [ dst ]
   | A.Broadcastss { dst; source } -> [ dst; source ]
   | A.Broadcast_bool { dst; source } -> [ dst; source ]
-  | A.Extract_f32 { dst; source; _ } -> [ dst; source ]
-  | A.Insert_f32 { dst; previous; inserted; broadcast; _ } -> [ dst; previous; inserted; broadcast ]
+  | A.Extract_word32 { dst; source; _ } -> [ dst; source ]
+  | A.Insert_word32 { dst; previous; inserted; broadcast; _ } -> [ dst; previous; inserted; broadcast ]
   | A.Shuffle_word { dst; racks; scratch; _ } -> dst :: racks @ scratch
   | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
   | A.Reduce_f32 { dst; source; scratch; _ }
@@ -109,8 +109,8 @@ let validate_function profile (func : A.func) =
               match operation with
               | A.Integer_parameter { argument; _ } when argument < 0 || argument >= 6 ->
                   Error { function_name = func.name; loc; message = "integer argument is outside the System V register boundary" }
-              | A.Extract_f32 { lane; _ } | A.Insert_f32 { lane; _ }
-                  when M.f32_lane_index lane >= (Target.info profile).f32_lanes ->
+              | A.Extract_word32 { lane; _ } | A.Insert_word32 { lane; _ }
+                  when M.word32_lane_index lane >= (Target.info profile).f32_lanes ->
                   Error { function_name = func.name; loc; message = "lane transfer is outside the selected profile's rack" }
               | A.Shuffle_word { racks; indices; _ }
                   when let lanes = (Target.info profile).f32_lanes in
@@ -311,11 +311,11 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       else (
         emit "vpslld %s, %s, 31" (ymm dst) (ymm dst);
         emit "vpsrad %s, %s, 31" (ymm dst) (ymm dst))
-  | A.Extract_f32 { dst; source; lane } -> splat_lane dst source (M.f32_lane_index lane)
-  | A.Insert_f32 { dst; previous; inserted; lane; broadcast } ->
+  | A.Extract_word32 { dst; source; lane } -> splat_lane dst source (M.word32_lane_index lane)
+  | A.Insert_word32 { dst; previous; inserted; lane; broadcast } ->
       if sse then (move broadcast inserted; emit "shufps %s, %s, 0x00" (ymm broadcast) (ymm broadcast))
       else emit "vbroadcastss %s, xmm%d" (ymm broadcast) inserted;
-      insert_broadcast_lane dst previous broadcast (M.f32_lane_index lane)
+      insert_broadcast_lane dst previous broadcast (M.word32_lane_index lane)
   | A.Shuffle_word { dst; racks; indices; scratch } ->
       let mask_bits = List.map (fun index -> if index >= lanes then -1l else 0l) indices in
       let load_indices register =

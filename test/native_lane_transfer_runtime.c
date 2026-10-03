@@ -6,6 +6,8 @@
 #include <string.h>
 
 typedef float rack __attribute__((vector_size(LANES * 4)));
+typedef int32_t signed_rack __attribute__((vector_size(LANES * 4)));
+typedef uint32_t unsigned_rack __attribute__((vector_size(LANES * 4)));
 
 extern bool mask_all(rack);
 extern bool mask_any(rack);
@@ -55,7 +57,17 @@ extern rack shuffle_same_input(rack);
     extern rack insert_constant_lane_##index(rack); \
     extern rack insert_keep_source_lane_##index(rack, float); \
     extern rack insert_keep_scalar_lane_##index(rack, float); \
-    extern rack relocate_lane_##index(rack);
+    extern rack relocate_lane_##index(rack); \
+    DECLARE_INTEGER_LANE(signed, int32_t, signed_rack, index) \
+    DECLARE_INTEGER_LANE(unsigned, uint32_t, unsigned_rack, index)
+#define DECLARE_INTEGER_LANE(kind, scalar, vector, index) \
+    extern scalar extract_##kind##_lane_##index(vector); \
+    extern vector broadcast_##kind##_lane_##index(vector); \
+    extern vector keep_##kind##_lane_##index(vector); \
+    extern vector insert_##kind##_lane_##index(vector, scalar); \
+    extern vector insert_keep_##kind##_lane_##index(vector, scalar); \
+    extern vector relocate_##kind##_lane_##index(vector); \
+    extern vector insert_constant_##kind##_lane_##index(vector);
 DECLARE_LANE(0) DECLARE_LANE(1) DECLARE_LANE(2) DECLARE_LANE(3)
 #if LANES > 4
 DECLARE_LANE(4) DECLARE_LANE(5) DECLARE_LANE(6) DECLARE_LANE(7)
@@ -330,8 +342,78 @@ static int check_shuffles(const uint32_t patterns[16], int scenario)
     return 0;
 }
 
+/* This scalar bit oracle uses separately compiled C vector/scalar signatures.
+   No floating interpretation or signed arithmetic enters its expectations. */
+#define CHECK_INTEGER_LANE_TRANSFERS(kind, scalar, vector, constant) \
+static int check_##kind##_lane_transfers(void) \
+{ \
+    scalar (*const extracts[])(vector) = { ALL_LANES(extract_##kind##_lane_) }; \
+    vector (*const broadcasts[])(vector) = { ALL_LANES(broadcast_##kind##_lane_) }; \
+    vector (*const keeps[])(vector) = { ALL_LANES(keep_##kind##_lane_) }; \
+    vector (*const inserts[])(vector, scalar) = { ALL_LANES(insert_##kind##_lane_) }; \
+    vector (*const insert_keeps[])(vector, scalar) = { ALL_LANES(insert_keep_##kind##_lane_) }; \
+    vector (*const relocates[])(vector) = { ALL_LANES(relocate_##kind##_lane_) }; \
+    vector (*const constants[])(vector) = { ALL_LANES(insert_constant_##kind##_lane_) }; \
+    const uint32_t patterns[] = { 0u, 1u, UINT32_MAX, 0x80000000u, \
+        0x7fffffffu, 0x80000001u, 0x01234567u, 0xfedcba98u, \
+        0x7f812345u, 0xff812346u, 0xaaaaaaaau, 0x55555555u, \
+        0x00010000u, 0xffff0000u, 0x01010101u, 0x80808080u }; \
+    for (int scenario = 0; scenario < 16; ++scenario) { \
+        uint32_t input[LANES], output[LANES]; \
+        for (int lane = 0; lane < LANES; ++lane) input[lane] = patterns[(lane + scenario) % 16]; \
+        vector values; \
+        memcpy(&values, input, sizeof values); \
+        for (int lane = 0; lane < LANES; ++lane) { \
+            feclearexcept(FE_ALL_EXCEPT); \
+            if ((uint32_t)extracts[lane](values) != input[lane]) return 38; \
+            const vector selected[] = { broadcasts[lane](values), keeps[lane](values), \
+                relocates[lane](values), constants[lane](values) }; \
+            for (int operation = 0; operation < 4; ++operation) { \
+                memcpy(output, &selected[operation], sizeof output); \
+                for (int target = 0; target < LANES; ++target) { \
+                    uint32_t expected; \
+                    if (operation == 0) expected = input[lane]; \
+                    else if (operation == 1) expected = input[target] ^ input[lane]; \
+                    else if (operation == 2) expected = target == lane ? input[(lane + 1) % LANES] : input[target]; \
+                    else expected = target == lane ? (constant) : input[target]; \
+                    if (output[target] != expected) { \
+                        fprintf(stderr, #kind " transfer %d lane %d target %d: expected %08x got %08x\n", \
+                            operation, lane, target, expected, output[target]); \
+                        return 39; \
+                    } \
+                } \
+            } \
+            for (int replacement_index = 0; replacement_index < 16; ++replacement_index) { \
+                scalar replacement; \
+                memcpy(&replacement, &patterns[replacement_index], sizeof replacement); \
+                const vector replaced[] = { inserts[lane](values, replacement), insert_keeps[lane](values, replacement) }; \
+                for (int operation = 0; operation < 2; ++operation) { \
+                    memcpy(output, &replaced[operation], sizeof output); \
+                    for (int target = 0; target < LANES; ++target) { \
+                        uint32_t expected = target == lane ? patterns[replacement_index] : input[target]; \
+                        if (operation == 1) expected ^= input[target] ^ patterns[replacement_index]; \
+                        if (output[target] != expected) { \
+                            fprintf(stderr, #kind " insert %d lane %d target %d: expected %08x got %08x\n", \
+                                operation, lane, target, expected, output[target]); \
+                            return 40; \
+                        } \
+                    } \
+                } \
+            } \
+            if (fetestexcept(FE_ALL_EXCEPT)) return 41; \
+        } \
+    } \
+    return 0; \
+}
+CHECK_INTEGER_LANE_TRANSFERS(signed, int32_t, signed_rack, 0x80000000u)
+CHECK_INTEGER_LANE_TRANSFERS(unsigned, uint32_t, unsigned_rack, UINT32_MAX)
+
 int main(void)
 {
+    const int signed_lanes = check_signed_lane_transfers();
+    if (signed_lanes) return signed_lanes;
+    const int unsigned_lanes = check_unsigned_lane_transfers();
+    if (unsigned_lanes) return unsigned_lanes;
     const int boolean = check_boolean_conditions();
     if (boolean) return boolean;
     const int uniform = check_uniform_conditions();

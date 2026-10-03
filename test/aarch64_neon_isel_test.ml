@@ -119,7 +119,7 @@ let () =
     }
   in
   (match (expect_ok scalar_broadcast).instructions with
-  | [ M.Broadcast_f32 { dst = 1; source = 0; _ } ] -> ()
+  | [ M.Broadcast_word32 { dst = 1; source = 0; _ } ] -> ()
   | _ -> failwith "uniform scalar parameter did not select a NEON DUP broadcast");
 
   let with_body name parameters result instructions terminator =

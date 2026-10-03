@@ -155,7 +155,8 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | static one- and two-rack `shuffle` | yes | yes |
 | `bitcast` between `i32s` and `u32s` | yes | yes |
 | `to_f32` (`i32s` or `u32s` to `f32s`) | yes | yes |
-| runtime shift counts, extraction and insertion | WIP* | WIP* |
+| literal-index `extract` and `insert` | yes | yes |
+| runtime shift counts | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
 float racks, and float masks can select integer racks. The
@@ -416,7 +417,7 @@ scratch step_east(here: u64s, open: u64s, board: u64s, <carry: u32>) -> u64s:
 Lane indices start at zero and must be integer literals within the selected
 profile's width: 0–3 on SSE2 and NEON, 0–7 on AVX2, and 0–15 on AVX-512.
 `wasm-simd128` supports extraction from its float and integer rack types.
-The physical profiles currently support `f32s` only.
+The physical profiles support `f32s`, `i32s` and `u32s`.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -426,21 +427,26 @@ scratch fourth(values: f32s) -> f32:
 scratch add_fourth(values: f32s) -> f32s:
   let <picked: f32> = extract(values, 3)
   values + <picked>
+
+scratch fourth_unsigned(values: u32s) -> u32:
+  extract(values, 3)
 ```
 
 The first scratch returns one scalar. The second broadcasts that scalar back
 across the rack before adding it to the original values. Native extraction
 uses full-width vector lane transfers, then returns the selected low lane
-through the scalar C ABI. It preserves the selected bits, including a
-signalling NaN, without floating-point arithmetic or exceptions.
+through the scalar C ABI. Integer results use the platform's integer return
+register, and their signedness follows the input rack. The transfers preserve
+every bit, including a signalling NaN in a float rack, without floating-point
+arithmetic or exceptions.
 Native stream traversal still rejects extraction until its partial-rack
 participation contract is implemented.
 
 ## Lane insertion
 
 `insert(values, 3, <replacement>)` produces a rack with lane 3 replaced by
-the uniform `f32`. Every other lane keeps its original bits. The index is
-a literal with the same profile bounds as extraction, and `values` remains
+the uniform of the same element type. Every other lane keeps its original
+bits. The index is a literal with the same profile bounds as extraction, and `values` remains
 available after the operation.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
@@ -451,14 +457,17 @@ scratch replace_fourth(values: f32s, <replacement: f32>) -> f32s:
 scratch copy_first_to_fourth(values: f32s) -> f32s:
   let <picked: f32> = extract(values, 0)
   insert(values, 3, <picked>)
+
+scratch replace_fourth_unsigned(values: u32s, <replacement: u32>) -> u32s:
+  insert(values, 3, <replacement>)
 ```
 
 The first scratch replaces one lane with an argument. The second copies
 the first lane into the fourth, leaving the other lanes unchanged. These
 transfers preserve signed zeros and NaN payloads without floating-point
-arithmetic or exceptions. The physical profiles support `f32s`, while
-WebAssembly also supports its integer racks. Native stream insertion remains
-WIP* until its partial-rack participation contract is implemented.
+arithmetic or exceptions. The physical profiles support `f32s`, `i32s` and
+`u32s`, while WebAssembly also supports its other integer racks. Native stream
+insertion remains WIP* until its partial-rack participation contract is implemented.
 
 ## Shuffles
 

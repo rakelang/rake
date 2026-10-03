@@ -7,6 +7,15 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Literal-index `extract` and `insert` support `i32s` and `u32s` on SSE2,
+  AVX2, AVX-512F and NEON. They reuse the float lane transfers without
+  numerical conversion. Scalar integer values cross the platform's integer
+  C ABI and remain in vector registers inside kernels. Independent C checks
+  every lane, signed boundaries, unsigned high bits, rebroadcasts and
+  preservation of still-live racks and replacement uniforms. Mixed-program
+  checks cover slow callers and WebAssembly. Native stream participation
+  remains WIP.
+
 - `to_u32` converts `f32s` to unsigned 32-bit racks on all five CPU profiles,
   including native streams. It rounds to nearest with ties to even, clamps
   to the unsigned range and converts NaNs to zero. SSE2 and AVX2 use packed
