@@ -13,7 +13,7 @@ remain work in progress. This roadmap states what we intend to build next.
 The development compiler after 0.6.0-beta compiles slow orchestration and
 register kernels into one native object. Its C unit embeds Rake-selected
 assembly, and the final object's kernels pass the existing instruction
-verifier. Slow callers can use uniform `f32`, `i32` or `u32` parameters and
+verifier. Slow callers can use uniform `f32`, `i32`, `u32` or `bool` parameters and
 `f32`, `bool`, `i32` or `u32` results.
 Imported C structs use their header's layout, and public slow functions have
 the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`
@@ -124,8 +124,14 @@ Direct uniform `f32` comparisons now choose a whole rack on all four physical
 profiles. The comparison uses broadcasts and vector masks, with protected
 operands in untaken branches. Independent C checks all six ordered predicates,
 including quiet NaNs, and conditions nested inside through masks. Guard-page
-checks cover stream tails and in-place output. Integer and Boolean uniform
-conditions remain work in progress on the physical profiles.
+checks cover stream tails and in-place output. Boolean uniforms also choose
+whole racks on the physical profiles, including values from `all` and `any`.
+Their broadcasts expand the value bit into vector masks. C `bool` arguments
+use the integer argument slots, with unused upper bits discarded at entry.
+Independent C checks exact choices, every reduced lane mask, fused expressions
+and protected roots nested inside through masks. Deliberately set upper
+argument bits check the C ABI boundary. Boolean stream arguments remain work
+in progress.
 
 We will bring the physical profiles up to the language's published operation
 set. The development compiler now supports 32-bit integer wrapping add/subtract/multiply
@@ -176,11 +182,15 @@ the platform's integer argument registers. Entry imports use allocated vector
 registers, and rack arithmetic uses broadcasts of their exact bits. Independent
 C checks mixed argument order, high-bit values, all integer argument slots,
 eight SIMD arguments alongside an integer uniform, and retained input racks.
-Slow callers use the same boundary. Integer uniform conditions and native
-integer stream arguments remain work in progress.
+Slow callers use the same boundary. Direct `i32` and `u32` uniform
+comparisons now choose a whole rack through vector comparison and selection.
+Independent C checks all six signed and unsigned predicates, literals on
+either side, retained inputs and nesting within a through mask. The
+untaken floating-point branches retain their inactive-operand protection.
+Native integer stream arguments remain work in progress.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
-integer extraction and insertion, the remaining uniform conditionals and
+integer extraction and insertion, the remaining scalar expressions and
 gather. A CPU profile
 will gain an operation only when its compiled result matches the interpreter
 and its object verifier proves the selected vector sequence.

@@ -3,16 +3,16 @@
     platform's vector argument slots. *)
 
 type parameter = { register : int; persistent : bool }
-type argument_class = Vector | Integer32
+type argument_class = Vector | Integer32 | Boolean
 type integer_transfer = { argument : int; register : int }
 
 let resolve ~available ~argument_count ~integer_argument_count ~classes assigned =
   let parameter_count = List.length classes in
-  let vector_count = List.fold_left (fun count -> function Vector -> count + 1 | Integer32 -> count) 0 classes in
+  let vector_count = List.fold_left (fun count -> function Vector -> count + 1 | Integer32 | Boolean -> count) 0 classes in
   let integer_count = parameter_count - vector_count in
   match assigned with
   | Some _ when integer_count > 0 ->
-      Error "native traversals do not yet take integer uniform arguments"
+      Error "native traversals do not yet take integer or Boolean uniform arguments"
   | None when vector_count > argument_count ->
       Error (Printf.sprintf
         "native calling convention requires %d vector arguments but provides %d register slots; stack arguments are forbidden"
@@ -37,7 +37,7 @@ let resolve ~available ~argument_count ~integer_argument_count ~classes assigned
                   let register = !vector_slot in
                   incr vector_slot;
                   { register; persistent = false }
-              | Integer32 ->
+              | Integer32 | Boolean ->
                   let argument = !integer_slot in
                   let register = List.nth remaining argument in
                   incr integer_slot;

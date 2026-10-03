@@ -543,6 +543,8 @@ let rec eval_expr ~lanes env (expr : expr) =
   if lanes <= 0 then error expr.loc (Invalid_lane_count lanes)
   else
     match expr.v with
+    | EBroadcast { v = EBool value; _ } ->
+        Ok (Int_scalar (Types.SBool, if value then 1L else 0L))
     | EInt value | EBroadcast { v = EInt value; _ } -> Ok (int_rack Types.SInt (Array.make lanes value))
     | EScalarVar name when (match List.assoc_opt name env with Some (Int_scalar _ | U32_scalar _) -> true | _ -> false) ->
         Ok (List.assoc name env)

@@ -319,7 +319,10 @@ let rec lower_expr state provenance (expr : expr) =
       | Ir.Scalar Ir.F32 -> Ok (emit state expr.loc provenance (Ir.Rack Ir.F32) (Ir.Broadcast (fst scalar)))
       | Ir.Scalar element when is_integer_element element ->
           Ok (emit state expr.loc provenance (Ir.Rack element) (Ir.Broadcast (fst scalar)))
+      | Ir.Scalar Ir.I1 -> Ok scalar
       | _ -> expect_type expr.loc "uniform scalar use" (Ir.Scalar Ir.F32) scalar |> Result.map (fun () -> scalar))
+  | EBroadcast { v = EBool value; _ } ->
+      Ok (emit state expr.loc provenance (Ir.Scalar Ir.I1) (Ir.Const (Ir.Bool value)))
   | EBroadcast { v = EFloat value; _ } ->
       Ok (rack_constant state expr.loc provenance value)
   | EFloat value ->
@@ -716,18 +719,22 @@ and lower_scalar state (expr : expr) typ =
       Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Float32_bits (Int32.bits_of_float value))))
   | (EInt value | EBroadcast { v = EInt value; _ }), Ir.Scalar Ir.F32 ->
       Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Float32_bits (Int32.bits_of_float (Int64.to_float value)))))
+  | (EBool value | EBroadcast { v = EBool value; _ }), Ir.Scalar Ir.I1 ->
+      Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Bool value)))
   | _ -> errorf expr.loc "a uniform %s is written <name> or a literal" (Ir.string_of_typ typ)
 
 (** Whether an expression is a uniform condition: comparisons of uniform
     scalars and literals, or a uniform bool. *)
 and is_uniform (expr : expr) =
   match expr.v with
-  | EScalarVar _ | EInt _ | EFloat _ | EBool _ | EBroadcast { v = EScalarVar _ | EInt _ | EFloat _; _ } -> true
+  | EScalarVar _ | EInt _ | EFloat _ | EBool _ | EBroadcast { v = EScalarVar _ | EInt _ | EFloat _ | EBool _; _ } -> true
   | EBinop (l, (Lt | Le | Gt | Ge | Eq | Ne), r) -> is_uniform l && is_uniform r
   | _ -> false
 
 and uniform_condition state provenance (expr : expr) =
   match expr.v with
+  | EBroadcast { v = EBool value; _ } ->
+      Ok (emit state expr.loc provenance (Ir.Scalar Ir.I1) (Ir.Const (Ir.Bool value)))
   | EScalarVar name | EBroadcast { v = EScalarVar name; _ } ->
       let* value = find_binding state expr.loc name in
       let* () = expect_type expr.loc "a uniform condition" (Ir.Scalar Ir.I1) value in
@@ -747,26 +754,32 @@ and uniform_condition state provenance (expr : expr) =
       let* l = lower_scalar state l typ in
       let* r = lower_scalar state r typ in
       let comparison = Option.get (ir_comparison comparison) in
-      if not (Target.is_wasm state.profile) && typ = Ir.Scalar Ir.F32 then
+      (match typ with
+      | Ir.Scalar ((Ir.F32 | Ir.I32 | Ir.U32) as element) when not (Target.is_wasm state.profile) ->
         (* Physical profiles compare broadcasts in their vector registers.
            All participating lanes take the same arm, with no scalar branch. *)
         let broadcast scalar =
-          emit state expr.loc provenance (Ir.Rack Ir.F32) (Ir.Broadcast (fst scalar))
-          |> sanitize_operand state expr.loc provenance 0.0 in
+          let value = emit state expr.loc provenance (Ir.Rack element) (Ir.Broadcast (fst scalar)) in
+          if element = Ir.F32 then sanitize_operand state expr.loc provenance 0.0 value
+          else value in
         let left = broadcast l and right = broadcast r in
         Ok (emit state expr.loc provenance Ir.Mask (Ir.Compare (comparison, fst left, fst right)))
-      else
+      | _ ->
         Ok (emit state expr.loc Ir.source (Ir.Scalar Ir.I1)
-              (Ir.Compare (comparison, fst l, fst r)))
+              (Ir.Compare (comparison, fst l, fst r))))
   | _ -> error expr.loc "a uniform condition is a uniform bool or a comparison of uniform scalars"
 
-(** A physical f32 uniform comparison becomes an all-lanes mask. Its
+(** A physical Boolean uniform or f32, i32 or u32 comparison becomes an all-lanes mask. Its
     branches use the same inactive-operand protection as lane conditions.
     WebAssembly keeps its scalar condition and whole-rack select. *)
 and lower_if state provenance loc condition if_true if_false =
   let* condition =
     if is_uniform condition then uniform_condition state provenance condition
     else lower_expr state provenance condition in
+  let condition =
+    if snd condition = Ir.Scalar Ir.I1 && not (Target.is_wasm state.profile) then
+      emit state loc { Ir.source with fused = provenance.Ir.fused } Ir.Mask (Ir.Broadcast (fst condition))
+    else condition in
   if snd condition = Ir.Scalar Ir.I1 then
     let* if_true, if_false = lower_operands state provenance if_true if_false in
     let* if_true, if_false = expect_same loc "if" if_true if_false in

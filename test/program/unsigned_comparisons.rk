@@ -9,9 +9,15 @@ scratch uniform_bits(<left: u32>, values: u32s, <right: u32>) -> u32s:
 scratch uniform_minimum(<left: u32>, <right: u32>) -> u32:
   bitmask(min(<left>, <right>) = <left>)
 
+scratch uniform_choose(values: u32s, <left: u32>, <right: u32>) -> u32s:
+  if <left> < <right> then values else values + <1>
+
 run unsigned_uniforms(a: []u32, bits: mut []u32, bounded: mut []u32, <low: u32>, <high: u32>):
   bits[<0>] <- uniform_bits(<low>, a[<0>], <1>)
   bounded[<0>] <- min(<high>, max(<low>, a[<0>]))
+
+run unsigned_uniform_choice(a: []u32, out: mut []u32, <left: u32>, <right: u32>):
+  out[<0>] <- uniform_choose(a[<0>], <left>, <right>)
 
 run unsigned_extrema(a: []u32, b: []u32, smallest: mut []u32, largest: mut []u32, bounded: mut []u32):
   let left = a[<0>]
@@ -62,4 +68,12 @@ slow main() -> i32:
     return 7
   if uniform_minimum(<2147483648>, <4294967295>) != 15 or uniform_minimum(<4294967295>, <2147483648>) != 0:
     return 8
+  unsigned_uniform_choice(a, uniform_output, <2147483647>, <2147483648>)
+  for i from 0 up to 4:
+    if uniform_output[i] != a[i]:
+      return 9
+  unsigned_uniform_choice(a, uniform_output, <2147483648>, <2147483647>)
+  for i from 0 up to 4:
+    if uniform_output[i] != wrap_add(a[i], 1):
+      return 10
   return 0

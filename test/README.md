@@ -122,6 +122,14 @@ Exact selected lane bits cross the mixed vector/scalar C ABI. Literal
 operands, an extracted scalar, untaken roots and division, and conditions
 nested inside a through mask check the composed participation contract.
 
+Boolean choices use the same C oracle, including every `all` and `any`
+lane-mask pattern. Exact selected bits include signed zeros, infinities and
+NaN payloads. Fused expressions, six Boolean arguments, eight SIMD arguments
+alongside a Boolean, untaken roots and nested through masks check allocation
+and floating-point participation. Separate assembly callers set unspecified
+bits above a valid C Boolean byte and inspect the raw return register, so
+both false and true normalise independently of those upper bits.
+
 `test/native_integer_rack_test.sh` compares 32-bit wrapping add/subtract/multiply,
 signed negation and absolute value, signed and unsigned extrema, literal bit shifts, bitwise
 AND/OR/XOR/AND-NOT and all six signed and unsigned comparisons with independent scalar C
@@ -153,7 +161,13 @@ The C oracle also checks signed and unsigned uniform arguments across the
 platform's separate integer and SIMD register counters. Boundary values
 include zero, bit 31 and all-one bits, with retained racks, unsigned clamps,
 six integer arguments on x86, eight on AArch64, and eight SIMD arguments
-alongside an integer uniform. Independently assembled fixtures require exact
+alongside an integer uniform. Direct uniform conditions
+compare all six signed and unsigned predicates with scalar C, including
+boundary values, literals on either side and preserved input racks. Nested
+conditions inside a through mask check both selected results and the absence
+of floating-point exceptions from untaken work. Slow callers and the
+WebAssembly fixture exercise direct integer conditions too.
+Independently assembled fixtures require exact
 entry imports and reject wrong, missing, repeated and body-local transfers.
 Bit-shift checks cover every literal count from 0 to 31 on signed and unsigned
 racks. Unsigned scalar bit operations independently compute sign extension,

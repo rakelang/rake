@@ -11,6 +11,7 @@ type operation =
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Uniform_mask of { dst : vector_register; value : bool }
   | Broadcastss of { dst : vector_register; source : vector_register }
+  | Broadcast_bool of { dst : vector_register; source : vector_register }
   | Extract_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
   | Insert_f32 of {
       dst : vector_register;
@@ -223,6 +224,15 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
     in
     List.iter (fun (transfer : Native_register_assignment.integer_transfer) ->
       emit func.loc Native_ir.source (Integer_parameter { dst = transfer.register; argument = transfer.argument })) integer_transfers;
+    (* C leaves bits above a Boolean's value unspecified. Import every argument
+       first, then retain only bit zero using packed shifts in its vector slot. *)
+    List.iter2 (fun (assigned : Native_register_assignment.parameter) parameter ->
+      if parameter.M.argument_class = Native_register_assignment.Boolean then (
+        let count = Option.get (Native_ir.I32_shift_count.of_int32 31l) in
+        let dst = assigned.register in
+        emit func.loc Native_ir.source (Shift_i32 { dst; source = dst; count; shift = Native_ir.Shift_left });
+        emit func.loc Native_ir.source (Shift_i32 { dst; source = dst; count; shift = Native_ir.Shift_right })))
+      parameter_assignment func.parameters;
     let fail_pressure instruction =
       let required = I.cardinal !allocation + 1 in
       let provenance = M.provenance instruction in
@@ -300,7 +310,7 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
             | M.Uniform_f32 _ | M.Uniform_mask _ -> []
             (* The zero-minus sequence must retain its source until subtraction. *)
             | M.Neg_i32 _ -> []
-            | M.Broadcastss { source; _ } -> [ source ]
+            | M.Broadcastss { source; _ } | M.Broadcast_bool { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
             (* Two permutations still need both original racks. *)
             | M.Shuffle_word { racks = [ source ]; _ } -> [ source ]
@@ -370,6 +380,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               | M.Uniform_mask { value; _ } -> emit loc provenance (Uniform_mask { dst; value })
               | M.Broadcastss { source; _ } ->
                   emit loc provenance (Broadcastss { dst; source = p source })
+              | M.Broadcast_bool { source; _ } ->
+                  emit loc provenance (Broadcast_bool { dst; source = p source })
               | M.Extract_f32 { source; lane; _ } ->
                   emit loc provenance (Extract_f32 { dst; source = p source; lane })
               | M.Insert_f32 { previous; inserted; lane; _ } ->

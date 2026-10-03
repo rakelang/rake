@@ -33,6 +33,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         printf 'scratch uniform_%s(a: f32s, b: f32s, <left: f32>, <right: f32>) -> f32s:\n  if <left> %s <right> then a else b\n\n' "$comparison" "$operator" >> "$source"
     done
     printf 'scratch uniform_fused(a: f32s, b: f32s, <mode: f32>) -> f32s:\n  | shifted <| a + <1.0>\n  | chosen <| if <mode> > <0.0> then shifted else b\n  chosen + shifted\n\n' >> "$source"
+    printf 'scratch boolean_choice(a: f32s, <first: bool>, b: f32s) -> f32s:\n  if <first> then a else b\n\nscratch boolean_fused(a: f32s, b: f32s, <first: bool>) -> f32s:\n  | chosen <| if <first> then a else b\n  chosen + a + b\n\nscratch boolean_any(a: f32s, b: f32s) -> f32s:\n  let <take: bool> = any(a > <0.0>)\n  if <take> then a else b\n\nscratch boolean_all(a: f32s, b: f32s) -> f32s:\n  if all(a > <0.0>) then a else b\n\nscratch boolean_identity(<value: bool>) -> bool:\n  <value>\n\nscratch boolean_guarded_roots(values: f32s, <positive: bool>) -> f32s:\n  if <positive> then sqrt(values) else -sqrt(-values)\n\nrake boolean_nested(values: f32s, <root: bool>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive into selected:\n    if <root> then sqrt(values) else values / <2.0>\n  sweep:\n    | #positive => selected\n    | #positive gaps => <0.0>\n\nscratch boolean_six_slots(<a: bool>, <b: bool>, <c: bool>, <d: bool>, <e: bool>, <f: bool>) -> f32s:\n  let first = if <a> then <1.0> else <0.0>\n  let second = if <b> then <2.0> else <0.0>\n  let third = if <c> then <4.0> else <0.0>\n  let fourth = if <d> then <8.0> else <0.0>\n  let fifth = if <e> then <16.0> else <0.0>\n  let sixth = if <f> then <32.0> else <0.0>\n  first + second + third + fourth + fifth + sixth\n\nscratch boolean_eight_vectors(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s, <first: bool>) -> f32s:\n  if <first> then a + b + c + d + e + f + g + h else h\n\n' >> "$source"
     printf 'scratch uniform_literal_right(a: f32s, b: f32s, <value: f32>) -> f32s:\n  if <value> > <0.0> then a else b\n\nscratch uniform_literal_left(a: f32s, b: f32s, <value: f32>) -> f32s:\n  if <0.0> < <value> then a else b\n\nscratch uniform_extracted(a: f32s, b: f32s) -> f32s:\n  let <first: f32> = extract(a, 0)\n  if <first> > <0.0> then a else b\n\nscratch uniform_guarded_roots(values: f32s, <mode: f32>) -> f32s:\n  if <mode> >= <0.0> then sqrt(values) else -sqrt(-values)\n\nrake uniform_nested(values: f32s, <left: f32>, <right: f32>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive else <0.0> into selected:\n    if <left> > <right> then sqrt(values) else values / <right>\n  sweep:\n    | #positive => selected\n    | _ => <0.0>\n\n' >> "$source"
     for pattern in reverse rotate repeat identity weave mixed right; do
         indices=()
@@ -60,15 +61,29 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         fi
     done
     "$rakec" --verify-native --target "$profile" -o "${tmp}/${profile}.o" "$source"
+    # A conforming caller may leave bits above the Boolean byte unspecified.
+    # Return the raw integer register so the C oracle also checks normalisation.
+    for truth in 0 1; do
+        if [[ "$profile" == aarch64-neon ]]; then
+            printf '.text\n.global poison_boolean_%s\n.type poison_boolean_%s, %%function\npoison_boolean_%s:\n  stp x29, x30, [sp, -16]!\n  mov w0, #%s\n  movk w0, #0xa5a5, lsl #16\n  bl boolean_identity\n  ldp x29, x30, [sp], 16\n  ret\n' "$truth" "$truth" "$truth" "$((256 + truth))"
+        else
+            printf '.text\n.global poison_boolean_%s\n.type poison_boolean_%s, @function\npoison_boolean_%s:\n  sub $8, %%rsp\n  mov $%s, %%edi\n  call boolean_identity\n  add $8, %%rsp\n  ret\n' "$truth" "$truth" "$truth" "$((0xa5a50100 + truth))"
+        fi
+    done > "${tmp}/boolean-caller.s"
+    if [[ "$profile" == aarch64-neon ]]; then
+        printf '.section .note.GNU-stack,"",%%progbits\n' >> "${tmp}/boolean-caller.s"
+    else
+        printf '.section .note.GNU-stack,"",@progbits\n' >> "${tmp}/boolean-caller.s"
+    fi
     if [[ "$profile" == aarch64-neon ]]; then
         aarch64-unknown-linux-gnu-gcc -O1 -static -ffp-contract=off -DLANES="$lanes" \
             -isystem "${RAKE_AARCH64_LIBC_DEV}/include" \
             -B"${RAKE_AARCH64_LIBC}/lib" -L"${RAKE_AARCH64_LIBC_STATIC}/lib" \
-            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" -lm -o "${tmp}/${profile}"
+            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
         qemu-aarch64 "${tmp}/${profile}"
     else
         cc -O1 -ffp-contract=off "${flags[@]}" -DLANES="$lanes" \
-            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" -lm -o "${tmp}/${profile}"
+            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
         if [[ "$profile" == x86-avx512 ]] && ! grep -qw avx512f /proc/cpuinfo; then
             if [[ -z "${RAKE_SDE:-}" ]]; then
                 echo "AVX-512 lane-transfer runtime requires AVX-512F or RAKE_SDE" >&2

@@ -117,6 +117,7 @@ let slow_body statements =
 %token <float> FLOAT_LIT
 %token <float> SCALAR_FLOAT_LIT
 %token <int64> SCALAR_INT_LIT
+%token <bool> SCALAR_BOOL_LIT
 %token <string> IDENT
 %token <string> TYPE_IDENT
 %token <string> SCALAR_IDENT
@@ -401,6 +402,9 @@ pred_atom:
   | f = FLOAT_LIT { mk_node (EFloat f) $startpos $endpos }
   | TRUE { mk_node (EBool true) $startpos $endpos }
   | FALSE { mk_node (EBool false) $startpos $endpos }
+  | b = SCALAR_BOOL_LIT {
+      mk_node (EBroadcast (mk_node (EBool b) $startpos $endpos)) $startpos $endpos
+    }
   | n = SCALAR_INT_LIT {
       mk_node (EBroadcast (mk_node (EInt n) $startpos $endpos)) $startpos $endpos
     }
@@ -414,6 +418,8 @@ pred_atom:
 (* A uniform scalar marked at its use: <name>, <record.field>, <view[index]>. *)
 broadcast_inner:
   | name = IDENT { mk_node (EVar name) $startpos $endpos }
+  | TRUE { mk_node (EBool true) $startpos $endpos }
+  | FALSE { mk_node (EBool false) $startpos $endpos }
   | e = broadcast_inner DOT name = field_ident { mk_node (EField (e, name)) $startpos $endpos }
   | e = broadcast_inner LBRACKET i = expr RBRACKET { mk_node (EIndex (e, i, false)) $startpos $endpos }
   | e = broadcast_inner LBRACKET UNCHECKED i = expr RBRACKET { mk_node (EIndex (e, i, true)) $startpos $endpos }
@@ -462,6 +468,9 @@ simple_expr:
   | f = FLOAT_LIT { mk_node (EFloat f) $startpos $endpos }
   | TRUE { mk_node (EBool true) $startpos $endpos }
   | FALSE { mk_node (EBool false) $startpos $endpos }
+  | b = SCALAR_BOOL_LIT {
+      mk_node (EBroadcast (mk_node (EBool b) $startpos $endpos)) $startpos $endpos
+    }
   | n = SCALAR_INT_LIT {
       mk_node (EBroadcast (mk_node (EInt n) $startpos $endpos)) $startpos $endpos
     }
@@ -634,6 +643,9 @@ expr_primary:
   | TRUE { mk_node (EBool true) $startpos $endpos }
   | FALSE { mk_node (EBool false) $startpos $endpos }
   | s = STRING_LIT { mk_node (EString s) $startpos $endpos }
+  | b = SCALAR_BOOL_LIT {
+      mk_node (EBroadcast (mk_node (EBool b) $startpos $endpos)) $startpos $endpos
+    }
   | n = SCALAR_INT_LIT {
       mk_node (EBroadcast (mk_node (EInt n) $startpos $endpos)) $startpos $endpos
     }

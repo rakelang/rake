@@ -30,6 +30,7 @@ type instruction =
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Uniform_mask of { dst : vreg; value : bool; provenance : provenance }
   | Broadcastss of { dst : vreg; source : vreg; provenance : provenance }
+  | Broadcast_bool of { dst : vreg; source : vreg; provenance : provenance }
   | Extract_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
   | Insert_f32 of { dst : vreg; previous : vreg; inserted : vreg; lane : f32_lane; provenance : provenance }
   | Shuffle_word of { dst : vreg; racks : vreg list; indices : int list; provenance : provenance }
@@ -114,6 +115,7 @@ let def = function
   | Uniform_f32 { dst; _ }
   | Uniform_mask { dst; _ }
   | Broadcastss { dst; _ }
+  | Broadcast_bool { dst; _ }
   | Extract_f32 { dst; _ }
   | Insert_f32 { dst; _ }
   | Shuffle_word { dst; _ }
@@ -149,6 +151,7 @@ let def = function
 let operands = function
   | Uniform_f32 _ | Uniform_mask _ -> []
   | Broadcastss { source; _ }
+  | Broadcast_bool { source; _ }
   | Extract_f32 { source; _ }
   | Reduce_mask { source; _ }
   | Reduce_f32 { source; _ }
@@ -180,6 +183,7 @@ let provenance = function
   | Uniform_f32 { provenance; _ }
   | Uniform_mask { provenance; _ }
   | Broadcastss { provenance; _ }
+  | Broadcast_bool { provenance; _ }
   | Extract_f32 { provenance; _ }
   | Insert_f32 { provenance; _ }
   | Shuffle_word { provenance; _ }
@@ -222,6 +226,7 @@ let instruction_name = function
   | Uniform_f32 _ -> "vbroadcastss"
   | Uniform_mask _ -> "mask.constant"
   | Broadcastss _ -> "vbroadcastss.xmm"
+  | Broadcast_bool _ -> "broadcast.boolean.mask"
   | Extract_f32 _ -> "extract.f32"
   | Insert_f32 _ -> "insert.f32"
   | Shuffle_word _ -> "shuffle.32"

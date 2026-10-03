@@ -7,6 +7,27 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Boolean uniforms choose whole racks on all four physical profiles, including
+  results of `all` and `any`. A packed broadcast and sign extension turn the
+  Boolean into a lane mask, with the usual protection for untaken floating-point
+  work. Native kernel arguments accept C `bool` through the integer argument
+  slots and retain only its value bit. Independent C checks both choices,
+  every reduced lane mask, fused expressions and nested through masks.
+  Assembly callers deliberately set unused upper argument bits. Slow callers
+  check Boolean arguments, literals, results and inlined calls. Boolean stream
+  arguments remain work in progress.
+  Marked literals `<true>` and `<false>` are Boolean uniforms, including
+  forms with spaces inside the brackets. The lexer previously treated the
+  compact forms as variable references, unlike the Tree-sitter grammar.
+
+- Direct uniform `i32` and `u32` comparisons choose whole racks on all four
+  physical profiles. Broadcast operands use the existing typed vector
+  comparisons, with mask protection for untaken floating-point work.
+  Independent C checks all six predicates, signed and unsigned boundaries,
+  literals on either side and retained input racks. Nested conditions inside
+  through masks check exception flags as well as results. Slow callers and
+  WebAssembly programs exercise the same source forms.
+
 - Native register kernels take `i32` and `u32` uniforms through the platform
   C integer argument registers, independently of SIMD argument slots. Their
   entry imports and vector broadcasts preserve all 32 bits. Verification
@@ -19,7 +40,7 @@ only when the compiler implements it and the tests cover it.
   explicitly typed rack bindings broadcast their uniforms. Native scalar
   integer constants stay in vector registers until the C return transfer.
   Executable semantics and WebAssembly checks cover unsigned boundary bits
-  and wrapping uniform arithmetic. Integer uniform conditions, stream
+  and wrapping uniform arithmetic. Integer stream
   arguments and runtime shift counts remain work in progress.
 
 - `u32s` `min` and `max` compile on SSE2, AVX2, AVX-512F, NEON and
@@ -107,8 +128,7 @@ only when the compiler implements it and the tests cover it.
   comparisons and selection, with benign operands in untaken branches.
   Independent C checks the six predicates, NaNs, signed zeros, subnormals,
   mixed scalar/vector arguments and nesting inside through masks. Stream
-  checks cover guarded tails, in-place output and Rake callers. Integer and
-  Boolean uniform conditions remain work in progress on physical profiles.
+  checks cover guarded tails, in-place output and Rake callers.
 
 - Float comparison masks support `all`, `any` and `bitmask` on all four
   physical profiles. Full-width bitwise reductions use one checked temporary

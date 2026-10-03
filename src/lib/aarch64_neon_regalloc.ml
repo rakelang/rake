@@ -15,6 +15,7 @@ type operation =
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Mask_const of { dst : vector_register; value : bool }
   | Broadcast_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
+  | Broadcast_bool of { dst : vector_register; source : vector_register }
   | Insert_f32 of { dst : vector_register; inserted : vector_register; lane : M.f32_lane }
   | Reduce_mask of {
       dst : vector_register;
@@ -181,6 +182,15 @@ let allocate_function ?parameter_assignment func =
     in
     List.iter (fun (transfer : Native_register_assignment.integer_transfer) ->
       emit func.loc Native_ir.source (Integer_parameter { dst = transfer.register; argument = transfer.argument })) integer_transfers;
+    (* Keep the Boolean's value bit, independently of unspecified upper C ABI
+       bits. All argument transfers stay together at the verified entry. *)
+    List.iter2 (fun (assigned : Native_register_assignment.parameter) parameter ->
+      if parameter.M.argument_class = Native_register_assignment.Boolean then (
+        let count = Option.get (Native_ir.I32_shift_count.of_int32 31l) in
+        let dst = assigned.register in
+        emit func.loc Native_ir.source (Shift_i32 { dst; source = dst; count; shift = Native_ir.Shift_left });
+        emit func.loc Native_ir.source (Shift_i32 { dst; source = dst; count; shift = Native_ir.Shift_right })))
+      parameter_assignment func.parameters;
     let fail_pressure ?(additional = 1) instruction =
       let required = I.cardinal !allocation + additional in
       let provenance = M.provenance instruction in
@@ -258,6 +268,7 @@ let allocate_function ?parameter_assignment func =
             match instruction with
             | M.Uniform_f32 _ | M.Mask_const _ -> []
             | M.Broadcast_f32 { source; _ } -> [ source ]
+            | M.Broadcast_bool { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
             | M.Fma { addend; _ } -> [ addend ]
             | M.Select { mask; if_false; if_true; _ } -> [ mask; if_false; if_true ]
@@ -282,6 +293,8 @@ let allocate_function ?parameter_assignment func =
               | M.Mask_const { value; _ } -> emit loc provenance (Mask_const { dst; value })
               | M.Broadcast_f32 { source; lane; _ } ->
                   emit loc provenance (Broadcast_f32 { dst; source = p source; lane })
+              | M.Broadcast_bool { source; _ } ->
+                  emit loc provenance (Broadcast_bool { dst; source = p source })
               | M.Insert_f32 { previous; inserted; lane; _ } ->
                   if reused <> Some previous then
                     emit loc provenance (Move { dst; source = p previous });

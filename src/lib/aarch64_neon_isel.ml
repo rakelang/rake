@@ -148,11 +148,11 @@ let select_function (func : N.func) =
     List.iter
       (fun (parameter : N.parameter) ->
         match parameter.typ with
-        | N.Rack (N.F32 | N.I32 | N.U32) | N.Scalar (N.F32 | N.I32 | N.U32) | N.Mask -> ()
+        | N.Rack (N.F32 | N.I32 | N.U32) | N.Scalar (N.F32 | N.I32 | N.U32 | N.I1) | N.Mask -> ()
         | typ ->
             fail func.name
               (Printf.sprintf
-                 "parameter %%%d has unsupported type %s; NEON kernels take 32-bit racks, masks, and f32/i32/u32 uniforms"
+                 "parameter %%%d has unsupported type %s; NEON kernels take 32-bit racks, masks, and f32/i32/u32/bool uniforms"
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
@@ -243,6 +243,9 @@ let select_function (func : N.func) =
                   | N.Shift { count; _ } -> count = id
                   | _ -> false) operations -> []
           | _ -> [ M.Uniform_f32 { dst = id; bits; provenance } ])
+      | N.Const (N.Bool value) ->
+          let dst, _ = result func.name index instruction in
+          [ M.Uniform_f32 { dst; bits = (if value then 1l else 0l); provenance } ]
       | N.Const literal ->
           fail func.name ~instruction:index
             ("scalar constant " ^ N.string_of_literal literal
@@ -264,6 +267,8 @@ let select_function (func : N.func) =
           | None ->
               fail func.name ~instruction:index
                 "non-uniform rack constants are not in the initial NEON selection contract")
+      | N.Broadcast scalar when find_type func.name environment index scalar = N.Scalar N.I1 ->
+          [ M.Broadcast_bool { dst = mask_result (); source = scalar; provenance } ]
       | N.Broadcast scalar ->
           let dst = word_rack_result () in
           (match N.IntMap.find_opt scalar constants with
@@ -526,6 +531,7 @@ let select_function (func : N.func) =
               { M.reg = parameter.id; name = parameter.name;
                 argument_class = (match parameter.typ with
                   | N.Scalar (N.I32 | N.U32) -> Native_register_assignment.Integer32
+                  | N.Scalar N.I1 -> Native_register_assignment.Boolean
                   | _ -> Native_register_assignment.Vector) })
             func.parameters;
         instructions;

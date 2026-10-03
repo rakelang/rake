@@ -193,6 +193,9 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     match (op, typ) with
     | N.Const (N.Int32 value), N.Scalar N.I32
     | N.Const (N.Uint32 value), N.Scalar N.U32 -> [ I32_const value ]
+    | N.Const (N.Bool value), N.Scalar N.I1 -> [ I32_const (if value then 1l else 0l) ]
+    | N.Broadcast scalar, N.Mask ->
+        [ I32_const 0l ] @ emit scalar @ [ Operation "i32.sub"; Operation "i32x4.splat" ]
     | N.Rack_splat (N.Uint8 byte), _ -> [ I32_const (Int32.of_int byte); Operation "i8x16.splat" ]
     | N.Rack_splat (N.Float32_bits bits), _ ->
         [ I32_const bits; Operation "f32.reinterpret_i32"; Operation "f32x4.splat" ]

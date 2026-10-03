@@ -135,13 +135,21 @@ with `movd` or `vmovd` into `eax` on x86, or `umov` into `w0` on AArch64.
 The verifier accepts only that terminal result transfer, and still rejects
 intermediate scalar lane work.
 
-A direct uniform `f32` condition broadcasts both comparison operands and
-uses the existing ordered vector comparison. Its mask selects the same arm
-in every participating lane. The branches pass through the common masked
+A direct uniform `f32`, `i32` or `u32` condition broadcasts both comparison
+operands and uses the existing vector comparison for that type. Float
+comparisons remain ordered, and integer comparisons retain their signedness.
+Its mask selects the same arm in every participating lane. The branches
+pass through the common masked
 lowering, so untaken arithmetic receives benign operands. Outer through masks
 and stream tails further limit participation. This uses no scalar comparison
-or branch inside the register kernel. Integer and Boolean uniform conditions
-remain work in progress on physical profiles.
+or branch inside the register kernel.
+
+A Boolean uniform becomes a vector mask by broadcasting its low word,
+shifting left by 31 and arithmetically right by 31. The resulting lanes are
+all zero or all one bits. `if <enabled>` then uses the same masked branch
+lowering as a comparison, including when `all` or `any` produced the Boolean.
+The broadcast and shifts use full-width vector instructions on every
+physical profile.
 
 Native 32-bit integer racks share the float racks' register widths and C
 vector argument slots. Add and subtract select packed `paddd` and `psubd`
@@ -256,7 +264,7 @@ explicit slow code -> scalar C and C ABI declarations ────────�
 
 This development path supports the limited SSE2, AVX2, AVX-512 and NEON stream traversal.
 General native runs remain work in progress. Slow callers can pass
-uniform `f32`, `i32` and `u32` arguments and receive `f32`, `bool`, `i32` or
+uniform `f32`, `i32`, `u32` and `bool` arguments and receive `f32`, `bool`, `i32` or
 `u32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
 AMD64 or AAPCS64 C ABI. It cannot rewrite the opaque kernel assembly, which
@@ -298,6 +306,12 @@ only new scalar instruction permission. Verification compares the entry
 prefix with the declared register mapping and rejects missing, reordered,
 repeated or body-local imports. Register pressure still includes every live
 uniform, with no stack-argument or spill fallback.
+
+Boolean uniforms share those integer argument slots. After all entry imports,
+packed left and logical-right shifts retain only the Boolean value bit.
+This ignores unspecified upper argument-register bits while keeping the
+value in its allocated vector register. A Boolean result uses the same
+checked terminal transfer as a mask reduction.
 
 On `aarch64-neon`, an `f32s` rack is one 128-bit vector register. Arguments
 use separate SIMD and integer counters, with SIMD values in `v0` to `v7`.

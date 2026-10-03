@@ -764,6 +764,9 @@ let rec infer_expr env (expr: Ast.expr) : t =
   | EOuter _ -> unavailable_invariant Capabilities.Expr_outer
 
   | ETuple _ -> unavailable_invariant Capabilities.Expr_tuple
+  | EBroadcast { v = EBool _; _ } ->
+      ensure_supported_value env expr.loc "Boolean uniform" (Scalar SBool);
+      Scalar SBool
   | EBroadcast e ->
       let t = infer_expr env e in
       ensure_supported_value env expr.loc "broadcast" t;

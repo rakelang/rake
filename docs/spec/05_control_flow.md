@@ -28,8 +28,9 @@ scratch distance(v: f32s, w: f32s) -> f32s:
 ```
 
 A uniform condition chooses one whole rack. The development compiler accepts
-a direct comparison of uniform `f32` values on every production profile.
-A comparison can also use a literal or an extracted `f32` bound as a uniform.
+a direct comparison of uniform `f32`, `i32` or `u32` values on every
+production profile. A comparison can also use a literal of the same type
+or an extracted `f32` bound as a uniform.
 The physical profiles broadcast the operands, compare them as vectors and
 select the same branch in every participating lane. Both branches have
 instructions, with benign operands substituted for untaken work that could
@@ -42,20 +43,48 @@ scratch pick(near: f32s, far: f32s, <distance: f32>, <limit: f32>) -> f32s:
   if <distance> <= <limit> then near else far
 ```
 
-Comparisons with a NaN are false, including `!=`, so an unordered condition
-chooses the `else` arm. These native conditionals are development additions
-after the 0.6.0-beta tag. Integer and Boolean uniform conditions in vector
-code remain WIP (work in progress) on the physical profiles.
+Float comparisons with a NaN are false, including `!=`, so an unordered
+condition chooses the `else` arm. Integer comparisons retain their declared
+signed or unsigned order, including values across bit 31. These native
+conditionals are development additions after the 0.6.0-beta tag.
 
 WebAssembly retains one scalar condition and a whole-rack selection. It
 computes both pure branches before selecting, and has no floating-point
-exception flags. It also supports integer and Boolean conditions:
+exception flags. This signed integer condition works on every production
+profile:
 
-<!-- rake-check: verify wasm-simd128 -->
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 scratch pick_late(near: f32s, far: f32s, <late: i32>) -> f32s:
   if <late> > <0> then near else far
+
+scratch pick_unsigned(near: u32s, far: u32s, <distance: u32>, <limit: u32>) -> u32s:
+  if <distance> <= <limit> then near else far
 ```
+
+A Boolean uniform chooses a whole rack on every production profile. On the
+physical profiles its value bit expands into an all-lane mask, so untaken
+floating-point work keeps the same operand protection as a comparison.
+The condition can come from a parameter, a marked Boolean literal such as
+`<true>`, or a mask reduction. `any`
+below makes every lane choose `near` when at least one lane is positive:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch pick_enabled(near: f32s, far: f32s, <enabled: bool>) -> f32s:
+  if <enabled> then near else far
+
+scratch pick_any_positive(near: f32s, far: f32s) -> f32s:
+  let <enabled: bool> = any(near > <0.0>)
+  if <enabled> then near else far
+
+scratch pick_first(near: f32s, far: f32s) -> f32s:
+  pick_enabled(near, far, <true>)
+```
+
+These native Boolean conditions and C `bool` parameters are development
+additions after the 0.6.0-beta tag. Native stream parameters still accept
+only `f32` uniforms.
 
 In slow code, only the chosen branch is evaluated.
 

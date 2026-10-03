@@ -367,9 +367,12 @@ let rec verify_instruction verifier context environment (instruction : instructi
       check_result verifier context instruction (Some (Rack (literal_element literal)))
   | Broadcast value ->
       let expected =
-        match lookup value with Some (Scalar element) when element <> I1 -> Some (Rack element) | _ -> None
+        match lookup value with
+        | Some (Scalar I1) -> Some Mask
+        | Some (Scalar element) -> Some (Rack element)
+        | _ -> None
       in
-      if expected = None then complain verifier context "broadcast requires a numeric scalar";
+      if expected = None then complain verifier context "broadcast requires a scalar";
       Option.iter (fun typ -> check_result verifier context instruction (Some typ)) expected
   | Unary (Sqrt, value) ->
       (match lookup value with

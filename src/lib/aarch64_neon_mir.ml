@@ -15,6 +15,7 @@ type instruction =
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Mask_const of { dst : vreg; value : bool; provenance : provenance }
   | Broadcast_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
+  | Broadcast_bool of { dst : vreg; source : vreg; provenance : provenance }
   | Insert_f32 of { dst : vreg; previous : vreg; inserted : vreg; lane : f32_lane; provenance : provenance }
   | Reduce_mask of { dst : vreg; source : vreg; operation : Native_ir.mask_reduction; provenance : provenance }
   | Fadd of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -79,6 +80,7 @@ let def = function
   | Uniform_f32 { dst; _ }
   | Mask_const { dst; _ }
   | Broadcast_f32 { dst; _ }
+  | Broadcast_bool { dst; _ }
   | Insert_f32 { dst; _ }
   | Reduce_mask { dst; _ }
   | Fadd { dst; _ }
@@ -110,6 +112,7 @@ let def = function
 let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
   | Broadcast_f32 { source; _ } -> [ source ]
+  | Broadcast_bool { source; _ } -> [ source ]
   | Reduce_mask { source; _ } -> [ source ]
   | Shift_i32 { source; _ } -> [ source ]
   | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
@@ -139,6 +142,7 @@ let provenance = function
   | Uniform_f32 { provenance; _ }
   | Mask_const { provenance; _ }
   | Broadcast_f32 { provenance; _ }
+  | Broadcast_bool { provenance; _ }
   | Insert_f32 { provenance; _ }
   | Reduce_mask { provenance; _ }
   | Fadd { provenance; _ }
@@ -174,6 +178,7 @@ let instruction_name = function
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"
   | Broadcast_f32 _ -> "dup.lane.f32"
+  | Broadcast_bool _ -> "broadcast.boolean.mask"
   | Insert_f32 _ -> "insert.f32"
   | Reduce_mask _ -> "reduce.mask"
   | Fadd _ -> "fadd"

@@ -117,6 +117,7 @@ rule token = parse
      distinct from the location-assignment operator <-. *)
   | '<' ('-'? float_lit as f) '>' { SCALAR_FLOAT_LIT (float_of_string f) }
   | '<' ('-'? int_lit as i) '>' { SCALAR_INT_LIT (Int64.of_string i) }
+  | '<' ("true" | "false" as b) '>' { SCALAR_BOOL_LIT (b = "true") }
 
   (* Multi-character operators *)
   | "<|" { FUSED_LEFT }
@@ -252,6 +253,7 @@ let show_token = function
   | FLOAT_LIT f -> Printf.sprintf "FLOAT_LIT(%g)" f
   | SCALAR_FLOAT_LIT f -> Printf.sprintf "SCALAR_FLOAT_LIT(%g)" f
   | SCALAR_INT_LIT n -> Printf.sprintf "SCALAR_INT_LIT(%Ld)" n
+  | SCALAR_BOOL_LIT b -> Printf.sprintf "SCALAR_BOOL_LIT(%b)" b
   | IDENT s -> Printf.sprintf "IDENT(%s)" s
   | TYPE_IDENT s -> Printf.sprintf "TYPE_IDENT(%s)" s
   | SCALAR_IDENT s -> Printf.sprintf "SCALAR_IDENT(%s)" s

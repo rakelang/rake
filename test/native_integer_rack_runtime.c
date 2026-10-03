@@ -1,3 +1,5 @@
+#include <fenv.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -70,6 +72,10 @@ extern integer_rack unsigned_andnot_all(integer_rack);
     extern integer_rack unsigned_##comparison(integer_rack, integer_rack); \
     extern uint32_t unsigned_##comparison##_bits(integer_rack, integer_rack); \
     extern integer_rack unsigned_##comparison##_keep_inputs(integer_rack, integer_rack); \
+    extern integer_rack signed_uniform_##comparison(integer_rack, integer_rack, int32_t, int32_t); \
+    extern integer_rack unsigned_uniform_##comparison(integer_rack, integer_rack, uint32_t, uint32_t); \
+    extern integer_rack unsigned_uniform_##comparison##_literal(integer_rack, integer_rack, uint32_t); \
+    extern integer_rack unsigned_uniform_##comparison##_literal_first(integer_rack, integer_rack, uint32_t); \
     extern uint32_t unsigned_##comparison##_literal(integer_rack); \
     extern uint32_t unsigned_##comparison##_literal_first(integer_rack);
 DECLARE_COMPARISON(lt) DECLARE_COMPARISON(le) DECLARE_COMPARISON(gt)
@@ -118,6 +124,7 @@ extern integer_rack unsigned_uniform_keep(uint32_t, integer_rack, uint32_t);
 extern integer_rack unsigned_uniform_clamp(integer_rack, uint32_t, uint32_t);
 extern integer_rack unsigned_uniform_reverse(uint32_t, integer_rack);
 extern float_rack integer_float_boundary(int32_t, float_rack, float, uint32_t, integer_rack);
+extern float_rack integer_uniform_nested(float_rack, int32_t, uint32_t);
 extern integer_rack six_integer_slots(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern float_rack eight_vector_slots(float_rack, float_rack, float_rack, float_rack, float_rack, float_rack, float_rack, float_rack, int32_t);
 #ifdef __aarch64__
@@ -255,6 +262,22 @@ int main(void)
     uint32_t (*const unsigned_literal_first[])(integer_rack) = {
         unsigned_lt_literal_first, unsigned_le_literal_first, unsigned_gt_literal_first,
         unsigned_ge_literal_first, unsigned_eq_literal_first, unsigned_ne_literal_first
+    };
+    integer_rack (*const signed_uniform_conditions[])(integer_rack, integer_rack, int32_t, int32_t) = {
+        signed_uniform_lt, signed_uniform_le, signed_uniform_gt,
+        signed_uniform_ge, signed_uniform_eq, signed_uniform_ne
+    };
+    integer_rack (*const unsigned_uniform_conditions[])(integer_rack, integer_rack, uint32_t, uint32_t) = {
+        unsigned_uniform_lt, unsigned_uniform_le, unsigned_uniform_gt,
+        unsigned_uniform_ge, unsigned_uniform_eq, unsigned_uniform_ne
+    };
+    integer_rack (*const uniform_literals[])(integer_rack, integer_rack, uint32_t) = {
+        unsigned_uniform_lt_literal, unsigned_uniform_le_literal, unsigned_uniform_gt_literal,
+        unsigned_uniform_ge_literal, unsigned_uniform_eq_literal, unsigned_uniform_ne_literal
+    };
+    integer_rack (*const uniform_literal_first[])(integer_rack, integer_rack, uint32_t) = {
+        unsigned_uniform_lt_literal_first, unsigned_uniform_le_literal_first, unsigned_uniform_gt_literal_first,
+        unsigned_uniform_ge_literal_first, unsigned_uniform_eq_literal_first, unsigned_uniform_ne_literal_first
     };
     const uint32_t patterns[] = {
         0u, 1u, 0xffffffffu, 0x7fffffffu, 0x80000000u, 0x80000001u,
@@ -440,6 +463,28 @@ int main(void)
             expected[lane] = signed_absolute_bits(compare_signed(0, left[lane], right[lane]) ? left[lane] : right[lane]);
         if (check_bits("masked signed absolute value", signed_absolute_selected(a, b), expected)) return 1;
         for (int comparison = 0; comparison < 6; ++comparison) {
+            const uint32_t scalar_left = patterns[l], scalar_right = patterns[r];
+            const bool signed_choice = compare_signed(comparison, scalar_left, scalar_right);
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = signed_choice ? left[lane] : right[lane];
+            if (check_bits("signed uniform comparison", signed_uniform_conditions[comparison](a, b,
+                    signed_bits(scalar_left), signed_bits(scalar_right)), expected)) return 1;
+            const bool unsigned_choice = compare_unsigned(comparison, scalar_left, scalar_right);
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = (unsigned_choice ? left[lane] : right[lane]) + left[lane] - right[lane];
+            if (check_bits("fused unsigned uniform comparison", unsigned_uniform_conditions[comparison](a, b,
+                    scalar_left, scalar_right), expected)) return 1;
+            for (int literal_first = 0; literal_first < 2; ++literal_first) {
+                const bool choose_left = literal_first
+                    ? compare_unsigned(comparison, 0x80000000u, scalar_left)
+                    : compare_unsigned(comparison, scalar_left, 0x80000000u);
+                for (int lane = 0; lane < LANES; ++lane)
+                    expected[lane] = choose_left ? left[lane] : right[lane];
+                const integer_rack result = literal_first
+                    ? uniform_literal_first[comparison](a, b, scalar_left)
+                    : uniform_literals[comparison](a, b, scalar_left);
+                if (check_bits("uniform comparison literal typing", result, expected)) return 1;
+            }
             uint32_t expected_mask = 0;
             for (int lane = 0; lane < LANES; ++lane) {
                 const bool chosen = compare_signed(comparison, left[lane], right[lane]);
@@ -534,6 +579,30 @@ int main(void)
         if (check_bits("integer mask selects floats", selected_float_bits, expected)) return 1;
         for (int lane = 0; lane < LANES; ++lane) expected[lane] = first[lane] > second[lane] ? left[lane] : right[lane];
         if (check_bits("float mask selects integers", select_integer(f, g, a, b), expected)) return 1;
+    }
+    float nested_values[LANES];
+    for (int lane = 0; lane < LANES; ++lane)
+        nested_values[lane] = (lane % 2 ? -1.0f : 1.0f) * (float)((lane + 1) * (lane + 1));
+    float_rack nested_input;
+    memcpy(&nested_input, nested_values, sizeof nested_input);
+    const int32_t modes[] = { INT32_MIN, 0, INT32_MAX };
+    const uint32_t flags[] = { 0x80000000u, 0u, UINT32_MAX };
+    for (int selection = 0; selection < 3; ++selection) {
+        feclearexcept(FE_ALL_EXCEPT);
+        const float_rack output = integer_uniform_nested(nested_input, modes[selection], flags[selection]);
+        if (fetestexcept(FE_ALL_EXCEPT)) {
+            fprintf(stderr, "nested integer uniform condition executed inactive floating-point work\n");
+            return 1;
+        }
+        for (int lane = 0; lane < LANES; ++lane) {
+            const float value = nested_values[lane];
+            const float expected = value <= 0.0f ? 0.0f
+                : modes[selection] >= 0 ? sqrtf(value) : value / 2.0f;
+            if (output[lane] != expected) {
+                fprintf(stderr, "nested integer uniform selection disagrees in lane %d\n", lane);
+                return 1;
+            }
+        }
     }
     printf("native %d-lane integer arithmetic, comparisons and C ABI agree\n", LANES);
     return 0;

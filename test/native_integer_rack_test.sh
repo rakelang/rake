@@ -68,7 +68,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     if [[ "$profile" == aarch64-neon ]]; then
         printf 'scratch eight_integer_slots(<a: u32>, <b: u32>, <c: u32>, <d: u32>, <e: u32>, <f: u32>, <g: u32>, <h: u32>) -> u32s:\n  bit_xor(<a> + <b>, <c> * <d>) - <e> + <f> + <g> * <h>\n\n' >> "$source"
     fi
-    printf 'scratch eight_vector_slots(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s, <offset: i32>) -> f32s:\n  if (<offset> * <1>) < <0> then a + b + c + d + e + f + g + h else h\n\n' >> "$source"
+    printf 'scratch eight_vector_slots(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s, <offset: i32>) -> f32s:\n  if <offset> < <0> then a + b + c + d + e + f + g + h else h\n\n' >> "$source"
     for kind in i32s u32s; do
         for count in {0..31}; do
             for operation in left right right_signed; do
@@ -102,20 +102,24 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         printf 'scratch unsigned_%s(a: u32s, b: u32s) -> u32s:\n  if a %s b then a else b\n\n' "$comparison" "$operator" >> "$source"
         printf 'scratch unsigned_%s_bits(a: u32s, b: u32s) -> u32:\n  bitmask(a %s b)\n\n' "$comparison" "$operator" >> "$source"
         printf 'scratch unsigned_%s_keep_inputs(a: u32s, b: u32s) -> u32s:\n  | chosen <| if a %s b then a else b\n  | retained <| chosen + a\n  retained - b\n\n' "$comparison" "$operator" >> "$source"
+        printf 'scratch signed_uniform_%s(a: i32s, b: i32s, <left: i32>, <right: i32>) -> i32s:\n  if <left> %s <right> then a else b\n\n' "$comparison" "$operator" >> "$source"
+        printf 'scratch unsigned_uniform_%s(a: u32s, b: u32s, <left: u32>, <right: u32>) -> u32s:\n  | chosen <| if <left> %s <right> then a else b\n  | retained <| chosen + a\n  retained - b\n\n' "$comparison" "$operator" >> "$source"
+        printf 'scratch unsigned_uniform_%s_literal(a: u32s, b: u32s, <value: u32>) -> u32s:\n  if <value> %s <2147483648> then a else b\n\nscratch unsigned_uniform_%s_literal_first(a: u32s, b: u32s, <value: u32>) -> u32s:\n  if <2147483648> %s <value> then a else b\n\n' "$comparison" "$operator" "$comparison" "$operator" >> "$source"
         printf 'scratch unsigned_%s_literal(a: u32s) -> u32:\n  bitmask(a %s <2147483648>)\n\nscratch unsigned_%s_literal_first(a: u32s) -> u32:\n  bitmask(<2147483648> %s a)\n\n' "$comparison" "$operator" "$comparison" "$operator" >> "$source"
     done
     printf 'scratch unsigned_equal_self(a: u32s) -> u32:\n  bitmask(a = a)\n\nscratch unsigned_less_self(a: u32s) -> u32:\n  bitmask(a < a)\n\ntine #unsigned_high(values: u32s) means values >= <2147483648>\n\nrake unsigned_gap_flags(values: u32s) -> f32s:\n  tine #high means #unsigned_high(values)\n  through #high into high:\n    <1.0>\n  through #high gaps into low:\n    <2.0>\n  sweep:\n    | #high => high\n    | #high gaps => low\n\nscratch unsigned_all(a: u32s, b: u32s) -> bool:\n  all(a < b)\n\nscratch unsigned_any(a: u32s, b: u32s) -> bool:\n  any(a < b)\n\n' >> "$source"
     printf 'scratch select_float(a: i32s, b: i32s, first: f32s, second: f32s) -> f32s:\n  if a < b then first else second\n\nscratch select_integer(a: f32s, b: f32s, first: i32s, second: i32s) -> i32s:\n  if a > b then first else second\n\ntine #integer_negative(values: i32s) means values < <0>\n\nrake integer_gaps(values: i32s) -> i32s:\n  tine #negative means #integer_negative(values)\n  through #negative into shifted:\n    values - <1>\n  through #negative gaps into shifted_gaps:\n    values + <1>\n  sweep:\n    | #negative => shifted\n    | #negative gaps => shifted_gaps\n\n' >> "$source"
+    printf 'rake integer_uniform_nested(values: f32s, <mode: i32>, <flags: u32>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive into selected:\n    if <mode> >= <0> then sqrt(values) else if <flags> >= <2147483648> then values / <2.0> else sqrt(-values)\n  sweep:\n    | #positive => selected\n    | #positive gaps => <0.0>\n\n' >> "$source"
     "$rakec" --verify-native --target "$profile" -o "${tmp}/${profile}.o" "$source"
     if [[ "$profile" == aarch64-neon ]]; then
         aarch64-unknown-linux-gnu-gcc -O1 -static -DLANES="$lanes" \
             -isystem "${RAKE_AARCH64_LIBC_DEV}/include" \
             -B"${RAKE_AARCH64_LIBC}/lib" -L"${RAKE_AARCH64_LIBC_STATIC}/lib" \
-            "${root}/test/native_integer_rack_runtime.c" "${tmp}/${profile}.o" -o "${tmp}/${profile}"
+            "${root}/test/native_integer_rack_runtime.c" "${tmp}/${profile}.o" -lm -o "${tmp}/${profile}"
         qemu-aarch64 "${tmp}/${profile}"
     else
         cc -O1 "${flags[@]}" -DLANES="$lanes" \
-            "${root}/test/native_integer_rack_runtime.c" "${tmp}/${profile}.o" -o "${tmp}/${profile}"
+            "${root}/test/native_integer_rack_runtime.c" "${tmp}/${profile}.o" -lm -o "${tmp}/${profile}"
         if [[ "$profile" == x86-avx512 ]] && ! grep -qw avx512f /proc/cpuinfo; then
             : "${RAKE_SDE:?AVX-512 runtime checks require capable hardware or Intel SDE}"
             "$RAKE_SDE" -skx -- "${tmp}/${profile}"

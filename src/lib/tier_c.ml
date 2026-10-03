@@ -1,7 +1,7 @@
 (** One C translation unit for WebAssembly and native programs.
 
     Native scratches and rakes are opaque Rake-selected assembly, checked in
-    the final object. Slow callers use scalar f32 C boundaries. Native
+    the final object. Slow callers use scalar f32/i32/u32/bool C boundaries. Native
     stream traversals embed complete selected loops. WebAssembly kernels
     keep their verified emission ({!Wasm_simd128_c}).
     A WebAssembly run becomes an external, never-inlined C function whose body is Rake's
@@ -1762,9 +1762,9 @@ let boundaries u =
       let prototype = match u.execution_target with
         | WebAssembly -> ""
         | Native_program _ ->
-            if not (List.for_all (function Ast.PScalar (_, Some { v = TScalar (PFloat | PInt | PUint); _ }) -> true | _ -> false) params
+            if not (List.for_all (function Ast.PScalar (_, Some { v = TScalar (PFloat | PBool | PInt | PUint); _ }) -> true | _ -> false) params
               && (match result.result_type with Some { v = TScalar (PFloat | PBool | PInt | PUint); _ } -> true | _ -> false)) then
-              fail def.loc "a native kernel called from slow code takes uniform f32/i32/u32 parameters and returns f32, bool, i32 or u32; other scalar C boundaries are work in progress";
+              fail def.loc "a native kernel called from slow code takes uniform f32/i32/u32/bool parameters and returns f32, bool, i32 or u32; other scalar C boundaries are work in progress";
             Printf.sprintf "extern %s %s(%s);\n" r name (if ps = [] then "void" else String.concat ", " ps)
       in
       acc

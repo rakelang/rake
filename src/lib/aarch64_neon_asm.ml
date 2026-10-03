@@ -35,6 +35,7 @@ let registers = function
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Mask_const { dst; _ } -> [ dst ]
   | A.Broadcast_f32 { dst; source; _ } -> [ dst; source ]
+  | A.Broadcast_bool { dst; source } -> [ dst; source ]
   | A.Insert_f32 { dst; inserted; _ } -> [ dst; inserted ]
   | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
   | A.Fadd { dst; left; right }
@@ -128,6 +129,10 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "movi %s, #0x%02x" (lanes_bits dst) (if value then 0xff else 0)
   | A.Broadcast_f32 { dst; source; lane } ->
       emit "dup %s, %s.s[%d]" (lanes_f32 dst) (vector source) (M.f32_lane_index lane)
+  | A.Broadcast_bool { dst; source } ->
+      emit "dup %s, %s.s[0]" (lanes_f32 dst) (vector source);
+      emit "shl %s, %s, #31" (lanes_f32 dst) (lanes_f32 dst);
+      emit "sshr %s, %s, #31" (lanes_f32 dst) (lanes_f32 dst)
   | A.Insert_f32 { dst; inserted; lane } ->
       emit "ins %s.s[%d], %s.s[0]" (vector dst) (M.f32_lane_index lane) (vector inserted)
   | A.Reduce_mask { dst; source; operation; scratch } ->

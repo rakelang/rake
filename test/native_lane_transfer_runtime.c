@@ -25,6 +25,17 @@ extern rack uniform_literal_left(rack, rack, float);
 extern rack uniform_extracted(rack, rack);
 extern rack uniform_guarded_roots(rack, float);
 extern rack uniform_nested(rack, float, float);
+extern rack boolean_choice(rack, bool, rack);
+extern rack boolean_fused(rack, rack, bool);
+extern rack boolean_any(rack, rack);
+extern rack boolean_all(rack, rack);
+extern bool boolean_identity(bool);
+extern rack boolean_guarded_roots(rack, bool);
+extern rack boolean_nested(rack, bool);
+extern rack boolean_six_slots(bool, bool, bool, bool, bool, bool);
+extern rack boolean_eight_vectors(rack, rack, rack, rack, rack, rack, rack, rack, bool);
+extern uint32_t poison_boolean_0(void);
+extern uint32_t poison_boolean_1(void);
 
 extern rack shuffle_reverse(rack);
 extern rack shuffle_rotate(rack);
@@ -175,6 +186,14 @@ static int check_mask_reductions(void)
         if (mask_all(values) != (pattern == every) || mask_any(values) != (pattern != 0)
             || mask_bits(values) != pattern || mask_gap_bits(values) != (pattern ^ every)
             || mask_composed(values) != pattern) return 15;
+        const rack choices[] = { boolean_any(values, -values), boolean_all(values, -values) };
+        for (int operation = 0; operation < 2; ++operation) {
+            float output[LANES];
+            memcpy(output, &choices[operation], sizeof output);
+            const bool take = operation ? pattern == every : pattern != 0;
+            for (int lane = 0; lane < LANES; ++lane)
+                if (bits(output[lane]) != bits(take ? input[lane] : -input[lane])) return 27;
+        }
     }
     /* Quiet NaNs and signed zeros are gaps in an ordered positive predicate. */
     const uint32_t patterns[] = { 0x7fc12345u, 0xffc12345u, 0u, 0x80000000u,
@@ -194,6 +213,78 @@ static int check_mask_reductions(void)
             || mask_bits(values) != expected || mask_gap_bits(values) != (expected ^ every)
             || mask_composed(values) != expected) return 16;
         if (fetestexcept(FE_ALL_EXCEPT)) return 17;
+    }
+    return 0;
+}
+
+static int check_boolean_conditions(void)
+{
+    if (poison_boolean_0() != 0 || poison_boolean_1() != 1) return 28;
+    const uint32_t patterns[] = {0u, 0x80000000u, 1u, 0x80000001u,
+        0x7f800000u, 0xff800000u, 0x7fc12345u, 0xffc54321u};
+    uint32_t first[LANES], second[LANES], output[LANES];
+    for (int lane = 0; lane < LANES; ++lane) {
+        first[lane] = patterns[lane % 8];
+        second[lane] = patterns[(lane + 3) % 8];
+    }
+    rack a, b;
+    memcpy(&a, first, sizeof a);
+    memcpy(&b, second, sizeof b);
+    for (int take = 0; take < 2; ++take) {
+        feclearexcept(FE_ALL_EXCEPT);
+        const rack chosen = boolean_choice(a, take, b);
+        memcpy(output, &chosen, sizeof output);
+        if (fetestexcept(FE_ALL_EXCEPT) || boolean_identity(take) != (bool)take) return 29;
+        for (int lane = 0; lane < LANES; ++lane)
+            if (output[lane] != (take ? first[lane] : second[lane])) return 30;
+    }
+    float first_values[LANES], second_values[LANES], actual[LANES];
+    for (int lane = 0; lane < LANES; ++lane) {
+        first_values[lane] = (float)(lane + 1);
+        second_values[lane] = (float)(3 - lane);
+    }
+    memcpy(&a, first_values, sizeof a);
+    memcpy(&b, second_values, sizeof b);
+    for (int take = 0; take < 2; ++take) {
+        const rack fused = boolean_fused(a, b, take);
+        memcpy(actual, &fused, sizeof actual);
+        for (int lane = 0; lane < LANES; ++lane) {
+            const float chosen = take ? first_values[lane] : second_values[lane];
+            if (bits(actual[lane]) != bits((chosen + first_values[lane]) + second_values[lane])) return 31;
+        }
+        const rack full = boolean_eight_vectors(a, a, a, a, a, a, a, b, take);
+        memcpy(actual, &full, sizeof actual);
+        for (int lane = 0; lane < LANES; ++lane)
+            if (bits(actual[lane]) != bits(take ? 7.0f * first_values[lane] + second_values[lane] : second_values[lane])) return 32;
+    }
+    for (unsigned pattern = 0; pattern < 64; ++pattern) {
+        const rack combined = boolean_six_slots(pattern & 1, pattern & 2, pattern & 4,
+            pattern & 8, pattern & 16, pattern & 32);
+        memcpy(actual, &combined, sizeof actual);
+        for (int lane = 0; lane < LANES; ++lane)
+            if (bits(actual[lane]) != bits((float)pattern)) return 33;
+    }
+    for (int positive = 0; positive < 2; ++positive) {
+        for (int lane = 0; lane < LANES; ++lane)
+            first_values[lane] = (positive ? 1.0f : -1.0f) * (float)((lane + 1) * (lane + 1));
+        memcpy(&a, first_values, sizeof a);
+        feclearexcept(FE_ALL_EXCEPT);
+        const rack rooted = boolean_guarded_roots(a, positive);
+        memcpy(actual, &rooted, sizeof actual);
+        if (fetestexcept(FE_ALL_EXCEPT)) return 34;
+        for (int lane = 0; lane < LANES; ++lane)
+            if (bits(actual[lane]) != bits((positive ? 1.0f : -1.0f) * (float)(lane + 1))) return 35;
+    }
+    for (int lane = 0; lane < LANES; ++lane)
+        first_values[lane] = lane % 2 ? -1.0f : 4.0f;
+    memcpy(&a, first_values, sizeof a);
+    for (int take = 0; take < 2; ++take) {
+        feclearexcept(FE_ALL_EXCEPT);
+        const rack nested = boolean_nested(a, take);
+        memcpy(actual, &nested, sizeof actual);
+        if (fetestexcept(FE_ALL_EXCEPT)) return 36;
+        for (int lane = 0; lane < LANES; ++lane)
+            if (bits(actual[lane]) != bits(first_values[lane] > 0.0f ? 2.0f : 0.0f)) return 37;
     }
     return 0;
 }
@@ -241,6 +332,8 @@ static int check_shuffles(const uint32_t patterns[16], int scenario)
 
 int main(void)
 {
+    const int boolean = check_boolean_conditions();
+    if (boolean) return boolean;
     const int uniform = check_uniform_conditions();
     if (uniform) return uniform;
     const int reduced = check_mask_reductions();

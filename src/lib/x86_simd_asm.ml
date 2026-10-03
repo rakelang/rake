@@ -39,6 +39,7 @@ let registers = function
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Uniform_mask { dst; _ } -> [ dst ]
   | A.Broadcastss { dst; source } -> [ dst; source ]
+  | A.Broadcast_bool { dst; source } -> [ dst; source ]
   | A.Extract_f32 { dst; source; _ } -> [ dst; source ]
   | A.Insert_f32 { dst; previous; inserted; broadcast; _ } -> [ dst; previous; inserted; broadcast ]
   | A.Shuffle_word { dst; racks; scratch; _ } -> dst :: racks @ scratch
@@ -300,6 +301,15 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
   | A.Broadcastss { dst; source } ->
       if sse then (move dst source; emit "shufps %s, %s, 0x00" (ymm dst) (ymm dst))
       else emit "vbroadcastss %s, xmm%d" (ymm dst) source
+  | A.Broadcast_bool { dst; source } ->
+      if sse then (move dst source; emit "shufps %s, %s, 0x00" (ymm dst) (ymm dst))
+      else emit "vbroadcastss %s, xmm%d" (ymm dst) source;
+      if sse then (
+        emit "pslld %s, 31" (ymm dst);
+        emit "psrad %s, 31" (ymm dst))
+      else (
+        emit "vpslld %s, %s, 31" (ymm dst) (ymm dst);
+        emit "vpsrad %s, %s, 31" (ymm dst) (ymm dst))
   | A.Extract_f32 { dst; source; lane } -> splat_lane dst source (M.f32_lane_index lane)
   | A.Insert_f32 { dst; previous; inserted; lane; broadcast } ->
       if sse then (move broadcast inserted; emit "shufps %s, %s, 0x00" (ymm broadcast) (ymm broadcast))
