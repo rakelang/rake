@@ -62,6 +62,11 @@ in one register and reject a function that would need more registers than the
 profile has, or arguments on the stack. `--emit-asm` prints the assembly, or
 the C on wasm, and the system assembler or clang only encodes it.
 
+In the development compiler, `abs` clears each lane's sign bit. SSE2 and AVX2
+use `andps` and `vandps` with a literal magnitude mask. AVX-512F uses `vpandd`,
+and NEON uses a literal rack and `and`. These are full-width bitwise operations,
+so they introduce no floating-point exception, even for a signalling NaN.
+
 ## Whole programs
 
 ```text
@@ -172,6 +177,15 @@ embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
 This stage supports one to four `f32` read columns and an `f32` output.
+The output is a separate stream pointer or one column in a mutable stack.
+A separate destination stack may have a different record layout. Column
+updates load every input rack before writing the result.
+The count may be `i32` or `i64`. The former is sign-extended to the native
+address width at entry, before signed count guards or pointer access.
+Up to eight uniform `f32` arguments use the platform C register slots.
+The traversal copies them into preserved caller-clobbered vector registers,
+and their allocator lifetimes extend across iterations. That prevents an
+argument from being overwritten after its last use in the first rack.
 [Native CPU streams](spec/02_packs_and_run.md#native-cpu-streams) defines
 the accepted subset and caller obligations.
 

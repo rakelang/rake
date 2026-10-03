@@ -1,0 +1,10 @@
+scratch absolute_value(values: f32s) -> f32s:
+  abs(values)
+
+rake masked_absolute(selectors: f32s, values: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into magnitude:
+    abs(values)
+  sweep:
+    | #selected => magnitude
+    | _ => < -2.0>

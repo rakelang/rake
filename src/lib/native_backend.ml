@@ -70,13 +70,13 @@ type allocated =
   | Neon of Aarch64_neon_regalloc.func list
   | Wasm of Wasm_simd128_isel.func list  (** WebAssembly locals need no register allocation *)
 
-let allocate_x86 ~profile native_ir =
+let allocate_x86 ~profile ?parameter_assignment native_ir =
   match X86_simd_isel.select ~profile native_ir with
   | Error error ->
       Error
         { stage = Instruction_selection; message = X86_simd_isel.format_error error }
   | Ok mir -> (
-      match X86_simd_regalloc.allocate ~profile mir with
+      match X86_simd_regalloc.allocate ~profile ?parameter_assignment mir with
       | Ok allocated -> Ok (X86 (profile, allocated))
       | Error error ->
           Error
@@ -85,7 +85,7 @@ let allocate_x86 ~profile native_ir =
               message = X86_simd_regalloc.format_error error;
             })
 
-let allocate_neon native_ir =
+let allocate_neon ?parameter_assignment native_ir =
   match Aarch64_neon_isel.select native_ir with
   | Error error ->
       Error
@@ -94,7 +94,7 @@ let allocate_neon native_ir =
           message = Aarch64_neon_isel.format_error error;
         }
   | Ok mir -> (
-      match Aarch64_neon_regalloc.allocate mir with
+      match Aarch64_neon_regalloc.allocate ?parameter_assignment mir with
       | Ok allocated -> Ok (Neon allocated)
       | Error error ->
           Error

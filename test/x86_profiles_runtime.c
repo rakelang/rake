@@ -42,6 +42,7 @@ static uint32_t bits(float value) {
 
 #include "global_tines_oracle.h"
 #include "quiet_comparisons_oracle.h"
+#include "absolute_oracle.h"
 
 static int equal(float actual, float expected) {
     return (isnan(actual) && isnan(expected)) || bits(actual) == bits(expected);
@@ -60,6 +61,8 @@ int main(void) {
     int failure = check_global_tines();
     if (failure) return failure;
     failure = check_quiet_comparisons();
+    if (failure) return failure;
+    failure = check_absolute_values();
     if (failure) return failure;
     const float a_seed[] = {16777216, 1, -16777216, 1, 2, 3, 4, 5};
     const float b_seed[] = {2, -1, 0, 3, -2, 0.5f, 1, -4};

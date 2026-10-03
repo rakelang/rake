@@ -49,6 +49,7 @@ let registers = function
   | A.Mask_xorps { dst; left; right } -> [ dst; left; right ]
   | A.Sqrtps { dst; source }
   | A.Negps { dst; source }
+  | A.Absps { dst; source }
   | A.Mask_notps { dst; source }
   | A.Moveaps { dst; source } -> [ dst; source ]
   | A.Cmpps { dst; left; right; ordered_mask; _ } ->
@@ -299,6 +300,10 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       let sign = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.min_int))) in
       if sse then (move dst source; emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) sign)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpxord" else "vxorps") (ymm dst) (ymm source) memory sign
+  | A.Absps { dst; source } ->
+      let magnitude = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.max_int))) in
+      if sse then (move dst source; emit "andps %s, XMMWORD PTR [rip + %s]" (ymm dst) magnitude)
+      else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpandd" else "vandps") (ymm dst) (ymm source) memory magnitude
   | A.Fma213ps { dst; multiplier; addend } ->
       emit "vfmadd213ps %s, %s, %s" (ymm dst) (ymm multiplier) (ymm addend)
   | A.Fma231ps { dst; multiplicand; multiplier } ->

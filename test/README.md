@@ -65,11 +65,26 @@ general memory runs remain work in progress.
 against independent scalar C. One to four input columns end at guard pages,
 as does the output, for counts from zero through 65. The checks cover every
 tail remainder, exact in-place output, inactive-lane arithmetic and an unread
-byte column in the descriptor. Each profile also checks a million-element
-safe-root pass plus a three-element tail. AVX-512 uses capable hardware or
+byte column in the descriptor. C and Rake callers pass scale, bias
+and threshold uniforms, including a quiet-NaN threshold. An eight-argument
+case checks argument-register preservation over multiple racks and in-place
+output. Mutable descriptors check a column update through C and Rake callers,
+an unread destination column, unchanged independent columns and null unused
+pointers. C and Rake callers use a separate output descriptor with a different
+record layout. C checks null unused pointers and exact aliasing with an input
+column. The count oracle checks both `i32` and `i64`, including unspecified
+upper bits in an `i32` argument and empty and negative counts. Each profile
+also checks a million-element safe-root pass plus a
+three-element tail. AVX-512 uses capable hardware or
 Intel SDE, and NEON uses AArch64 QEMU. The shared independent C numerical
 oracle checks all six comparisons, including quiet NaNs and exception flags,
 on the x86 and NEON register kernels.
+
+The shared absolute-value oracle supplies explicit binary32 input and output
+bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.
+Both direct and masked rack calls preserve magnitude bits without raising
+floating-point exceptions on the four native profiles. Traversals check
+absolute values against scalar C for every guarded tail.
 
 The callback fixture uses independently authored C prototypes and padded
 structs. C retains and invokes Rake function pointers, and Rake invokes

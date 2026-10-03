@@ -206,11 +206,13 @@ mutable stacks and rack parameters, in both addressing modes.
 
 ## Native CPU streams
 
-The unreleased development compiler supports a read-only stack and an `i64`
-count, followed by one `f32s` traversal that yields an `f32` stream. Its body
-loads one to four `f32` columns and combines immutable lane expressions,
-including calls to rakes and scratches. General loops, writable stacks,
-widening, additional parameters, reductions and scans remain work in
+The unreleased development compiler supports an input stack and an `i32` or
+`i64` count, optionally followed by a mutable destination stack, then up to eight
+uniform `f32` arguments. One `f32s` traversal yields an `f32` stream from a
+read-only stack, or updates one column in its mutable input or destination.
+Its body loads one to four `f32` columns and combines immutable lane expressions,
+including calls to rakes and scratches. General loops, multiple column stores,
+widening, other parameter types, reductions and scans remain work in
 progress and fail compilation. Unused stored columns may have other scalar
 types.
 
@@ -227,6 +229,90 @@ void roots(
     float *result                             /* rdx / x2 */
 );
 ```
+
+A scale or threshold can vary between calls without changing the kernel:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Values {
+  f32: value;
+}
+
+run scaled_values(input: stack Values, <count: i64>, <scale: f32>, <bias: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield row.value * <scale> + <bias>
+```
+
+The C arguments retain source order, with the output last:
+
+```c
+void scaled_values(const struct rake_stack_Values_v1 *input,
+    int64_t count, float scale, float bias, float *result);
+```
+
+The floating-point arguments arrive in `xmm0` through `xmm7` on x86, or
+`s0` through `s7` on AArch64. Rake preserves them in caller-clobbered registers
+before loading the first rack, and the allocator keeps them live through
+every iteration. Register pressure still causes a compilation error. The
+stream never spills an argument to memory or accepts a ninth argument on
+the C stack.
+
+To update a column in place, make the input stack mutable and finish the
+traversal with a column assignment. This run has no stream result or separate
+output argument:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Values {
+  f32: value;
+}
+
+run shift_values(input: mut stack Values, <count: i64>, <bias: f32>):
+  for row in input using f32s up to <count>:
+    input.value <- row.value + <bias>
+```
+
+```c
+struct rake_mut_stack_Values_v1 { float *value; };
+void shift_values(const struct rake_mut_stack_Values_v1 *input,
+    int64_t count, float bias);
+```
+
+The descriptor stays unchanged. Rake loads the read columns before storing
+each chunk's result, and writes only the selected column's active elements.
+A column update may also write an input column that the expression never
+reads. A C caller may leave the stack's unused pointers null.
+
+A separate destination stack can have a different record layout. Its
+descriptor follows the count, before the floating-point uniforms:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Values {
+  f32: value;
+}
+pack Roots {
+  u8: tag;
+  f32: root;
+}
+
+run copy_shift(input: stack Values, <count: i32>, output: mut stack Roots, <bias: f32>):
+  for row in input using f32s up to <count>:
+    output.root <- row.value + <bias>
+```
+
+```c
+struct rake_stack_Values_v1 { const float *value; };
+struct rake_mut_stack_Roots_v1 { uint8_t *tag; float *root; };
+void copy_shift(const struct rake_stack_Values_v1 *input, int32_t count,
+    const struct rake_mut_stack_Roots_v1 *output, float bias);
+```
+
+Both descriptors stay unchanged. The selected destination pointer is loaded
+using its own record layout. The C boundary passes this descriptor in `rdx`
+or `x2`, where a stream passes its output pointer. Rake callers check that
+both stacks' columns hold the count. Independent C callers supply valid
+storage for the read and written columns, and may leave unused pointers null.
 
 The compiler owns the loop and advances by four elements on SSE2 and NEON,
 eight on AVX2 or sixteen on AVX-512F. Full racks use unaligned vector loads
@@ -245,7 +331,13 @@ active results through `st1` lane transfers. Both keep the arithmetic
 vectorised. Inactive operands are made benign before exception-capable
 arithmetic on all four profiles.
 
-Counts of zero or less touch no pointer, so null pointers are allowed then.
+The count uses `int32_t` or `int64_t` in C, matching its Rake type. An `i32`
+count is sign-extended at entry before the loop or any pointer access, so
+unspecified upper register bits cannot change its value. The
+[System V AMD64 ABI](https://gitlab.com/x86-psABIs/x86-64-ABI/-/blob/master/x86-64-ABI/low-level-sys-info.tex)
+and [AAPCS64](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst#parameter-passing)
+define those unused argument bits as unspecified. Counts of zero or less
+touch no pointer, so null pointers are allowed then.
 For a positive count, each read column and the output must hold that many
 floats. The same overlap rules as the wasm32 boundary apply.
 
@@ -254,7 +346,15 @@ separately assembled selection, including branch offsets, memory operands
 and embedded literals. Any difference or unresolved relocation is rejected.
 `test/native_stream_test.sh` checks independent C results, exact in-place
 output and guarded tails of every remainder for one to four columns. It also
-checks a million-element safe-root pass plus a three-element tail on each
-profile. AVX-512 runs on capable hardware or through Intel SDE, and NEON
+checks C and Rake callers with scale, bias and threshold arguments, including
+a quiet-NaN threshold, and eight uniform arguments preserved across racks.
+Mutable-descriptor checks cover the first and fourth columns, an unread
+destination column, unchanged independent columns and null unused pointers.
+Separate-destination checks use a different record layout through C and Rake
+callers. C checks guard every tail and cover exact aliasing with a read column.
+The C count oracle also supplies arbitrary upper bits in an `i32` argument,
+including zero and negative counts, while Rake callers exercise both widths.
+Each profile checks a million-element safe-root pass plus a three-element tail.
+AVX-512 runs on capable hardware or through Intel SDE, and NEON
 through AArch64 QEMU. The AVX2 demonstration in `demo/safe-root/run.sh`
 times both optimised and explicitly scalar C builds.

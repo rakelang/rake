@@ -15,9 +15,11 @@ register kernels into one native object. Its C unit embeds Rake-selected
 assembly, and the final object's kernels pass the existing instruction
 verifier. Slow callers can use uniform `f32` parameters and `f32` results.
 Imported C structs use their header's layout, and public slow functions have
-the platform C ABI. SSE2, AVX2, AVX-512 and NEON stream traversals now process read-only `f32`
-columns with full and partial racks, with final-byte verification and
-independent C/guard-page checks. General native runs and
+the platform C ABI. SSE2, AVX2, AVX-512 and NEON traversals now yield `f32`
+streams or update one column in a mutable input or destination stack,
+with full and partial racks,
+final-byte verification and independent C/guard-page checks. Traversals also take up to eight uniform `f32`
+arguments, preserved in registers across racks. General native runs and
 the remaining scalar kernel boundaries are still
 work in progress.
 
@@ -79,6 +81,10 @@ profile for a sufficiently documented ISA. All are designs today.
 [GPU profiles](GPU.md) owns the detailed contract and acceptance checks.
 
 ### Complete physical CPU operation coverage
+
+The development compiler now lowers `f32s` absolute values to vector bitwise
+operations on SSE2, AVX2, AVX-512F and NEON. Independent bit-pattern checks
+cover signed zeros, subnormals, infinities and NaNs, including masked use.
 
 We will bring the physical profiles up to the language's published operation
 set. The next work covers substantial maths, integer racks, shuffles, lane

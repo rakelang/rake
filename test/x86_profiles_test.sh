@@ -12,7 +12,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512; do
         x86-avx512) lanes=16; flags=(-mavx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl) ;;
     esac
     objects=()
-    for fixture in add select scalar_parameter reductions_scans multiple_through global_tines; do
+    for fixture in add select scalar_parameter absolute reductions_scans multiple_through global_tines; do
         object="${tmp}/${profile}-${fixture}.o"
         "$rakec" --verify-native --target "$profile" -o "$object" "${root}/test/native/${fixture}.rk"
         objects+=("$object")

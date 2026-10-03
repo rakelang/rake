@@ -3,6 +3,11 @@ pack Paired {
   u8: tag;
 }
 
+pack Roots {
+  u8: tag;
+  f32: value;
+}
+
 rake nonnegative_root(values: f32s) -> f32s:
   tine #valid means values >= <0.0>
   through #valid else <0.0> into rooted:
@@ -11,11 +16,15 @@ rake nonnegative_root(values: f32s) -> f32s:
     | #valid => rooted
     | _ => <0.0>
 
-run paired_roots(input: stack Paired, <count: i64>) -> f32:
+run paired_roots(input: stack Paired, <count: i32>) -> f32:
   for row in input using f32s up to <count>:
     let first = nonnegative_root(row.first)
     let second = nonnegative_root(row.second)
     yield first + second
+
+run absolute_rows(input: stack Paired, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield abs(row.first)
 
 run three_roots(input: stack Paired, <count: i64>) -> f32:
   for row in input using f32s up to <count>:
@@ -32,10 +41,52 @@ run four_roots(input: stack Paired, <count: i64>) -> f32:
     let fourth = nonnegative_root(row.fourth)
     yield ((first + second) + third) + fourth
 
+run weighted_roots(input: stack Paired, <count: i64>, <scale: f32>, <bias: f32>, <threshold: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    let rooted = nonnegative_root(row.first)
+    yield if row.first >= <threshold> then rooted * <scale> + <bias> else <0.0>
+
+run eight_uniforms(input: stack Paired, <count: i64>, <a: f32>, <b: f32>, <c: f32>, <d: f32>, <e: f32>, <f: f32>, <g: f32>, <h: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    let columns = ((row.first + row.second) + row.third) + row.fourth
+    yield (((((((columns + <a>) + <b>) + <c>) + <d>) + <e>) + <f>) + <g>) + <h>
+
+run update_first(input: mut stack Paired, <count: i32>, <scale: f32>, <bias: f32>):
+  for row in input using f32s up to <count>:
+    input.first <- nonnegative_root(row.first) * <scale> + <bias>
+
+run update_second(input: mut stack Paired, <count: i64>, <scale: f32>, <bias: f32>):
+  for row in input using f32s up to <count>:
+    input.second <- nonnegative_root(row.first) * <scale> + <bias>
+
+run update_fourth(input: mut stack Paired, <count: i64>):
+  for row in input using f32s up to <count>:
+    let first = nonnegative_root(row.first)
+    let second = nonnegative_root(row.second)
+    let third = nonnegative_root(row.third)
+    let fourth = nonnegative_root(row.fourth)
+    input.fourth <- ((first + second) + third) + fourth
+
+run write_roots(input: stack Paired, <count: i32>, result: mut stack Roots, <scale: f32>, <bias: f32>):
+  for row in input using f32s up to <count>:
+    result.value <- nonnegative_root(row.first) * <scale> + <bias>
+
 slow main() -> i32:
   let a: [9]f32 = [-4.0, 16.0, 25.0, -1.0, 0.0, 4.0, 9.0, 36.0, 49.0]
   let b: [9]f32 = [9.0, -4.0, 0.0, 1.0, 16.0, 9.0, 4.0, 0.0, 16.0]
   let tags: [9]u8 = [0; 9]
   result: [9]f32 := [0.0; 9]
   paired_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, result)
-  return i32(result[0] + result[8])
+  let pair = i32(result[0] + result[8])
+  weighted_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, <2.0>, <3.0>, <0.0>, result)
+  let weighted = i32(result[1])
+  eight_uniforms(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, <2.0>, <3.0>, <4.0>, <5.0>, <6.0>, <7.0>, <8.0>, result)
+  let combined = i32(result[1])
+  working: [9]f32 := [-4.0, 16.0, 25.0, -1.0, 0.0, 4.0, 9.0, 36.0, 49.0]
+  writable_tags: [9]u8 := [0; 9]
+  update_first(stack Paired { first: working, second: working, third: working, fourth: working, tag: writable_tags }, <9>, <2.0>, <3.0>)
+  let updated = i32(working[1])
+  write_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, stack Roots { tag: writable_tags, value: result }, <2.0>, <3.0>)
+  let written = i32(result[1])
+  absolute_rows(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, result)
+  return pair + weighted + combined + updated + written + i32(result[0] + result[8])

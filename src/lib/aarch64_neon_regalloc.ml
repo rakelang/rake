@@ -119,9 +119,11 @@ let live_is_fused provenances allocation =
       | _ -> false)
     allocation
 
-let allocate_function func =
+let allocate_function ?parameter_assignment func =
   let parameter_count = List.length func.M.parameters in
-  if parameter_count > argument_register_count then
+  match Native_register_assignment.resolve ~available:allocatable_registers
+    ~argument_count:argument_register_count ~parameter_count parameter_assignment with
+  | Error message ->
     Error
       {
         function_name = func.name;
@@ -129,16 +131,16 @@ let allocate_function func =
         required = parameter_count;
         available = argument_register_count;
         fused = false;
-        message =
-          Printf.sprintf
-            "AAPCS64 requires %d rack arguments but provides %d vector argument registers"
-            parameter_count argument_register_count;
+        message;
       }
-  else
-    let uses = last_uses func in
+  | Ok parameter_assignment ->
+    let uses = Native_register_assignment.preserve_uses
+      ~instruction_count:(List.length func.instructions) parameter_assignment
+      (List.map (fun parameter -> parameter.M.reg) func.parameters) (last_uses func) in
     let provenances = definition_provenance func in
     let initial_allocation =
-      List.mapi (fun physical parameter -> (parameter.M.reg, physical)) func.parameters
+      List.map2 (fun assignment parameter ->
+        (parameter.M.reg, assignment.Native_register_assignment.register)) parameter_assignment func.parameters
       |> List.fold_left
            (fun allocation (value, physical) -> I.add value physical allocation)
            I.empty
@@ -280,11 +282,11 @@ let allocate_function func =
     in
     allocate 0 func.instructions
 
-let allocate module_ =
+let allocate ?parameter_assignment module_ =
   let rec loop allocated = function
     | [] -> Ok (List.rev allocated)
     | func :: rest -> (
-        match allocate_function func with
+        match allocate_function ?parameter_assignment func with
         | Ok allocated_function -> loop (allocated_function :: allocated) rest
         | Error _ as error -> error)
   in

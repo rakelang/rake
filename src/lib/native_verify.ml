@@ -282,7 +282,7 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if
     contains operands "["
     && not
-         ((mnemonic = "vbroadcastss" || mnemonic = "vxorps")
+         ((mnemonic = "vbroadcastss" || mnemonic = "vxorps" || mnemonic = "vandps")
          && contains operands "rip")
   then
     error ~source ~function_name ~obligation:"no rack memory"
@@ -344,7 +344,7 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
     contains operands "rip"
     && not (contains (List.hd (String.split_on_char ',' operands)) "[")
     && (if sse then List.mem mnemonic [ "movaps"; "xorps"; "andps" ]
-        else List.mem mnemonic [ "vbroadcastss"; "vpxord" ])
+        else List.mem mnemonic [ "vbroadcastss"; "vpxord"; "vpandd" ])
   in
   let cross_lane =
     if sse then mnemonic = "shufps" && not (String.ends_with ~suffix:",0x0" operands)

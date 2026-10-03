@@ -47,14 +47,17 @@ unavailable on every profile.
 
 ## Float racks
 
-These operations on `f32s` racks compile on each profile:
+The table shows operations on `f32s` racks in the development compiler.
+Physical profiles gained `abs` after the 0.6.0-beta tag, so the tagged
+compiler still rejects it on those profiles.
 
 | Operation | `x86-sse2` | `x86-avx2` | `x86-avx512` | `aarch64-neon` | `wasm-simd128` |
 | --- | :-: | :-: | :-: | :-: | :-: |
 | `+` `-` `*` `/`, negation, `sqrt` | yes | yes | yes | yes | yes |
 | comparisons, `and` `or` `not` on masks, `select`, `if` on a mask | yes | yes | yes | yes | yes |
 | `fma(a, b, c)` | ISA limit† | yes | yes | yes | ISA limit† |
-| `min` `max` `abs` `floor` `ceil` `trunc` `nearest` | WIP* | WIP* | WIP* | WIP* | yes |
+| `abs` | yes | yes | yes | yes | yes |
+| `min` `max` `floor` `ceil` `trunc` `nearest` | WIP* | WIP* | WIP* | WIP* | yes |
 | `exp` `log` `log2` `tanh` | WIP* | WIP* | WIP* | WIP* | yes |
 | `if` on a uniform condition | WIP* | WIP* | WIP* | WIP* | yes |
 | `sum` `product` `minimum` `maximum`, and the scans | yes | yes | yes | WIP* | yes |
@@ -74,7 +77,17 @@ profile.
 
 `select(mask, a, b)` takes `a` in the mask's lanes and `b` elsewhere, and so
 does `if mask then a else b`. `if <c> then a else b` with a uniform condition
-chooses one rack for every lane. On `wasm-simd128`, `min(a, b)` and
+chooses one rack for every lane. `abs` takes the magnitude of each lane,
+including changing −0 to +0. Native profiles clear the sign bit with a vector
+bitwise operation, without floating-point arithmetic or exceptions.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch magnitudes(values: f32s) -> f32s:
+  abs(values)
+```
+
+On `wasm-simd128`, `min(a, b)` and
 `max(a, b)` are IEEE 754 minimum and maximum: NaN if either lane is NaN, and
 −0 below +0. `floor`, `ceil`, `trunc` and `nearest` round to an integral
 value, `nearest` with ties to even. `fma(a, b, c)` is `a * b + c` with one

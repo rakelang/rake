@@ -185,6 +185,10 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
           Some (M.Negps { dst; source; provenance })
+      | N.Unary (N.Abs, source) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index source;
+          Some (M.Absps { dst; source; provenance })
       | N.Unary (N.Sqrt, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
@@ -281,7 +285,7 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
       | N.Shuffle _ | N.Extract _ | N.Insert _ ->
           fail func.name ~instruction:index
             "cross-lane operation is unavailable in the initial x86 SIMD selection contract"
-      | N.Unary ((N.Abs | N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
+      | N.Unary ((N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
             "integer rack operations are part of the wasm-simd128 slice only"

@@ -11,6 +11,9 @@ let reject loc fmt = Printf.ksprintf (fun text -> raise (Unsupported (loc, text)
 
 type compiled = { assembly : string; functions : string list }
 
+type output = Stream | Column of string * string
+type count_width = Count32 | Count64
+
 (* Expand A-normal immutable bindings into the expression consumed by the
    common lowerer. This stage rejects other forms rather than dropping work. *)
 let rec expand bindings (expression : Ast.expr) : Ast.expr =
@@ -28,25 +31,43 @@ let rec expand bindings (expression : Ast.expr) : Ast.expr =
   in
   { expression with v }
 
-let compile_body ~profile program run traverse ~tail =
+let uniform_register profile index =
+  let first = match profile with
+    | Target.X86_sse2 -> 7
+    | Target.X86_avx2 -> 8
+    | Target.X86_avx512 -> 24
+    | Target.Aarch64_neon -> 16
+    | _ -> invalid_arg "native stream uniform profile"
+  in
+  first + index
+
+let compile_body ~profile program run traverse uniforms output ~tail =
   let bindings = ref [] and columns = ref [] and result = ref None in
   List.iter (fun statement ->
-    if !result <> None then reject statement.rloc "native traversal must end with its yield";
+    if !result <> None then reject statement.rloc "native traversal must end with its yield or column update";
     match statement.r with
     | R_chunk_load (name, Types.SFloat, field, Types.SFloat) ->
         columns := !columns @ [ name, field ]
     | R_pure (name, Rack Types.SFloat, expression, false)
     | R_pure (name, Mask _, expression, false) ->
         bindings := (name, expand !bindings expression) :: !bindings
-    | R_yield name -> result := List.assoc_opt name !bindings
+    | R_yield name when output = Stream -> result := List.assoc_opt name !bindings
+    | R_output (owner, field, name) when output = Column (owner, field) ->
+        result := List.assoc_opt name !bindings
     | _ -> reject statement.rloc
-        "native streams currently support f32 columns, immutable lane expressions and one yield; this run operation is work in progress") traverse.t_body;
-  let expression = match !result with Some e -> e | None -> reject run.run_loc "native stream requires a yielded f32 expression" in
+        "native traversals currently support f32 columns, immutable lane expressions and one final yield or column update; this run operation is work in progress") traverse.t_body;
+  let expression = match !result with Some e -> e | None -> reject run.run_loc "native traversal requires an f32 output expression" in
   if List.length !columns = 0 || List.length !columns > 4 then
     reject run.run_loc "native streams currently load one to four f32 columns";
-  let parameters = List.map (fun (name, _) -> name, Native_ir.Rack Native_ir.F32) !columns in
+  let parameters = List.map (fun (name, _) -> name, Native_ir.Rack Native_ir.F32) !columns
+    @ List.map (fun name -> name, Native_ir.Scalar Native_ir.F32) uniforms in
   let mask = if tail then Some "$native_tail" else None in
   let parameters = match mask with None -> parameters | Some name -> parameters @ [ name, Native_ir.Mask ] in
+  let parameter_assignment =
+    List.mapi (fun register _ -> { Native_register_assignment.register; persistent = false }) !columns
+    @ List.mapi (fun index _ ->
+        { Native_register_assignment.register = uniform_register profile index; persistent = true }) uniforms
+    @ (if tail then [ { Native_register_assignment.register = List.length !columns; persistent = false } ] else []) in
   Native_ir.floating_point_exceptions := true;
   let func = match Native_lower.lower_expression ~definitions:program.vector_defs
     ~name:run.run_name ~parameters ?mask ~fused:false run.run_loc expression with
@@ -56,8 +77,8 @@ let compile_body ~profile program run traverse ~tail =
   let ir = match Native_optimize.optimize ~profile [ func ] with
     | Ok ir -> ir | Error e -> reject run.run_loc "%s" (Native_optimize.format_error e) in
   let allocation =
-    if Target.is_x86 profile then Native_backend.allocate_x86 ~profile ir
-    else Native_backend.allocate_neon ir in
+    if Target.is_x86 profile then Native_backend.allocate_x86 ~profile ~parameter_assignment ir
+    else Native_backend.allocate_neon ~parameter_assignment ir in
   let allocated = match allocation with
     | Ok allocated -> allocated
     | Error e -> reject run.run_loc "%s" (Native_backend.format_error e)
@@ -68,12 +89,40 @@ let compile_body ~profile program run traverse ~tail =
     reject run.run_loc "native stream reductions and scans are work in progress";
   allocated, !columns
 
-let stream_traversal (run : run) =
+let run_traversal (run : run) =
   match run.run_body, run.run_params, run.run_stream with
-    | [ { r = R_traverse t; _ } ], [ Run_stack (input, schema, false); Run_uniform (count, Types.SInt64) ], Some Types.SFloat
+    | [ { r = R_traverse t; _ } ], Run_stack (input, schema, writable) :: Run_uniform (count, ((Types.SInt | Types.SInt64) as count_type)) :: arguments, stream
       when t.t_stack = input && t.t_pack = schema && t.t_domain = Types.SFloat
-        && (match t.t_count.k with Var n -> n = count | _ -> false) -> t
-    | _ -> reject run.run_loc "native streams currently support one f32 stream traversal with a read-only stack and an i64 count; general native runs are work in progress"
+        && (match t.t_count.k with Var n -> n = count | _ -> false) ->
+        let destination, uniforms = match arguments with
+          | Run_stack (owner, _, true) :: rest -> Some owner, rest
+          | _ -> None, arguments in
+        let output = match stream, destination, List.rev t.t_body with
+          | Some Types.SFloat, None, { r = R_yield _; _ } :: _ when not writable -> Stream
+          | None, None, { r = R_output (owner, field, _); _ } :: _ when owner = input && writable -> Column (owner, field)
+          | None, Some destination, { r = R_output (owner, field, _); _ } :: _ when owner = destination -> Column (owner, field)
+          | _ -> reject run.run_loc "native traversals end with one f32 stream yield or one f32 column update in a mutable stack; other outputs are work in progress" in
+        if List.length uniforms > 8 then
+          reject run.run_loc "native streams accept at most eight uniform f32 arguments in C register slots; stack arguments are work in progress";
+        let uniforms = List.map (function
+          | Run_uniform (name, Types.SFloat) -> name
+          | _ -> reject run.run_loc "native stream arguments after the count must be uniform f32 values; other arguments are work in progress") uniforms in
+        let count_width = if count_type = Types.SInt then Count32 else Count64 in
+        t, count_width, uniforms, output
+    | _ -> reject run.run_loc "native traversals currently support one f32 traversal with an input stack, an i32 or i64 count, an optional mutable destination stack and uniform f32 arguments; general native runs are work in progress"
+
+let column_offset schema field =
+  let rec offset n = function
+    | (f, _) :: _ when f = field -> n * 8
+    | _ :: rest -> offset (n + 1) rest
+    | [] -> invalid_arg "native traversal column missing from its checked pack"
+  in
+  offset 0 schema.pack_fields
+
+let output_pack program run owner =
+  match List.find_opt (function Run_stack (name, _, true) -> name = owner | _ -> false) run.run_params with
+  | Some (Run_stack (_, schema, _)) -> find_pack program schema
+  | _ -> invalid_arg "native traversal output missing from its checked mutable stacks"
 
 let emit_x86_run ~profile program buffer (run : run) =
   let sse2 = profile = Target.X86_sse2 in
@@ -83,9 +132,9 @@ let emit_x86_run ~profile program buffer (run : run) =
   let register = X86_simd_asm.vector_register profile in
   let memory = if sse2 then "XMMWORD" else if avx512 then "ZMMWORD" else "YMMWORD" in
   let move = if sse2 then "movups" else "vmovups" in
-  let traverse = stream_traversal run in
-  let full, columns = compile_body ~profile program run traverse ~tail:false in
-  let tail, tail_columns = compile_body ~profile program run traverse ~tail:true in
+  let traverse, count_width, uniforms, output = run_traversal run in
+  let full, columns = compile_body ~profile program run traverse uniforms output ~tail:false in
+  let tail, tail_columns = compile_body ~profile program run traverse uniforms output ~tail:true in
   let x86_function = function
     | Native_backend.X86 (_, [ func ]) -> func
     | _ -> assert false in
@@ -107,14 +156,24 @@ let emit_x86_run ~profile program buffer (run : run) =
      offsets then stay identical in isolated and mixed-program objects. *)
   Printf.bprintf buffer ".intel_syntax noprefix\n.text\n.p2align %d\n.globl %s\n.type %s, @function\n%s:\n"
     alignment run.run_name run.run_name run.run_name;
+  (* The C ABI does not define the upper half of an incoming i32 argument.
+     Normalise it before signed count guards or 64-bit pointer arithmetic. *)
+  (match count_width with Count32 -> emit "movsxd rsi, esi" | Count64 -> ());
   emit "test rsi, rsi";
   emit "jle %s" (label "return");
+  (* Copy backwards because SSE2's final ABI input, xmm7, is also its first
+     preserved slot. These arguments stay live in the allocator across racks. *)
+  List.mapi (fun index _ -> index) uniforms |> List.rev |> List.iter (fun index ->
+    let destination = uniform_register profile index in
+    if avx512 then emit "vbroadcastss zmm%d, xmm%d" destination index
+    else emit "%s xmm%d, xmm%d" (if sse2 then "movaps" else "vmovaps") destination index);
   List.iteri (fun index (_, field) ->
-    let rec offset n = function
-      | (f, _) :: _ when f = field -> n * 8
-      | _ :: rest -> offset (n + 1) rest
-      | [] -> assert false in
-    emit "mov %s, QWORD PTR [rdi + %d]" pointers.(index) (offset 0 schema.pack_fields)) columns;
+    emit "mov %s, QWORD PTR [rdi + %d]" pointers.(index) (column_offset schema field)) columns;
+  (match output with
+   | Stream -> ()
+   | Column (owner, field) ->
+       let descriptor = if owner = traverse.t_stack then "rdi" else "rdx" in
+       emit "mov rdx, QWORD PTR [%s + %d]" descriptor (column_offset (output_pack program run owner) field));
   emit "xor eax, eax";
   emit "cmp rsi, %d" lanes;
   emit "jl %s" (label "tail");
@@ -207,9 +266,9 @@ let emit_x86_run ~profile program buffer (run : run) =
 
 let emit_neon_run program buffer (run : run) =
   let profile = Target.Aarch64_neon in
-  let traverse = stream_traversal run in
-  let full, columns = compile_body ~profile program run traverse ~tail:false in
-  let tail, tail_columns = compile_body ~profile program run traverse ~tail:true in
+  let traverse, count_width, uniforms, output = run_traversal run in
+  let full, columns = compile_body ~profile program run traverse uniforms output ~tail:false in
+  let tail, tail_columns = compile_body ~profile program run traverse uniforms output ~tail:true in
   if columns <> tail_columns then assert false;
   let schema = find_pack program traverse.t_pack in
   let pool = Aarch64_neon_asm.create_pool () in
@@ -222,17 +281,24 @@ let emit_neon_run program buffer (run : run) =
     | _ -> assert false in
   Printf.bprintf buffer ".arch armv8-a+simd\n.text\n.p2align 4\n.globl %s\n.type %s, %%function\n%s:\n"
     run.run_name run.run_name run.run_name;
+  (match count_width with Count32 -> emit "sxtw x1, w1" | Count64 -> ());
   emit "cmp x1, #0";
   emit "b.le %s" (label "return");
+  List.iteri (fun index _ ->
+    emit "dup v%d.4s, v%d.s[0]" (uniform_register profile index) index) uniforms;
   List.iteri (fun index (_, field) ->
-    let rec offset n = function
-      | (f, _) :: _ when f = field -> n * 8
-      | _ :: rest -> offset (n + 1) rest
-      | [] -> assert false in
-    let displacement = offset 0 schema.pack_fields in
+    let displacement = column_offset schema field in
     if displacement > 32760 then
       reject run.run_loc "native NEON stream column exceeds the supported descriptor offset";
     emit "ldr %s, [x0, #%d]" (pointer index) displacement) columns;
+  (match output with
+   | Stream -> ()
+   | Column (owner, field) ->
+       let descriptor = if owner = traverse.t_stack then "x0" else "x2" in
+       let displacement = column_offset (output_pack program run owner) field in
+       if displacement > 32760 then
+         reject run.run_loc "native NEON traversal output exceeds the supported descriptor offset";
+       emit "ldr x2, [%s, #%d]" descriptor displacement);
   emit "cmp x1, #4";
   emit "b.lt %s" (label "tail");
   Printf.bprintf buffer "%s:\n" (label "loop");

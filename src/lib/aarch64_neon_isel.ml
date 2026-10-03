@@ -212,6 +212,12 @@ let select_function (func : N.func) =
           let sign = fresh instruction.loc in
           [ M.Uniform_f32 { dst = sign; bits = Int32.min_int; provenance };
             M.Eor { dst; left = source; right = sign; provenance } ]
+      | N.Unary (N.Abs, source) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index source;
+          let magnitude = fresh instruction.loc in
+          [ M.Uniform_f32 { dst = magnitude; bits = Int32.max_int; provenance };
+            M.And { dst; left = source; right = magnitude; provenance } ]
       | N.Unary (N.Sqrt, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
@@ -309,7 +315,7 @@ let select_function (func : N.func) =
       | N.Shuffle _ | N.Reduce _ | N.Scan _ | N.Extract _ | N.Insert _ ->
           fail func.name ~instruction:index
             "cross-lane operation is unavailable in the initial NEON selection contract"
-      | N.Unary ((N.Abs | N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
+      | N.Unary ((N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
             "integer rack operations are part of the wasm-simd128 slice only"

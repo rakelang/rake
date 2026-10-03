@@ -7,6 +7,31 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Native `f32s` absolute values compile on SSE2, AVX2, AVX-512F and NEON as
+  full-rack bitwise operations. An independent IEEE-754 bit oracle checks
+  signed zeros, subnormals, infinities and NaNs, including signalling NaNs
+  under masks. Traversal checks cover every tail and C and Rake callers.
+
+- Native `f32` traversals accept `i32` counts as well as `i64` counts. The
+  selected entry code sign-extends a 32-bit C argument before loop guards and
+  pointer access. Independent C checks supply unspecified upper register
+  bits for every tail and for zero and negative counts on all four profiles.
+
+- Native `f32` traversals can write one column in a separate mutable
+  destination stack. Its descriptor follows the count in the platform C ABI,
+  and the selected pointer uses the destination's own record layout. C checks
+  values and exact aliases against independent scalar results, with guard
+  pages for every partial rack. Rake callers exercise the same boundary.
+- Native `f32` traversals can update one column of their mutable input stack,
+  with the same selected vector loop and guarded tail as stream output.
+  All read columns are loaded before the update. Independent C checks the
+  mutable descriptor ABI, in-place results, an unread destination and
+  untouched independent columns, alongside Rake callers on every CPU profile.
+- Native `f32` streams accept up to eight uniform `f32` arguments after their
+  count. Their platform C argument registers are copied into caller-clobbered
+  slots and kept live across full and partial racks by the no-spill allocator.
+  Independent C checks scale, bias and threshold arguments, quiet NaNs and all
+  eight register slots, alongside Rake callers on every physical CPU profile.
 - Extend native `f32` streams to NEON: four-lane vector transfers and
   count-guarded partial-rack memory operations, with vector arithmetic in
   the tail. The final ELF function extent is checked against the selected

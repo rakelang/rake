@@ -30,6 +30,7 @@ type instruction =
   | Mulps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Divps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Negps of { dst : vreg; source : vreg; provenance : provenance }
+  | Absps of { dst : vreg; source : vreg; provenance : provenance }
   | Sqrtps of { dst : vreg; source : vreg; provenance : provenance }
   | Fma_ps of {
       dst : vreg;
@@ -82,6 +83,7 @@ let def = function
   | Mulps { dst; _ }
   | Divps { dst; _ }
   | Negps { dst; _ }
+  | Absps { dst; _ }
   | Sqrtps { dst; _ }
   | Fma_ps { dst; _ }
   | Cmpps { dst; _ }
@@ -104,7 +106,7 @@ let operands = function
   | Mask_andps { left; right; _ }
   | Mask_orps { left; right; _ }
   | Mask_xorps { left; right; _ } -> [ left; right ]
-  | Negps { source; _ } | Sqrtps { source; _ } | Mask_notps { source; _ } -> [ source ]
+  | Negps { source; _ } | Absps { source; _ } | Sqrtps { source; _ } | Mask_notps { source; _ } -> [ source ]
   | Fma_ps { multiplicand; multiplier; addend; _ } -> [ multiplicand; multiplier; addend ]
   | Blendvps { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
 
@@ -119,6 +121,7 @@ let provenance = function
   | Mulps { provenance; _ }
   | Divps { provenance; _ }
   | Negps { provenance; _ }
+  | Absps { provenance; _ }
   | Sqrtps { provenance; _ }
   | Fma_ps { provenance; _ }
   | Cmpps { provenance; _ }
@@ -145,6 +148,7 @@ let instruction_name = function
   | Mulps _ -> "vmulps"
   | Divps _ -> "vdivps"
   | Negps _ -> "vxorps.sign"
+  | Absps _ -> "vandps.magnitude"
   | Sqrtps _ -> "vsqrtps"
   | Fma_ps _ -> "vfma.ps"
   | Cmpps _ -> "vcmpps"

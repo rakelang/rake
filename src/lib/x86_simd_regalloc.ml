@@ -28,6 +28,7 @@ type operation =
   | Divps of { dst : vector_register; left : vector_register; right : vector_register }
   | Sqrtps of { dst : vector_register; source : vector_register }
   | Negps of { dst : vector_register; source : vector_register }
+  | Absps of { dst : vector_register; source : vector_register }
   | Fma213ps of { dst : vector_register; multiplier : vector_register; addend : vector_register }
   | Fma231ps of { dst : vector_register; multiplicand : vector_register; multiplier : vector_register }
   | Cmpps of {
@@ -122,7 +123,7 @@ let live_is_fused provenances allocation =
       | _ -> false)
     allocation
 
-let allocate_function ?(profile = Target.X86_avx2) func =
+let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
   (* SSE2's two-address expansion reserves xmm15 for instruction-local work.
      It never holds a source value or a spill. *)
   let physical_register_count =
@@ -130,7 +131,10 @@ let allocate_function ?(profile = Target.X86_avx2) func =
   in
   let register_class = Option.get (Target.info profile).mir_register_class in
   let parameter_count = List.length func.M.parameters in
-  if parameter_count > argument_register_count then
+  match Native_register_assignment.resolve
+    ~available:(List.init physical_register_count Fun.id)
+    ~argument_count:argument_register_count ~parameter_count parameter_assignment with
+  | Error message ->
     Error
       {
         function_name = func.name;
@@ -138,16 +142,16 @@ let allocate_function ?(profile = Target.X86_avx2) func =
         required = parameter_count;
         available = argument_register_count;
         fused = false;
-        message =
-          Printf.sprintf
-            "native x86 SysV calling convention requires %d SSE-class arguments but provides %d register argument slots; stack arguments are forbidden"
-            parameter_count argument_register_count;
+        message;
       }
-  else
-    let uses = last_uses func in
+  | Ok parameter_assignment ->
+    let uses = Native_register_assignment.preserve_uses
+      ~instruction_count:(List.length func.instructions) parameter_assignment
+      (List.map (fun parameter -> parameter.M.reg) func.parameters) (last_uses func) in
     let provenances = definition_provenance func in
     let initial_allocation =
-      List.mapi (fun physical parameter -> (parameter.M.reg, physical)) func.parameters
+      List.map2 (fun assignment parameter ->
+        (parameter.M.reg, assignment.Native_register_assignment.register)) parameter_assignment func.parameters
       |> List.fold_left (fun allocation (value, physical) -> I.add value physical allocation) I.empty
     in
     let maximum_live = ref (I.cardinal initial_allocation) in
@@ -297,6 +301,7 @@ let allocate_function ?(profile = Target.X86_avx2) func =
               | M.Divps { left; right; _ } -> emit loc provenance (Divps { dst; left = p left; right = p right })
               | M.Sqrtps { source; _ } -> emit loc provenance (Sqrtps { dst; source = p source })
               | M.Negps { source; _ } -> emit loc provenance (Negps { dst; source = p source })
+              | M.Absps { source; _ } -> emit loc provenance (Absps { dst; source = p source })
               | M.Cmpps { predicate; left; right; _ } ->
                   let ordered_mask = match scratch with [] -> None | register :: _ -> Some register in
                   emit loc provenance (Cmpps { dst; predicate; left = p left; right = p right; ordered_mask })
@@ -332,11 +337,11 @@ let allocate_function ?(profile = Target.X86_avx2) func =
     in
     allocate 0 func.instructions
 
-let allocate ?(profile = Target.X86_avx2) module_ =
+let allocate ?(profile = Target.X86_avx2) ?parameter_assignment module_ =
   let rec loop allocated = function
     | [] -> Ok (List.rev allocated)
     | func :: rest -> (
-        match allocate_function ~profile func with
+        match allocate_function ~profile ?parameter_assignment func with
         | Ok func -> loop (func :: allocated) rest
         | Error _ as error -> error)
   in

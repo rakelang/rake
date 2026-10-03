@@ -1,7 +1,7 @@
 (** One C translation unit for WebAssembly and native programs.
 
     Native scratches and rakes are opaque Rake-selected assembly, checked in
-    the final object. Slow callers use scalar f32 C boundaries. Native AVX2
+    the final object. Slow callers use scalar f32 C boundaries. Native
     stream traversals embed complete selected loops. WebAssembly kernels
     keep their verified emission ({!Wasm_simd128_c}).
     A WebAssembly run becomes an external, never-inlined C function whose body is Rake's
@@ -1845,11 +1845,13 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
         let selected = try Native_traversal.compile ~profile program with
           Native_traversal.Unsupported (loc, message) -> fail loc "%s" message in
         let prototypes = List.map (fun run ->
-          match run.run_params with
-          | [ Run_stack (input, schema, writable); Run_uniform (count, s) ] ->
-              Printf.sprintf "extern void %s(const %s *%s, %s %s, float *rake_out);\n"
-                run.run_name (stack_type u schema writable) (local input) (scalar_c s) (local count)
-          | _ -> assert false) program.runs in
+          let parameters = List.map (function
+            | Run_stack (name, schema, writable) ->
+                Printf.sprintf "const %s *%s" (stack_type u schema writable) (local name)
+            | Run_uniform (name, scalar) -> Printf.sprintf "%s %s" (scalar_c scalar) (local name)
+            | _ -> assert false) run.run_params in
+          let parameters = parameters @ (if run.run_stream = None then [] else [ "float *rake_out" ]) in
+          Printf.sprintf "extern void %s(%s);\n" run.run_name (String.concat ", " parameters)) program.runs in
         prototypes @ [ "__asm__(\"" ^ escape_bytes selected.assembly ^ "\");\n" ], Some selected in
   let native_kernels = if registers = None && traversals = None then None
     else Some { registers; traversals } in
