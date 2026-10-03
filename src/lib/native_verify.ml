@@ -402,7 +402,7 @@ let allowed_avx512f = function
   | "vpslld" | "vpsrld" | "vpsrad"
   | "vpcmpltd" | "vpcmpled" | "vpcmpnltd" | "vpcmpnled"
   | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
-  | "vrndscaleps" | "vcvtps2dq" | "vcvtdq2ps" | "vcvtudq2ps"
+  | "vrndscaleps" | "vcvtps2dq" | "vcvtdq2ps" | "vcvtudq2ps" | "vcvtps2udq"
   | "vfmadd213ps" | "vfmadd231ps" | "vcmpps" | "vcmpeq_oqps"
   | "vcmpneq_oqps" | "vcmplt_oqps" | "vcmple_oqps" | "vcmpeqps"
   | "vcmpunordps" | "vptestmd" | "vblendmps" | "vmovaps"
@@ -456,7 +456,7 @@ let allowed_neon = function
   | "add" | "sub" | "mul" | "neg" | "abs" | "smin" | "smax" | "umin" | "umax" | "cmeq" | "cmgt" | "cmge" | "cmhi" | "cmhs"
   | "shl" | "ushr" | "sshr"
   | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "bic" | "orr"
-  | "frintm" | "frintp" | "frintz" | "frintn" | "scvtf" | "ucvtf" | "fcvtns"
+  | "frintm" | "frintp" | "frintz" | "frintn" | "scvtf" | "ucvtf" | "fcvtns" | "fcvtnu"
   | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ext" | "ret" -> true
   | _ -> false
 
@@ -523,7 +523,7 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
       && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
     error ~source ~function_name ~obligation:"four 32-bit integer lanes"
       (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
-  else if List.mem mnemonic [ "neg"; "abs"; "scvtf"; "ucvtf"; "fcvtns" ]
+  else if List.mem mnemonic [ "neg"; "abs"; "scvtf"; "ucvtf"; "fcvtns"; "fcvtnu" ]
       && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
     error ~source ~function_name ~obligation:"four 32-bit integer lanes"
       (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)

@@ -428,10 +428,11 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             | N.Rack N.I32 -> N.I32_to_f32 | N.Rack N.U32 -> N.U32_to_f32
             | _ -> fail func.name ~instruction:index "float conversion requires a signed or unsigned 32-bit rack" in
           Some (M.Convert_word_f32 { dst; source = operand; conversion; provenance })
-      | N.Convert { operand; element = N.I32 } ->
+      | N.Convert { operand; element = (N.I32 | N.U32) as element } ->
           let dst = word_rack_result () in
           ensure_operand_f32 func.name environment index operand;
-          Some (M.Convert_word_f32 { dst; source = operand; conversion = N.F32_to_i32; provenance })
+          let conversion = if element = N.U32 then N.F32_to_u32 else N.F32_to_i32 in
+          Some (M.Convert_word_f32 { dst; source = operand; conversion; provenance })
       | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index operand;

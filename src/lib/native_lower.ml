@@ -552,13 +552,13 @@ let rec lower_expr state provenance (expr : expr) =
       let* x = lower_expr state provenance x in
       let* () = expect_type expr.loc name (Ir.Rack Ir.U8) x in
       Ok (emit state expr.loc provenance (Ir.Rack Ir.I16) (Ir.Widen { operand = fst x; high = name = "widen_high" }))
-  | ECall (("to_f32" | "to_i32") as name, [ x ]) ->
+  | ECall (("to_f32" | "to_i32" | "to_u32") as name, [ x ]) ->
       let* x = lower_expr state provenance x in
       let operand, element = if name = "to_f32" then
           ((match snd x with Ir.Rack Ir.U32 -> Ir.Rack Ir.U32 | _ -> Ir.Rack Ir.I32), Ir.F32)
-        else (Ir.Rack Ir.F32, Ir.I32) in
+        else (Ir.Rack Ir.F32, if name = "to_u32" then Ir.U32 else Ir.I32) in
       let* () = expect_type expr.loc name operand x in
-      let x = if element = Ir.I32 then sanitize_operand state expr.loc provenance 0.0 x
+      let x = if element <> Ir.F32 then sanitize_operand state expr.loc provenance 0.0 x
         else match provenance.Ir.through with
           | Some mask when !Ir.floating_point_exceptions ->
               let literal = if operand = Ir.Rack Ir.U32 then Ir.Uint32 0l else Ir.Int32 0l in

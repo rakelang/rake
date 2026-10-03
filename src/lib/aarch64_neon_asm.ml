@@ -224,6 +224,25 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
           emit "bic %s, %s, %s" (lanes_bits high) (lanes_bits constant) (lanes_bits high);
           emit "orr %s, %s, %s" (lanes_bits dst) (lanes_bits dst) (lanes_bits high)
       | _ -> invalid_arg "saturating NEON conversion requires four temporary registers")
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.F32_to_u32; scratch } ->
+      (match scratch with
+      | [ valid; upper; safe; constant ] ->
+          let splat bits =
+            let label = intern pool (List.init 4 (fun _ -> bits)) in
+            emit "ldr %s, %s" (q constant) label in
+          emit "fcmeq %s, %s, %s" (lanes_f32 valid) (lanes_f32 source) (lanes_f32 source);
+          emit "and %s, %s, %s" (lanes_bits safe) (lanes_bits source) (lanes_bits valid);
+          splat 0l;
+          emit "fcmgt %s, %s, %s" (lanes_f32 upper) (lanes_f32 safe) (lanes_f32 constant);
+          emit "and %s, %s, %s" (lanes_bits safe) (lanes_bits safe) (lanes_bits upper);
+          splat 0x4f800000l;
+          emit "fcmgt %s, %s, %s" (lanes_f32 valid) (lanes_f32 constant) (lanes_f32 safe);
+          emit "and %s, %s, %s" (lanes_bits safe) (lanes_bits safe) (lanes_bits valid);
+          emit "fcvtnu %s, %s" (lanes_f32 dst) (lanes_f32 safe);
+          splat Int32.minus_one;
+          emit "bic %s, %s, %s" (lanes_bits upper) (lanes_bits constant) (lanes_bits valid);
+          emit "orr %s, %s, %s" (lanes_bits dst) (lanes_bits dst) (lanes_bits upper)
+      | _ -> invalid_arg "unsigned saturating NEON conversion requires four temporary registers")
   | A.Round_f32 { dst; source; mode } ->
       let mnemonic = match mode with
         | Native_ir.Toward_negative -> "frintm" | Native_ir.Toward_positive -> "frintp"

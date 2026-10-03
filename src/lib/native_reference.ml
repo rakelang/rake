@@ -167,6 +167,16 @@ let nearest_i32 x =
     else if nearest <= -2147483648.0 then -2147483648
     else int_of_float nearest
 
+let nearest_u32 x =
+  if Float.is_nan x || x <= 0.0 then 0L
+  else if x >= 4294967295.0 then 0xffffffffL
+  else
+    let floor = Float.floor x in
+    let fraction = x -. floor in
+    let nearest = if fraction > 0.5 || (fraction = 0.5 && Float.rem floor 2.0 <> 0.0)
+      then floor +. 1.0 else floor in
+    Int64.of_float nearest
+
 let normalize_value = function
   | F32_scalar x -> scalar x
   | F32_rack xs -> rack xs
@@ -923,6 +933,11 @@ let rec eval_expr ~lanes env (expr : expr) =
         (match x with
          | F32_rack xs -> Ok (I32_rack (Array.map nearest_i32 xs))
          | value -> error expr.loc (Operand_kind_mismatch { operation = "to_i32"; left = value_kind value; right = None }))
+    | ECall ("to_u32", [ x ]) ->
+        let* x = eval_expr ~lanes env x in
+        (match x with
+         | F32_rack xs -> Ok (U32_rack (Array.map nearest_u32 xs))
+         | value -> error expr.loc (Operand_kind_mismatch { operation = "to_u32"; left = value_kind value; right = None }))
     | EBinop (left_expr, op, right_expr)
       when integer_literal left_expr <> None || integer_literal right_expr <> None -> (
         (* An integer literal takes the element type of the u8 rack it is compared with. *)

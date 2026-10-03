@@ -236,7 +236,7 @@ Rack operations use function-call syntax rather than operators:
 | --- | --- |
 | `sqrt` `abs` `floor` `ceil` `trunc` `nearest` `min` `max` `exp` `log` `log2` `tanh` `fma` `select` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `relaxed_madd` `relaxed_nmadd` `relaxed_min` `relaxed_max` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
-| `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `bitmask` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
+| `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `to_u32` `bitmask` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `bit_and` `bit_or` `bit_xor` `bit_andnot` `shift_bits_left` `shift_bits_right` `shift_bits_right_signed` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `shuffle(a, [3, 2, 1, 0])`, `shuffle(a, b, [0, 4, 1, 5])` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](06_reductions_and_scans.md) |

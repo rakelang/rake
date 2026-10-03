@@ -186,6 +186,7 @@ let instruction_name = function
   | Convert_word_f32 { conversion = Native_ir.I32_to_f32; _ } -> "scvtf.4s"
   | Convert_word_f32 { conversion = Native_ir.U32_to_f32; _ } -> "ucvtf.4s"
   | Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> "nearest.saturate.f32.i32"
+  | Convert_word_f32 { conversion = Native_ir.F32_to_u32; _ } -> "nearest.saturate.f32.u32"
   | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"

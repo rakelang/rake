@@ -245,9 +245,10 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     | N.Convert { operand; element = N.F32 }, N.Rack N.F32 ->
         emit operand @ [ Operation (if type_of operand = N.Rack N.U32
           then "f32x4.convert_i32x4_u" else "f32x4.convert_i32x4_s") ]
-    | N.Convert { operand; element = N.I32 }, N.Rack N.I32 ->
+    | N.Convert { operand; element = (N.I32 | N.U32) as element }, N.Rack (N.I32 | N.U32) ->
         (* trunc_sat alone rounds toward zero; nearest first gives Rake's round to nearest, ties to even. *)
-        emit operand @ [ Operation "f32x4.nearest"; Operation "i32x4.trunc_sat_f32x4_s" ]
+        emit operand @ [ Operation "f32x4.nearest"; Operation
+          (if element = N.U32 then "i32x4.trunc_sat_f32x4_u" else "i32x4.trunc_sat_f32x4_s") ]
     | N.Binary (((N.Add | N.Sub | N.Mul | N.Div) as operation), left, right), N.Rack N.F32 ->
         let name =
           match operation with

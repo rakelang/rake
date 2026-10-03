@@ -170,7 +170,7 @@ let all = [
   supported Integer_rack_arithmetic "operator.integer-rack-arithmetic" "operator"
     "+ and - of equal i16 or i32 racks, wrapping, and their min and max, against a rack or an integer literal";
   supported Integer_rack_conversion "expression.integer-rack-conversion" "expression"
-    "dot of i16 racks into i32, narrow of i32 racks into saturated i16, widen_low and widen_high of u8 racks into i16, to_f32 of i32/u32 racks and to_i32 of f32 racks";
+    "dot of i16 racks into i32, narrow of i32 racks into saturated i16, widen_low and widen_high of u8 racks into i16, to_f32 of i32/u32 racks and to_i32/to_u32 of f32 racks";
   supported Integer_rack_bits "expression.integer-rack-bits" "expression"
     "bit_and, bit_or, bit_xor and bit_andnot of equal integer racks, and shift_bits_left, shift_bits_right and shift_bits_right_signed of an integer rack by an integer literal or a uniform u32";
   supported Scratch_scalar_param "scratch.scalar-parameter" "boundary"

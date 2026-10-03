@@ -12,6 +12,13 @@ scratch conversion_keep_unsigned(values: u32s) -> f32s:
 scratch float_to_signed(values: f32s) -> i32s:
   to_i32(values)
 
+scratch float_to_unsigned(values: f32s) -> u32s:
+  to_u32(values)
+
+scratch conversion_unsigned_roundtrip(values: u32s) -> u32s:
+  | rounded <| to_u32(to_f32(values))
+  rounded + values
+
 scratch conversion_keep_integer(values: i32s) -> i32s:
   | rounded <| to_i32(to_f32(values))
   rounded + values
@@ -19,6 +26,11 @@ scratch conversion_keep_integer(values: i32s) -> i32s:
 scratch conversion_keep_float(values: f32s) -> i32s:
   | first <| to_i32(values)
   | second <| to_i32(values + <0.25>)
+  first + second
+
+scratch conversion_keep_unsigned_float(values: f32s) -> u32s:
+  | first <| to_u32(values)
+  | second <| to_u32(values + <0.25>)
   first + second
 
 rake masked_signed_to_float(selector: f32s, values: i32s) -> f32s:
@@ -45,6 +57,14 @@ rake masked_float_to_signed(selector: f32s, values: f32s) -> i32s:
     | #enabled => converted
     | #enabled gaps => <-2>
 
+rake masked_float_to_unsigned(selector: f32s, values: f32s) -> u32s:
+  tine #enabled means selector > <0.0>
+  through #enabled into converted:
+    to_u32(values)
+  sweep:
+    | #enabled => converted
+    | #enabled gaps => bitcast(u32s, <-2>)
+
 pack ConversionInput {
   f32: values;
   i32: words;
@@ -59,11 +79,24 @@ pack CompactUnsignedInput {
 pack ConversionOutput {
   i32: words;
   f32: values;
+  u32: unsigned_words;
 }
 
 run convert_to_signed(input: stack ConversionInput, <count: i32>) -> i32:
   for row in input using i32s up to <count>:
     yield to_i32(row.values)
+
+run convert_to_unsigned(input: stack ConversionInput, <count: i32>) -> u32:
+  for row in input using u32s up to <count>:
+    yield to_u32(row.values)
+
+run float_unsigned_destination(input: stack ConversionInput, <count: i64>, output: mut stack ConversionOutput):
+  for row in input using u32s up to <count>:
+    output.unsigned_words <- to_u32(row.values)
+
+run unsigned_conversion_update(input: mut stack ConversionOutput, <count: i32>):
+  for row in input using u32s up to <count>:
+    input.unsigned_words <- to_u32(to_f32(row.unsigned_words))
 
 run convert_to_float(input: stack ConversionInput, <count: i64>) -> f32:
   for row in input using f32s up to <count>:

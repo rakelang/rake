@@ -122,6 +122,7 @@ let intrinsic text =
       | "f32x4.convert_i32x4_u" -> call 1 "wasm_f32x4_convert_u32x4"
       | "f32x4.nearest" -> call 1 "wasm_f32x4_nearest"
       | "i32x4.trunc_sat_f32x4_s" -> call 1 "wasm_i32x4_trunc_sat_f32x4"
+      | "i32x4.trunc_sat_f32x4_u" -> call 1 "wasm_u32x4_trunc_sat_f32x4"
       | "f32x4.ne" -> call 2 "wasm_f32x4_ne"
       | "f32x4.relaxed_madd" -> call 3 "wasm_f32x4_relaxed_madd"
       | "f32x4.relaxed_nmadd" -> call 3 "wasm_f32x4_relaxed_nmadd"

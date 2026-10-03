@@ -16,11 +16,15 @@ extern float_rack signed_to_float(integer_rack);
 extern float_rack unsigned_to_float(unsigned_rack);
 extern float_rack conversion_keep_unsigned(unsigned_rack);
 extern integer_rack float_to_signed(float_rack);
+extern unsigned_rack float_to_unsigned(float_rack);
+extern unsigned_rack conversion_unsigned_roundtrip(unsigned_rack);
 extern integer_rack conversion_keep_integer(integer_rack);
 extern integer_rack conversion_keep_float(float_rack);
+extern unsigned_rack conversion_keep_unsigned_float(float_rack);
 extern float_rack masked_signed_to_float(float_rack, integer_rack);
 extern float_rack masked_unsigned_to_float(float_rack, unsigned_rack);
 extern integer_rack masked_float_to_signed(float_rack, float_rack);
+extern unsigned_rack masked_float_to_unsigned(float_rack, float_rack);
 
 typedef struct {
     const float    *values;
@@ -29,8 +33,11 @@ typedef struct {
     const uint32_t *unsigned_words;
 } conversion_input;
 typedef struct { const uint16_t *words; } compact_unsigned_input;
-typedef struct { int32_t *words; float *values; } conversion_output;
+typedef struct { int32_t *words; float *values; uint32_t *unsigned_words; } conversion_output;
 extern void convert_to_signed(const conversion_input *, int32_t, int32_t *);
+extern void convert_to_unsigned(const conversion_input *, int32_t, uint32_t *);
+extern void float_unsigned_destination(const conversion_input *, int64_t, const conversion_output *);
+extern void unsigned_conversion_update(const conversion_output *, int32_t);
 extern void convert_to_float(const conversion_input *, int64_t, float *);
 extern void convert_compact(const conversion_input *, int32_t, float *);
 extern void convert_unsigned(const conversion_input *, int32_t, float *);
@@ -45,7 +52,8 @@ static const uint32_t edge_values[] = {
     0x4effffffu, 0x4f000000u, 0x4f000001u,
     0xceffffffu, 0xcf000000u, 0xcf000001u,
     65535, 65536, 65537, 0x8000007fu, 0x80000080u, 0x80000081u,
-    0xffffff7fu, 0xffffff80u, 0xffffff81u
+    0xffffff7fu, 0xffffff80u, 0xffffff81u,
+    0x4f7fffffu, 0x4f800000u, 0x4f800001u
 };
 
 static void check_word(uint32_t actual, uint32_t expected)
@@ -96,6 +104,10 @@ static void check_registers(void)
         memcpy(result, &retained, sizeof(result));
         for (unsigned lane = 0; lane < LANES; ++lane)
             check_word(result[lane], words[lane] + expected_float_to_signed(expected_signed_to_float(words[lane])));
+        unsigned_rack unsigned_retained = conversion_unsigned_roundtrip(unsigned_integers);
+        memcpy(result, &unsigned_retained, sizeof(result));
+        for (unsigned lane = 0; lane < LANES; ++lane)
+            check_word(result[lane], words[lane] + expected_float_to_unsigned(expected_unsigned_to_float(words[lane])));
         for (int phase = -1; phase < 3; ++phase) {
             int invalid = 0;
             for (unsigned lane = 0; lane < LANES; ++lane) {
@@ -113,6 +125,16 @@ static void check_registers(void)
             for (unsigned lane = 0; lane < LANES; ++lane) {
                 const int active = phase < 0 || (phase < 2 && (lane + (unsigned)phase) % 2 == 0);
                 check_word(result[lane], active ? expected_float_to_signed(raw[lane]) : 0xfffffffeu);
+            }
+            feclearexcept(FE_ALL_EXCEPT);
+            unsigned_rack unsigned_converted = phase < 0 ? float_to_unsigned(floats) : masked_float_to_unsigned(mask, floats);
+            memcpy(result, &unsigned_converted, sizeof(result));
+            if (!!fetestexcept(FE_INVALID) != invalid
+                || fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW)
+                || (phase == 2 && fetestexcept(FE_ALL_EXCEPT))) abort();
+            for (unsigned lane = 0; lane < LANES; ++lane) {
+                const int active = phase < 0 || (phase < 2 && (lane + (unsigned)phase) % 2 == 0);
+                check_word(result[lane], active ? expected_float_to_unsigned(raw[lane]) : 0xfffffffeu);
             }
             feclearexcept(FE_ALL_EXCEPT);
             converted_float = masked_signed_to_float(mask, integers);
@@ -140,6 +162,14 @@ static void check_registers(void)
         memcpy(&first, &finite[lane], sizeof(first)); memcpy(&second, &shifted, sizeof(second));
         check_word(result[lane], expected_float_to_signed(first) + expected_float_to_signed(second));
     }
+    unsigned_rack unsigned_retained = conversion_keep_unsigned_float(input);
+    memcpy(result, &unsigned_retained, sizeof(result));
+    for (unsigned lane = 0; lane < LANES; ++lane) {
+        const float shifted = finite[lane] + 0.25f;
+        uint32_t first, second;
+        memcpy(&first, &finite[lane], sizeof(first)); memcpy(&second, &shifted, sizeof(second));
+        check_word(result[lane], expected_float_to_unsigned(first) + expected_float_to_unsigned(second));
+    }
 }
 
 static void check_streams(void)
@@ -164,7 +194,16 @@ static void check_streams(void)
             compact[i] = (int16_t)(i * 1003 - 32000);
         }
         conversion_input input = { (const float *)raw, (const int32_t *)words, compact, words };
-        conversion_output result = { (int32_t *)destination, (float *)raw };
+        conversion_output result = { (int32_t *)destination, (float *)raw, destination };
+        convert_to_unsigned(&input, count, output);
+        float_unsigned_destination(&input, count, &result);
+        for (int32_t i = 0; i < count; ++i) {
+            check_word(output[i], expected_float_to_unsigned(raw[i]));
+            check_word(destination[i], output[i]);
+        }
+        unsigned_conversion_update(&result, count);
+        for (int32_t i = 0; i < count; ++i)
+            check_word(destination[i], expected_float_to_unsigned(expected_unsigned_to_float(output[i])));
         convert_to_signed(&input, count, (int32_t *)output);
         conversion_destination(&input, count, &result);
         for (int32_t i = 0; i < count; ++i) {
@@ -185,12 +224,16 @@ static void check_streams(void)
         convert_unsigned_compact(&compact_input, count, (float *)output);
         for (int32_t i = 0; i < count; ++i)
             check_word(output[i], expected_unsigned_to_float((uint16_t)compact[i]));
+        convert_to_unsigned(&input, count, raw);
+        for (int32_t i = 0; i < count; ++i)
+            check_word(raw[i], expected_float_to_unsigned(expected_unsigned_to_float(words[i])));
         convert_unsigned(&input, count, (float *)words);
         for (int32_t i = 0; i < count; ++i)
             check_word(words[i], expected_unsigned_to_float(edge_values[(i + count) % edge_count]));
     }
     conversion_input inaccessible = { memory[0], memory[1], memory[2], memory[1] };
     convert_to_signed(&inaccessible, -1, NULL);
+    convert_to_unsigned(&inaccessible, -1, NULL);
     convert_to_float(&inaccessible, -1, NULL);
     convert_unsigned(&inaccessible, -1, NULL);
     for (unsigned i = 0; i < 5; ++i) if (munmap(memory[i], 2 * page)) abort();

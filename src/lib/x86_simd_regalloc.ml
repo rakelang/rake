@@ -311,7 +311,7 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
             | M.Uniform_f32 _ | M.Uniform_mask _ -> []
             (* The zero-minus sequence must retain its source until subtraction. *)
             | M.Neg_i32 _ -> []
-            | M.Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> []
+            | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> []
             | M.Broadcastss { source; _ } | M.Broadcast_bool { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
             (* Two permutations still need both original racks. *)
@@ -348,7 +348,7 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                 | M.Cmpps { predicate = M.Ole; _ } when profile = Target.X86_sse2 -> 1
                 | M.Extreme_f32 _ -> 5
                 | M.Round_f32 _ when profile = Target.X86_sse2 -> 5
-                | M.Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> 4
+                | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> 4
                 | M.Convert_word_f32 { conversion = Native_ir.U32_to_f32; _ } when profile <> Target.X86_avx512 -> 3
                 | M.Reduce_f32 { operation = (Native_ir.Reduce_add | Native_ir.Reduce_mul); _ } -> 1
                 | M.Scan_f32 { operation = (Native_ir.Scan_add | Native_ir.Scan_mul); _ } -> 2

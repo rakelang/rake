@@ -39,7 +39,7 @@ operations:
 
 ```text
 sqrt abs floor ceil trunc nearest min max exp log log2 tanh select
-dot narrow widen_low widen_high to_f32 to_i32
+dot narrow widen_low widen_high to_f32 to_i32 to_u32
 bit_and bit_or bit_xor bit_andnot shift_bits_left shift_bits_right shift_bits_right_signed
 relaxed_madd relaxed_nmadd relaxed_min relaxed_max
 ```

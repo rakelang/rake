@@ -105,7 +105,7 @@ Explicit `widen` also reads signed and unsigned byte or 16-bit columns into
 and a partial rack reads only participating records. Outputs stay 32-bit.
 Signed and unsigned integer-to-float conversions preserve those 32-bit lanes,
 with masked protection, nearest-even rounding and saturating float-to-integer
-results for the reverse signed conversion.
+results for both signed and unsigned reverse conversions.
 [Packs and runs](spec/02_packs_and_run.md) defines
 their boundaries and checked tails.
 

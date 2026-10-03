@@ -234,6 +234,7 @@ let instruction_name = function
   | Convert_word_f32 { conversion = Native_ir.I32_to_f32; _ } -> "convert.i32.f32"
   | Convert_word_f32 { conversion = Native_ir.U32_to_f32; _ } -> "convert.u32.f32"
   | Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> "nearest.saturate.f32.i32"
+  | Convert_word_f32 { conversion = Native_ir.F32_to_u32; _ } -> "nearest.saturate.f32.u32"
   | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "vbroadcastss"
   | Uniform_mask _ -> "mask.constant"

@@ -24,17 +24,11 @@ static uint32_t expected_signed_to_float(uint32_t word)
     return sign | expected_unsigned_to_float(sign ? 0u - word : word);
 }
 
-static uint32_t expected_float_to_signed(uint32_t bits)
+static uint32_t expected_float_magnitude(uint32_t magnitude)
 {
-    const uint32_t sign = bits & 0x80000000u, magnitude = bits & 0x7fffffffu;
-    if (magnitude > 0x7f800000u) return 0;
-    if (magnitude >= 0x4f000000u) return sign ? 0x80000000u : 0x7fffffffu;
     const int exponent = (int)(magnitude >> 23) - 127;
     if (exponent < -1) return 0;
-    if (exponent == -1) {
-        const uint32_t value = magnitude > 0x3f000000u;
-        return sign ? 0u - value : value;
-    }
+    if (exponent == -1) return magnitude > 0x3f000000u;
     const uint32_t significand = (magnitude & 0x7fffffu) | 0x800000u;
     uint32_t value;
     if (exponent >= 23) value = significand << (exponent - 23);
@@ -45,5 +39,22 @@ static uint32_t expected_float_to_signed(uint32_t bits)
         const uint32_t halfway = 1u << (shift - 1);
         value += discarded > halfway || (discarded == halfway && (value & 1));
     }
+    return value;
+}
+
+static uint32_t expected_float_to_signed(uint32_t bits)
+{
+    const uint32_t sign = bits & 0x80000000u, magnitude = bits & 0x7fffffffu;
+    if (magnitude > 0x7f800000u) return 0;
+    if (magnitude >= 0x4f000000u) return sign ? 0x80000000u : 0x7fffffffu;
+    const uint32_t value = expected_float_magnitude(magnitude);
     return sign ? 0u - value : value;
+}
+
+static uint32_t expected_float_to_unsigned(uint32_t bits)
+{
+    const uint32_t magnitude = bits & 0x7fffffffu;
+    if (magnitude > 0x7f800000u || (bits & 0x80000000u)) return 0;
+    if (magnitude >= 0x4f800000u) return 0xffffffffu;
+    return expected_float_magnitude(magnitude);
 }

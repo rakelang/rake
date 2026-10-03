@@ -286,13 +286,13 @@ widths and compact outputs are work in progress.
 
 ### Numerical conversions
 
-`to_f32` converts an `i32s` or `u32s` rack to floating-point values, and `to_i32`
-rounds floats to signed integers with ties to even and saturation. Both
+`to_f32` converts an `i32s` or `u32s` rack to floating-point values.
+`to_i32` and `to_u32` round floats to signed or unsigned integers with
+ties to even and saturation. All three
 compile in native streams, including compact signed and unsigned columns
 widened before conversion. `to_f32(widen(row.quality))` preserves the
 unsigned values without a signedness bitcast. A full-width `u32` column
 can exceed the signed range, so its conversion uses the unsigned operation.
-Float-to-unsigned conversion remains WIP*.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -303,11 +303,17 @@ pack Measurements {
 run rounded_values(input: stack Measurements, <count: i32>) -> i32:
   for row in input using i32s up to <count>:
     yield to_i32(row.value)
+
+run rounded_unsigned_values(input: stack Measurements, <count: i32>) -> u32:
+  for row in input using u32s up to <count>:
+    yield to_u32(row.value)
 ```
 
-The result column stores one signed integer per record. Empty counts touch
-no storage, and a tail converts only participating values. NaNs become zero,
-and values beyond the signed range saturate to its endpoints.
+Each result column stores one integer per record. Empty counts touch no
+storage, and a tail converts only participating values. NaNs become zero,
+and values beyond the chosen integer range saturate to its endpoints.
+For the unsigned result, negative values become zero and overflow becomes
+4294967295.
 
 ### Calling the stream
 

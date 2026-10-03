@@ -347,7 +347,7 @@ let check_fused_contiguity verifier context (instructions : instruction list) =
 let floating_point_exceptions = ref true
 
 (** Equal-width numerical conversions preserve signedness and participation. *)
-type word_conversion = I32_to_f32 | U32_to_f32 | F32_to_i32
+type word_conversion = I32_to_f32 | U32_to_f32 | F32_to_i32 | F32_to_u32
 
 let rec verify_instruction verifier context environment (instruction : instruction) =
   List.iter
@@ -431,9 +431,9 @@ let rec verify_instruction verifier context environment (instruction : instructi
       check_result verifier context instruction (Some (Rack I16))
   | Convert { operand; element } ->
       (match (lookup operand, element) with
-      | Some (Rack (I32 | U32)), F32 | Some (Rack F32), I32 ->
+      | Some (Rack (I32 | U32)), F32 | Some (Rack F32), (I32 | U32) ->
           check_result verifier context instruction (Some (Rack element))
-      | _ -> complain verifier context "convert turns an i32/u32 rack into f32 or an f32 rack into i32")
+      | _ -> complain verifier context "convert turns an i32/u32 rack into f32 or an f32 rack into i32/u32")
   | Fma (a, b, c) ->
       let types = List.filter_map lookup [ a; b; c ] in
       require_same verifier context "fma" types;
@@ -639,7 +639,7 @@ and verify_block verifier context ~expected_result ~yielding environment block =
           | Unary (Sqrt, operand) -> require_sanitized mask 0x3f800000l operand
           | Unary ((Floor | Ceil | Trunc | Nearest), operand) ->
               require_sanitized mask 0x00000000l operand
-          | Convert { operand; element = I32 } ->
+          | Convert { operand; element = (I32 | U32) } ->
               require_sanitized mask 0x00000000l operand
           | Binary ((Add | Sub | Min | Max), left, right)
           | Compare (_, left, right) ->

@@ -70,8 +70,10 @@ including a separate destination with its own record layout,
 with checked partial racks. Explicit `widen` reads signed or unsigned byte
 and 16-bit columns into 32-bit working racks. Stored columns stay compact,
 and the tail reads only existing records. Native `bitcast` between `i32s`
-and `u32s` preserves every lane's bits. Numerical integer/float conversions
-remain WIP on physical profiles. The physical profiles also compile direct uniform
+and `u32s` preserves every lane's bits. `to_f32` converts either integer type
+numerically, and `to_i32` or `to_u32` rounds and saturates floats to the
+corresponding integer range. These conversions also compile in native streams.
+The physical profiles also compile direct uniform
 `f32` comparisons as vector selections, including within through masks and
 stream tails. Native `i32s` and `u32s` support wrapping add/subtract and
 bitwise AND/OR/XOR. Signed `i32s` comparisons produce masks for selection

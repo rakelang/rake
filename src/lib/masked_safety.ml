@@ -12,7 +12,7 @@ type builtin = Sanitized | Unsupported
 let classify_builtin = function
   | "sqrt" | "sin" | "cos" | "tan" | "exp" | "log" | "abs"
   | "floor" | "ceil" | "trunc" | "nearest" | "min" | "max" | "pow" | "atan2" | "select"
-  | "to_f32" | "to_i32" ->
+  | "to_f32" | "to_i32" | "to_u32" ->
       Sanitized
   | _ -> Unsupported
 

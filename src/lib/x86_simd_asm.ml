@@ -557,6 +557,38 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
           binary (if avx512 then "pandnd" else "andnps") high high constant;
           logical "orps" dst dst high
       | _ -> invalid_arg "saturating x86 conversion requires four temporary registers")
+  | A.Convert_word_f32 { dst; source; conversion = Native_ir.F32_to_u32; scratch } ->
+      (match scratch with
+      | [ valid; upper; safe; constant ] ->
+          (* Clip NaNs and negatives to zero, excluding overflow from the
+             conversion instruction. Restore saturation with integer masks. *)
+          compare M.Oeq valid source source;
+          logical "andps" safe source valid;
+          load_splat constant 0l;
+          compare M.Olt upper constant safe;
+          logical "andps" safe safe upper;
+          load_splat constant 0x4f800000l;
+          compare M.Olt valid safe constant;
+          logical "andps" safe safe valid;
+          if avx512 then emit "vcvtps2udq %s, %s" (ymm dst) (ymm safe)
+          else (
+            (* Below 2^31, CVTPS2DQ is direct. Above it, subtracting 2^31
+               is exact for binary32; XOR restores the high integer bit. *)
+            load_splat constant 0x4f000000l;
+            compare M.Olt upper safe constant;
+            load_splat constant Int32.minus_one;
+            logical "xorps" upper upper constant;
+            load_splat constant 0x4f000000l;
+            logical "andps" constant constant upper;
+            binary "subps" safe safe constant;
+            emit "%scvtps2dq %s, %s" (if sse then "" else "v") (ymm dst) (ymm safe);
+            load_splat constant Int32.min_int;
+            logical "andps" upper upper constant;
+            logical "xorps" dst dst upper);
+          load_splat constant Int32.minus_one;
+          binary (if avx512 then "pandnd" else "andnps") upper valid constant;
+          logical "orps" dst dst upper
+      | _ -> invalid_arg "unsigned saturating x86 conversion requires four temporary registers")
   | A.Round_f32 { dst; source; mode; scratch } ->
       let immediate = match mode with
         | Native_ir.Nearest_even -> 0 | Native_ir.Toward_negative -> 1

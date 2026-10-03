@@ -599,7 +599,7 @@ let rec infer_expr env (expr: Ast.expr) : t =
         [a; b];
       result
 
-  | ECall (("widen_low" | "widen_high" | "to_f32" | "to_i32") as name, [x]) ->
+  | ECall (("widen_low" | "widen_high" | "to_f32" | "to_i32" | "to_u32") as name, [x]) ->
       require_feature env expr.loc Capabilities.Integer_rack_conversion;
       let actual = infer_expr env x in
       let operand, result =
@@ -607,13 +607,14 @@ let rec infer_expr env (expr: Ast.expr) : t =
         | "widen_low" | "widen_high" -> (Rack SUint8, Rack SInt16)
         | "to_f32" when actual = Rack SUint -> (Rack SUint, Rack SFloat)
         | "to_f32" -> (Rack SInt, Rack SFloat)
+        | "to_u32" -> (Rack SFloat, Rack SUint)
         | _ -> (Rack SFloat, Rack SInt)
       in
       if actual <> operand then
         type_errorf x.loc "%s requires a %s rack, got %s" name (show_concise operand) (show_concise actual);
       result
 
-  | ECall (("dot" | "narrow" | "widen_low" | "widen_high" | "to_f32" | "to_i32") as name, args) ->
+  | ECall (("dot" | "narrow" | "widen_low" | "widen_high" | "to_f32" | "to_i32" | "to_u32") as name, args) ->
       type_errorf expr.loc "%s expects %d argument(s), got %d" name
         (if name = "dot" || name = "narrow" then 2 else 1) (List.length args)
 
@@ -892,7 +893,7 @@ and infer_unop t op loc =
 let pure_builtin_functions =
   [ "sqrt"; "sin"; "cos"; "tan"; "exp"; "log"; "abs";
     "floor"; "ceil"; "min"; "max"; "pow"; "atan2"; "select";
-    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32"; "log2"; "trunc"; "nearest"; "tanh"; "relaxed_madd"; "relaxed_nmadd"; "relaxed_min"; "relaxed_max";
+    "dot"; "narrow"; "widen_low"; "widen_high"; "to_f32"; "to_i32"; "to_u32"; "log2"; "trunc"; "nearest"; "tanh"; "relaxed_madd"; "relaxed_nmadd"; "relaxed_min"; "relaxed_max";
     "bit_and"; "bit_or"; "bit_xor"; "bit_andnot"; "shift_bits_left"; "shift_bits_right"; "shift_bits_right_signed" ]
 
 (** Validate the source-level fused-binding contract.

@@ -63,6 +63,7 @@ features after that tag.
 | `min` `max` | yes | yes | yes | yes | yes |
 | `floor` `ceil` `trunc` `nearest` | yes | yes | yes | yes | yes |
 | `to_i32` (nearest-even, saturating signed conversion) | yes | yes | yes | yes | yes |
+| `to_u32` (nearest-even, saturating unsigned conversion) | yes | yes | yes | yes | yes |
 | `exp` `log` `log2` `tanh` | WIP* | WIP* | WIP* | WIP* | yes |
 | `if` on a direct uniform `f32` comparison | yes | yes | yes | yes | yes |
 | `if` on a direct uniform `i32` or `u32` comparison | yes | yes | yes | yes | yes |
@@ -169,7 +170,7 @@ compact memory transfers and partial racks.
 and `bitcast(i32s, values)` does the reverse. A lane containing −1 becomes
 4294967295 without changing a bit. The native allocator needs no instruction
 when it can reuse the input register, or a vector register copy when the
-input remains live. Numerical conversion uses `to_f32` or `to_i32` instead.
+input remains live. Numerical conversion uses `to_f32`, `to_i32` or `to_u32` instead.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -293,13 +294,17 @@ Conversions between integer and float racks:
   ties to even.
 - `to_i32(x)` converts an `f32s` rack to `i32s`, rounding to nearest with ties
   to even and saturating to the 32-bit range. NaN becomes zero.
+- `to_u32(x)` converts an `f32s` rack to `u32s`, with the same rounding rule.
+  Negative values and NaNs become zero, and values above 4294967295 saturate
+  to that endpoint.
 - `bitcast(i32s, x)` keeps the bits of a rack and changes its element type.
 
 On WebAssembly each numerical conversion above is one instruction except
-`to_i32`, which is `f32x4.nearest` then `i32x4.trunc_sat_f32x4_s`. A bitcast
+`to_i32` and `to_u32`, which use `f32x4.nearest` then the signed or unsigned
+`i32x4.trunc_sat_f32x4` instruction. A bitcast
 reuses the same `v128` bits without a numerical conversion instruction.
 
-`to_f32` and `to_i32` also compile on all four physical CPU profiles,
+`to_f32`, `to_i32` and `to_u32` also compile on all four physical CPU profiles,
 in register kernels and the native stream subset. They preserve the lane
 count. Signed `to_f32` uses a packed integer conversion. Unsigned conversion
 uses a full-width unsigned instruction on AVX-512F and NEON. On SSE2 and
@@ -310,12 +315,16 @@ pressure. `to_i32` combines
 packed comparisons, conversion and selections to preserve the saturation
 and NaN rules above. It requires four temporary vector registers in addition
 to its input and result, included in the no-spill allocation check.
-Both conversions protect inactive lanes inside `through` and partial racks
+`to_u32` also uses four temporaries. It removes NaNs, negatives and overflow
+before conversion, then restores unsigned saturation with vector masks.
+AVX-512F selects `vcvtps2udq`, and NEON selects `fcvtnu .4s`. SSE2 and AVX2
+use signed conversion below 2³¹. Above that boundary, they subtract 2³¹
+exactly, convert in parallel and restore the high integer bit.
+All three conversions protect inactive lanes inside `through` and partial racks
 by substituting zero before conversion. Active signalling NaNs can raise
 invalid-operation exceptions, and an active conversion can raise inexact.
 The caller's floating-point environment follows the
 [native rounding contract](#floating-point-values).
-Float-to-unsigned conversion remains WIP*.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -327,6 +336,9 @@ scratch unsigned_floats(values: u32s) -> f32s:
 
 scratch rounded_integers(values: f32s) -> i32s:
   to_i32(values)
+
+scratch rounded_unsigned_integers(values: f32s) -> u32s:
+  to_u32(values)
 ```
 
 <!-- rake-check: verify wasm-simd128 -->

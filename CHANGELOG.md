@@ -7,6 +7,16 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- `to_u32` converts `f32s` to unsigned 32-bit racks on all five CPU profiles,
+  including native streams. It rounds to nearest with ties to even, clamps
+  to the unsigned range and converts NaNs to zero. SSE2 and AVX2 use packed
+  signed conversion on two ranges, restoring bit 31 after exact subtraction.
+  AVX-512F and NEON use packed unsigned conversion after sanitising the range.
+  WebAssembly rounds then uses unsigned saturating conversion. Four allocated
+  native temporaries preserve masks and safe values, with spills rejected.
+  Independent bit oracles check results and masked exceptions, including
+  retained inputs, guarded tails, destinations and exact in-place updates.
+
 - `to_f32` accepts `u32s` on all five CPU profiles, in register kernels and
   streams. SSE2 and AVX2 convert two exactly represented 16-bit halves
   before one rounded addition. AVX-512F, NEON and WebAssembly select

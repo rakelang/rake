@@ -105,8 +105,8 @@ separate destination layouts for counts from zero through 65. Signedness
 bitcasts are compared as memory bits, including values with bit 31 set.
 The interpreter runs the compact fixture at every CPU profile's rack width.
 
-`test/native_conversion_test.sh` checks signed `i32s`/`f32s` conversions
-and unsigned `u32s` to `f32s`
+`test/native_conversion_test.sh` checks signed `i32s`/`f32s` and
+unsigned `u32s`/`f32s` conversions
 against an integer-only binary32 oracle, independent of host conversion
 instructions. Boundary values and raw bit patterns cover nearest-even ties,
 saturation, infinities and NaNs on all four physical profiles. Fused
@@ -117,7 +117,7 @@ descriptor and exact in-place updates. Independent assembled objects reject
 scalar and narrowed conversion instructions. The whole-program fixture
 agrees with explicit expected values in each selected-profile interpreter
 and compiled WebAssembly. The unsigned integer-bit oracle also checks the
-WebAssembly vector ABI, including masked use, in both addressing modes.
+WebAssembly vector ABI in both directions, including masked use, in both addressing modes.
 
 `wasm_simd128_verify_test.ml` independently compiles packed comparison and
 extending-multiply C objects. The verifier rejects them without narrower

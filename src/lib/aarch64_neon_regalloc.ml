@@ -268,7 +268,7 @@ let allocate_function ?parameter_assignment func =
           let candidates =
             match instruction with
             | M.Uniform_f32 _ | M.Mask_const _ -> []
-            | M.Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> []
+            | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> []
             | M.Broadcast_f32 { source; _ } -> [ source ]
             | M.Broadcast_bool { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
@@ -281,7 +281,7 @@ let allocate_function ?parameter_assignment func =
           | Ok (dst, reused) ->
               let p = physical in
               let scratch_count = match instruction with
-                | M.Convert_word_f32 { conversion = Native_ir.F32_to_i32; _ } -> 4
+                | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> 4
                 | M.Reduce_mask _ -> 1 | _ -> 0 in
               let occupied = occupied !allocation in
               let scratch = List.filter (fun register ->

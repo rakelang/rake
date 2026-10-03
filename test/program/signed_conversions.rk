@@ -16,6 +16,10 @@ run rounded_unsigned_words(input: stack ConversionSamples, <count: i32>) -> f32:
   for row in input using f32s up to <count>:
     yield to_f32(row.unsigned_words)
 
+run rounded_unsigned_floats(input: stack ConversionSamples, <count: i32>) -> u32:
+  for row in input using u32s up to <count>:
+    yield to_u32(row.values)
+
 slow main() -> i32:
   words: [7]i32 := [0, 1, -1, 16777217, 16777219, 2147483647, -2147483648]
   values: [7]f32 := [2.5, -2.5, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0, 2147483648.0, -2147483648.0]
@@ -39,4 +43,11 @@ slow main() -> i32:
     return 6
   if floats[4] != 16777216.0 or floats[5] != 2147483648.0 or floats[6] != 4294967296.0:
     return 7
+  rounded_unsigned_floats(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, unsigned_words)
+  if unsigned_words[0] != 2 or unsigned_words[1] != 0 or unsigned_words[2] != 0:
+    return 8
+  if unsigned_words[3] != 4294967295 or unsigned_words[4] != 0:
+    return 9
+  if unsigned_words[5] != 2147483648 or unsigned_words[6] != 0:
+    return 10
   return 171

@@ -226,7 +226,7 @@ let rec mentions_racks env (e : Ast.expr) =
       match Hashtbl.find_opt env.ctx.vectors name with
       | Some _ -> true
       | None ->
-          List.mem name [ "dot"; "narrow"; "widen"; "widen_low"; "widen_high"; "to_f32"; "to_i32";
+          List.mem name [ "dot"; "narrow"; "widen"; "widen_low"; "widen_high"; "to_f32"; "to_i32"; "to_u32";
             "bitmask"; "select"; "exp_approximate" ] || any args)
   | EIf (c, a, b) -> any [ c; a; b ]
   | EReduce _ | EScan _ | EShuffle _ | EFma _ | EExtract _ | EInsert _ -> true
