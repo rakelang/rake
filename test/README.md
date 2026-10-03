@@ -50,7 +50,10 @@ assignment, including read-only pointers and borrowed views.
 An independent C harness calls imported and exported functions through
 native pointers and a padded struct with a by-value result. The same checks
 run on x86 profiles and AArch64 under QEMU. These establish slow C lowering
-and ABI agreement. Mixed-program fixtures check the final object's kernels,
+and ABI agreement. Two threads with 128 KiB stacks exercise recursive large
+locals, synchronous C callback re-entry and repeated calls. C checks the
+returned records and independently derived sums after each thread unwinds.
+Mixed-program fixtures check the final object's kernels,
 signed-zero transfer through the scalar C boundary, and x86 reductions against
 both the selected-profile interpreter and hand-derived lane counts. Native
 memory runs remain work in progress.

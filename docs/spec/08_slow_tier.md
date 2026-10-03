@@ -543,13 +543,27 @@ a never-inlined scalar helper. Its captured uniforms are scalar parameters,
 and its captured views are passed as pointer/count pairs, so the run needs no
 C stack frame. Rack values never cross that helper boundary.
 
-Slow functions keep aggregates larger than 256 bytes in Rake's frame stack: a
-static region of `RAKE_FRAME_BYTES` bytes (4 MiB unless defined otherwise when
-compiling the C) from which each call takes a frame and releases it on
-return. Running out of it traps. The C stack holds only small values. The
-reason is the judge's linker: wasm-ld places its default 64 KiB stack after
-static data, so kilobyte-sized local arrays that overflow it grow down into
-that data and overwrite it without a trap.
+Slow functions move aggregate locals whose compiler-estimated size exceeds
+256 bytes into Rake's bounded frame arena. Header-backed records are currently
+excluded from that estimate, including when nested in arrays or Rake records,
+so large C-owned locals may still occupy the C stack. Their size-aware frame
+placement remains work in progress.
+
+`RAKE_FRAME_BYTES` sets the arena's capacity, 4 MiB unless defined otherwise when
+compiling the C. Each call takes a frame and releases it on normal return.
+Running out of capacity traps. A returned value is copied before releasing
+its frame.
+
+WebAssembly reserves the arena in linear memory, keeping those large locals
+off the C stack. wasm-ld places the default 64 KiB stack after static data,
+where an overflow could overwrite that data without a trap.
+
+On native targets, each thread allocates an arena on its first active framed
+call and frees it when the outermost framed call returns. Nested calls and
+synchronous C callbacks share that thread's arena. Only the pointer and cursor
+occupy TLS, so the arena does not impose a 4 MiB minimum on host worker stacks.
+Allocation failure traps. Nonlocal exits such as C `longjmp` bypass frame
+cleanup and are unsupported across active Rake frames.
 
 ## Verification
 

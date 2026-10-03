@@ -11,6 +11,8 @@ extern slow native_packet_make(values: ptr i32) -> NativePacket from "native_slo
 extern slow native_packet_check(packet: ptr const NativePacket) -> i64 from "native_slow.h"
 extern slow native_frame_wait() from "native_slow.h"
 
+state empty_native_pointer: ptr i32
+
 slow rake_packet_score(packet: NativePacket) -> i64:
   return i64(packet.tag) + i64(packet.weight * 8.0) + i64(packet.values[unchecked 2]) + i64(packet.samples[1])
 
@@ -38,3 +40,11 @@ slow rake_frame_sum(seed: i32, depth: i32) -> i32:
   for index from 0 up to 128:
     total <- total + local[index]
   return total
+
+~~ A C callback re-enters Rake while the caller's recursive frames are live.
+~~ The returned record copies values out of this call's large local array.
+slow rake_frame_packet(seed: i32) -> NativePacket:
+  local: [128]i32 := [0; 128]
+  for index from 0 up to 128:
+    local[index] <- seed + index
+  return NativePacket { tag: 9, weight: f64(local[127]), values: empty_native_pointer, samples: [u16(local[0]), u16(local[63]), u16(local[127])] }

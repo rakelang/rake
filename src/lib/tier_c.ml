@@ -1534,16 +1534,38 @@ let rec approximate_size u = function
 
 let frame_threshold = 256
 
-(** Rake's frame stack: a static region in linear memory from which each slow
-    function holding large aggregates takes one frame, released on return. *)
+(** Large slow aggregates use a bounded arena. WebAssembly reserves it in
+    linear memory; native threads allocate it while a framed call is active.
+    Keeping only the native pointer and cursor in TLS avoids inflating the
+    minimum host-thread stack. Nested calls and C callbacks share the arena. *)
 let frame_helpers u =
-  let storage = match u.execution_target with WebAssembly -> "static" | Native_program _ -> "static _Thread_local" in
+  let storage, allocate, release = match u.execution_target with
+    | WebAssembly ->
+        ("static uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\nstatic size_t rake_frame_top;\n", "", "")
+    | Native_program _ ->
+        ("#include <stdlib.h>\nstatic _Thread_local uint8_t *rake_frames;\nstatic _Thread_local size_t rake_frame_top;\n",
+         "    if (!rake_frames) {\n        rake_frames = malloc(RAKE_FRAME_BYTES);\n        if (!rake_frames) __builtin_trap();\n    }\n",
+         "    if (rake_frame_top == 0) {\n        free(rake_frames);\n        rake_frames = NULL;\n    }\n")
+  in
   helper u "rake_frame"
-    (Printf.sprintf "#ifndef RAKE_FRAME_BYTES\n#define RAKE_FRAME_BYTES (4u << 20)\n#endif\n\
-     %s uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\n\
-     %s uint32_t rake_frame_top;\n\
-     static inline void *rake_frame_enter(uint32_t size)\n{\n    size = (size + 15u) & ~15u;\n    if (size > RAKE_FRAME_BYTES - rake_frame_top) __builtin_trap();\n    void *const frame = rake_frames + rake_frame_top;\n    rake_frame_top += size;\n    return frame;\n}\n\
-     static inline void rake_frame_leave(void *frame) { rake_frame_top = (uint32_t)((uint8_t *)frame - rake_frames); }\n" storage storage)
+    (Printf.sprintf {|#include <stddef.h>
+#ifndef RAKE_FRAME_BYTES
+#define RAKE_FRAME_BYTES (4u << 20)
+#endif
+%sstatic inline void *rake_frame_enter(size_t size)
+{
+    const size_t available = (size_t)RAKE_FRAME_BYTES - rake_frame_top;
+    if (size > available || ((16u - size %% 16u) %% 16u) > available - size) __builtin_trap();
+    size += (16u - size %% 16u) %% 16u;
+%s    void *const frame = rake_frames + rake_frame_top;
+    rake_frame_top += size;
+    return frame;
+}
+static inline void rake_frame_leave(void *frame)
+{
+    rake_frame_top = (size_t)((uint8_t *)frame - rake_frames);
+%s}
+|} storage allocate release)
 
 let slow_function u (f : slow_func) =
   let scope = new_scope () in

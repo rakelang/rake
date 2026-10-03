@@ -21,5 +21,6 @@ int64_t rake_packet_score(const NativePacket *packet);
 int64_t rake_packet_update(NativePacket *packet);
 NativePacket rake_packet_make(int32_t *values);
 int32_t rake_frame_sum(int32_t seed, int32_t depth);
+NativePacket rake_frame_packet(int32_t seed);
 
 #endif

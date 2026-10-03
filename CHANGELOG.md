@@ -7,6 +7,10 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Native large-local arenas allocate on entry and free on the outermost
+  framed return. Only a pointer and cursor occupy TLS, allowing host runtimes
+  to use small worker stacks. Independent pthread checks cover recursive
+  locals, C callback re-entry, returned records and repeated calls.
 - Define typed global tines with explicit rack and uniform parameters, and
   apply them in local tines, through blocks and sweeps. `gaps` complements a
   tine or composed mask, including unordered floating-point lanes.
