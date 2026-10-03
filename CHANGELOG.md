@@ -7,6 +7,27 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Native streams explicitly widen `i8` and `i16` columns into `i32s`, or
+  `u8` and `u16` columns into `u32s`, on SSE2, AVX2, AVX-512F and NEON.
+  Packed extension preserves signed values, with guarded compact transfers
+  in partial racks. Independent C checks all four stored types, wrapping
+  sums, unsigned products, single-column updates and separate destinations
+  for every count from zero through 65, with arrays ending at guard pages.
+  Outputs remain 32-bit, and general native runs remain WIP.
+
+- Native `bitcast` between `i32s` and `u32s` preserves lane bits in register
+  kernels and streams. Allocation reuses a dying input or copies it through
+  a vector register, without numerical conversion. The interpreter now keeps
+  the selected profile's width through bitcasts and integer broadcasts.
+
+- WebAssembly object verification accepts narrower packed comparisons and
+  extending multiplies only when source-derived operand bounds justify them.
+  Compact column types and literals establish those bounds. Unproved
+  arithmetic drops them. Independently compiled packed objects reject without
+  the bounds and pass with them. LLVM's six extending-load spellings are
+  normalised to their WebAssembly instruction identifiers. Compact streams
+  pass numerical and object checks in both addressing modes.
+
 - Native streams traverse `f32`, `i32` and `u32` columns on SSE2, AVX2,
   AVX-512F and NEON. One to four same-width columns can contribute to a
   stream or single-column update, retaining each column's type and the
@@ -14,7 +35,7 @@ only when the compiler implements it and the tests cover it.
   arithmetic, unsigned boundaries, literal shifts, mixed float/integer
   masks, exact aliasing and separate destination layouts. C and Rake callers
   check the boundary, and all five CPU-profile interpreters check the same
-  source. Widening and cross-lane traversal operations remain WIP.
+  source. Cross-lane traversal operations remain WIP.
   Embedded kernel assembly restores the text section before slow functions,
   so platform startup adapters remain executable code.
 

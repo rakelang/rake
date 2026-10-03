@@ -85,11 +85,11 @@ type unit_ = {
   helper_names : (string, unit) Hashtbl.t;
   expressions : Buffer.t;  (** a run's pure rack expressions, always inline *)
   mutable selected : string list;  (** wasm instructions selected for the current run *)
+  mutable alternatives : string list;  (** exact packed substitutions proved from operand bounds *)
   mutable lane_operations : int;  (** lane extractions and replacements Rake emitted in the current run *)
   mutable loops : int;  (** loops Rake emitted in the current run *)
   mutable slow_calls : string list;
-  run_facts : (string, int * int * string list * string list) Hashtbl.t;
-      (** per run: loops, lane operations and selected instructions, for verification *)
+  run_facts : (string, Wasm_simd128_toolchain.run_facts) Hashtbl.t;
 }
 
 (* The process wrapper has C's char ** ABI. Its Rake body receives a separately
@@ -833,6 +833,7 @@ let rec rename (map : string -> string) (e : Ast.expr) : Ast.expr =
 type run_state = {
   run : run;
   types : (string, ty) Hashtbl.t;
+  compact_ranges : (string, Wasm_simd128_widening.range) Hashtbl.t;
   counter : int ref;
   tail : bool;  (** emitting a traversal's tail: rack values are under its mask *)
   assigned_in_traversal : (string, unit) Hashtbl.t;
@@ -865,6 +866,17 @@ let pure_call u rs loc name ty (pure : Ast.expr) fused =
        | (Rack _ | Mask _ | Sc _), Some result when result <> ir_type ty ->
            fail loc "%s is %s here but the expression lowers to %s" name (string_of_ty ty) (Native_ir.string_of_typ result)
        | _ -> ());
+      let ranges = List.map (fun (parameter : Native_ir.parameter) ->
+        let bound = match parameter.name with
+          | None -> None
+          | Some parameter_name ->
+              Option.bind (List.find_opt (fun n -> cname n = parameter_name) free)
+                (fun n -> Hashtbl.find_opt rs.compact_ranges n) in
+        parameter.id, bound) func.parameters in
+      let result_range, alternatives = Wasm_simd128_widening.expression_alternatives ~parameters:ranges func in
+      Hashtbl.remove rs.compact_ranges name;
+      Option.iter (fun bounds -> Hashtbl.replace rs.compact_ranges name bounds) result_range;
+      u.alternatives <- alternatives @ u.alternatives;
       let mask_parameter _ index =
         match List.nth_opt parameters index with
         | Some (_, Native_ir.Mask) -> (
@@ -982,7 +994,9 @@ let rec run_stmts u rs scope indent (stmts : rstmt list) =
 
 and view_c (view : expr) = match view.k with Var name -> local name | _ -> "/* view */"
 
-and record_type rs name ty = Hashtbl.replace rs.types name ty
+and record_type rs name ty =
+  Hashtbl.replace rs.types name ty;
+  Hashtbl.remove rs.compact_ranges name
 
 and run_stmt u rs scope indent (s : rstmt) =
   let pad = String.make indent ' ' in
@@ -1031,6 +1045,7 @@ and run_stmt u rs scope indent (s : rstmt) =
       record_type rs name ty;
       Printf.sprintf "%sv128_t %s = %s;\n" pad (local name) (local first)
   | R_set (name, value) ->
+      Hashtbl.remove rs.compact_ranges name;
       if rs.tail && Hashtbl.mem rs.assigned_in_traversal name then (
         (* A tail updates only its active lanes. *)
         u.selected <- "v128.bitselect" :: u.selected;
@@ -1382,20 +1397,25 @@ and traverse u rs scope indent t =
       match s.r with
       | R_chunk_load (name, element, field, stored) ->
           record_type rs name (Rack element);
+          if stored <> element then
+            Option.iter (fun bounds -> Hashtbl.replace rs.compact_ranges name bounds)
+              (Wasm_simd128_widening.compact_column_range stored);
           let column = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer t.t_stack field) (bytes stored) in
           let widen raw =
             if stored = element then raw
             else
               let steps =
                 match (bytes stored, bytes element) with
-                | 1, 4 -> if is_signed stored then [ "wasm_i16x8_extend_low_i8x16"; "wasm_i32x4_extend_low_i16x8" ] else [ "wasm_u16x8_extend_low_u8x16"; "wasm_u32x4_extend_low_u16x8" ]
-                | 2, 4 -> if is_signed stored then [ "wasm_i32x4_extend_low_i16x8" ] else [ "wasm_u32x4_extend_low_u16x8" ]
-                | 1, 2 -> if is_signed stored then [ "wasm_i16x8_extend_low_i8x16" ] else [ "wasm_u16x8_extend_low_u8x16" ]
-                | 4, 8 -> if stored = SFloat then [ "wasm_f64x2_promote_low_f32x4" ] else if is_signed stored then [ "wasm_i64x2_extend_low_i32x4" ] else [ "wasm_u64x2_extend_low_u32x4" ]
+                | 1, 4 -> if is_signed stored then
+                    [ "wasm_i16x8_extend_low_i8x16", "i16x8.extend_low_i8x16_s"; "wasm_i32x4_extend_low_i16x8", "i32x4.extend_low_i16x8_s" ] else
+                    [ "wasm_u16x8_extend_low_u8x16", "i16x8.extend_low_i8x16_u"; "wasm_u32x4_extend_low_u16x8", "i32x4.extend_low_i16x8_u" ]
+                | 2, 4 -> if is_signed stored then [ "wasm_i32x4_extend_low_i16x8", "i32x4.extend_low_i16x8_s" ] else [ "wasm_u32x4_extend_low_u16x8", "i32x4.extend_low_i16x8_u" ]
+                | 1, 2 -> if is_signed stored then [ "wasm_i16x8_extend_low_i8x16", "i16x8.extend_low_i8x16_s" ] else [ "wasm_u16x8_extend_low_u8x16", "i16x8.extend_low_i8x16_u" ]
+                | 4, 8 -> if stored = SFloat then [ "wasm_f64x2_promote_low_f32x4", "f64x2.promote_low_f32x4" ] else if is_signed stored then [ "wasm_i64x2_extend_low_i32x4", "i64x2.extend_low_i32x4_s" ] else [ "wasm_u64x2_extend_low_u32x4", "i64x2.extend_low_i32x4_u" ]
                 | _ -> fail Ast.dummy_loc "no widening from %d to %d bytes" (bytes stored) (bytes element)
               in
-              u.selected <- List.map (fun s -> s) [ "i16x8.extend_low_i8x16_u"; "i32x4.extend_low_i16x8_u"; "i16x8.extend_low_i8x16_s"; "i32x4.extend_low_i16x8_s" ] @ u.selected;
-              List.fold_left (fun acc f -> Printf.sprintf "%s(%s)" f acc) raw steps
+              u.selected <- List.map snd steps @ u.selected;
+              List.fold_left (fun acc (intrinsic, _) -> Printf.sprintf "%s(%s)" intrinsic acc) raw steps
           in
           let raw =
             if tail then Printf.sprintf "rake_tail_load_%d_%d(%s, rake_r)" (bytes stored * l) (bytes stored) column
@@ -1493,10 +1513,12 @@ and tail_helpers u width element =
 
 let run_function u (run : run) =
   u.selected <- [];
+  u.alternatives <- [];
   u.lane_operations <- 0;
   u.loops <- 0;
   u.slow_calls <- [];
-  let rs = { run; types = Hashtbl.create 32; counter = ref 0; tail = false; assigned_in_traversal = Hashtbl.create 4 } in
+  let rs = { run; types = Hashtbl.create 32; compact_ranges = Hashtbl.create 8;
+    counter = ref 0; tail = false; assigned_in_traversal = Hashtbl.create 4 } in
   let scope = new_scope () in
   let params = ref [] and entry = Buffer.create 128 in
   List.iter
@@ -1521,7 +1543,9 @@ let run_function u (run : run) =
    | None -> ());
   let body = run_stmts u rs scope 4 run.run_body in
   Hashtbl.replace u.run_facts run.run_name
-    (u.loops, u.lane_operations, List.sort_uniq compare u.selected, List.sort_uniq compare u.slow_calls);
+    { Wasm_simd128_toolchain.loops = u.loops; lane_operations = u.lane_operations;
+      selected = List.sort_uniq compare u.selected; alternatives = List.sort_uniq compare u.alternatives;
+      slow_calls = List.sort_uniq compare u.slow_calls };
   Printf.sprintf "__attribute__((noinline)) void %s(%s)\n{\n%s%s}\n" run.run_name
     (if !params = [] then "void" else String.concat ", " (List.rev !params)) (Buffer.contents entry) body
 
@@ -1787,7 +1811,7 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
   let u =
     {
       program; execution_target; addressing; types = Buffer.create 1024; defined = Hashtbl.create 32; helpers = Buffer.create 1024;
-      helper_names = Hashtbl.create 32; expressions = Buffer.create 4096; selected = []; lane_operations = 0; loops = 0; slow_calls = [];
+      helper_names = Hashtbl.create 32; expressions = Buffer.create 4096; selected = []; alternatives = []; lane_operations = 0; loops = 0; slow_calls = [];
       run_facts = Hashtbl.create 8;
     }
   in

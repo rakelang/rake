@@ -196,9 +196,16 @@ share full-width transfers and guarded tails with float columns, and can
 combine those types in one lane expression. Independent C checks wrapping
 arithmetic, unsigned clamps, literal shifts, mixed masks, exact aliasing and
 single-column updates against arrays ending at guard pages. WebAssembly
-and each selected-profile interpreter check the same fixture. We will extend
-native traversal to widening and the remaining column widths, then define
-participation for cross-lane operations before admitting them in tails.
+and each selected-profile interpreter check the same fixture. Native traversal
+now also widens signed and unsigned byte or 16-bit columns into 32-bit
+working racks, retaining compact storage and guarded tails. Signedness
+bitcasts keep the rack's bits and selected profile width. Independent C
+checks all four compact types, updates and destinations against guarded
+arrays. WebAssembly verifies its packed widening in both addressing modes,
+with source bounds required for narrower comparisons or extending multiplies.
+We will extend the remaining column and output widths, implement numerical
+integer/float conversion, then define participation for cross-lane operations
+before admitting them in tails.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
 integer extraction and insertion, the remaining scalar expressions and

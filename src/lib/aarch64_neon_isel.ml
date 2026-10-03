@@ -510,6 +510,10 @@ let select_function (func : N.func) =
                 @ steps accumulated rest in
           [ M.Broadcast_f32 { dst = initial; source; lane; provenance } ]
           @ steps initial [ M.Lane1; M.Lane2; M.Lane3 ]
+      | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
+          let dst = word_rack_result () in
+          ensure_operand_i32 func.name environment index operand;
+          [ M.Copy_word { dst; source = operand; provenance } ]
       | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ ->
           fail func.name ~instruction:index

@@ -376,6 +376,9 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                 max !maximum_live
                   (I.cardinal !allocation + destination_growth + scratch_count);
               (match instruction with
+              | M.Copy_word { source; _ } ->
+                  if reused <> Some source then
+                    emit loc provenance (Moveaps { dst; source = p source })
               | M.Uniform_f32 { bits; _ } -> emit loc provenance (Uniform_f32 { dst; bits })
               | M.Uniform_mask { value; _ } -> emit loc provenance (Uniform_mask { dst; value })
               | M.Broadcastss { source; _ } ->

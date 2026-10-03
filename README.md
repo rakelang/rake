@@ -59,7 +59,7 @@ The scalar fallback remains WIP (work in progress), and the compiler rejects
 code for it. General native runs are also WIP. The unreleased development
 compiler compiles slow orchestration with register kernels as native C and
 objects. It embeds Rake's selected assembly, checks the kernels in the final
-object, and supports uniform `f32`, `i32` and `u32` parameters and `f32`,
+object, and supports uniform `f32`, `i32`, `u32` and `bool` parameters and `f32`,
 `bool`, `i32` or `u32` results at the boundary from slow code. Other native
 scalar kernel boundaries remain WIP. Platform C
 imports and exports, header-backed unions, typed C callbacks and process
@@ -67,7 +67,11 @@ arguments are supported too. SSE2, AVX2, AVX-512 and NEON also support
 `f32s`, `i32s` and `u32s` traversals that yield a matching stream or update
 one mutable stack column,
 including a separate destination with its own record layout,
-with checked partial racks. The physical profiles also compile direct uniform
+with checked partial racks. Explicit `widen` reads signed or unsigned byte
+and 16-bit columns into 32-bit working racks. Stored columns stay compact,
+and the tail reads only existing records. Native `bitcast` between `i32s`
+and `u32s` preserves every lane's bits. Numerical integer/float conversions
+remain WIP on physical profiles. The physical profiles also compile direct uniform
 `f32` comparisons as vector selections, including within through masks and
 stream tails. Native `i32s` and `u32s` support wrapping add/subtract and
 bitwise AND/OR/XOR. Signed `i32s` comparisons produce masks for selection

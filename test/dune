@@ -61,3 +61,7 @@
 (test
  (name wasm_simd128_test)
  (libraries rake))
+
+(test
+ (name wasm_simd128_verify_test)
+ (libraries rake))

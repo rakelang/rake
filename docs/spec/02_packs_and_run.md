@@ -60,10 +60,13 @@ type's sign:
 
 | Stored column | 32-bit domains (`f32s`, `i32s`, `u32s`) | 64-bit domains (`i64s`, `u64s`) |
 | --- | --- | --- |
-| `u8`, `u16` | `u32s` | not implemented |
-| `i8`, `i16` | `i32s` | not implemented |
+| `u8`, `u16` | `u32s` | WIP* |
+| `i8`, `i16` | `i32s` | WIP* |
 | `u32` | the column itself | `u64s` |
 | `i32` | the column itself | `i64s` |
+
+*WIP: work in progress. WebAssembly supports the implemented domains above.
+Native streams currently implement only the 32-bit domains.*
 
 A column wider than the domain's lanes is rejected. A traversal using `u8s`
 reads sixteen byte records at once, and a `u8` column is its rack directly.
@@ -74,7 +77,9 @@ The count is a uniform integer. A count of zero or less reads nothing. A count
 that isn't a multiple of the lane count ends with a tail chunk whose mask is
 `lane < count mod lanes`. Its transfers touch only active elements: lane-sized
 loads and stores on WebAssembly, count-guarded lane transfers on SSE2 and
-NEON, and masked vector transfers on AVX2 and AVX-512. These transfers avoid
+NEON, and masked vector transfers for 32-bit AVX2 columns and AVX-512
+columns. Compact AVX2 columns use count-guarded lane transfers before packed
+widening. These transfers avoid
 elements past the count. In the tail, a column's inactive lanes hold
 zero, so a shuffle that moves one into an active lane reads zero. Rack
 expressions run under the tail's mask, and a mutable location updates only
@@ -191,9 +196,12 @@ output, and every column of a stack it stores into must hold at least `count`
 elements. Slow code calling a run checks these and traps, and a C caller must
 meet them. A run reads each column pointer from its descriptor once.
 
-Read-only inputs may alias each other. An output either overlaps no input or
-starts at exactly the same address as one input column, for an in-place
-update. Each chunk loads all the columns it reads before storing its result,
+Read-only inputs may alias each other. An output may overlap an input only
+when their element widths match and both start at exactly the same address,
+for an in-place update. Otherwise their storage must be disjoint. A 32-bit
+output cannot reuse a compact byte or 16-bit input's storage: its wider
+stores would overwrite records before the next chunk reads them. Each
+chunk loads all the columns it reads before storing its result,
 so an in-place update sees the chunk's inputs as they were. The C declaration
 has no `restrict`, because that exact aliasing is allowed.
 
@@ -214,13 +222,69 @@ uniform `f32`, `i32`, `u32` or `bool` arguments within the C register limits.
 One traversal using `f32s`, `i32s` or `u32s` yields a stream of the matching
 scalar type from a read-only stack, or updates one `f32`, `i32` or `u32`
 column in its mutable input or destination. Its body loads one to four
-columns of these types and combines immutable lane expressions, including
+columns of these types, or compact columns explicitly widened to 32 bits,
+and combines immutable lane expressions, including
 calls to rakes and scratches. A float mask can select integer values, and an
 integer mask can select floats: each column keeps its own element type while
 sharing the traversal's lane count. General loops, multiple column stores,
-widening, other scalar parameter types, reductions, scans, extraction, insertion and shuffles
+other scalar parameter types, numerical integer/float conversions, reductions,
+scans, extraction, insertion and shuffles
 remain work in progress and fail compilation. Unused stored columns may have
 other scalar types.
+
+### Compact columns
+
+A stack can keep a small field in byte or 16-bit storage while its run
+computes with 32-bit lanes. `widen(row.field)` sign-extends `i8` or `i16`
+to `i32s`, and zero-extends `u8` or `u16` to `u32s`. This preserves the
+stored value. The field stays compact in memory, and its pointer advances
+by one or two bytes per record instead of four.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack CompactReadings {
+  i8: adjustment;
+  i16: offset;
+  u8: quality;
+  u16: weight;
+}
+
+run combine_readings(input: stack CompactReadings, <count: i64>) -> i32:
+  for row in input using i32s up to <count>:
+    let adjustment = widen(row.adjustment)
+    let offset = widen(row.offset)
+    let quality = bitcast(i32s, widen(row.quality))
+    let weight = bitcast(i32s, widen(row.weight))
+    yield ((adjustment + offset) + quality) + weight
+```
+
+The unsigned fields fit in a signed 32-bit lane, so their bitcasts above
+preserve their numerical values too. In general `bitcast` changes only the
+interpretation of bits: an unsigned 32-bit value above 2³¹−1 becomes a
+negative signed value. It does not convert integers to floats.
+
+The C boundary keeps the original column types and a 32-bit result:
+
+```c
+struct rake_stack_CompactReadings_v1 {
+    const int8_t   *adjustment;
+    const int16_t  *offset;
+    const uint8_t  *quality;
+    const uint16_t *weight;
+};
+void combine_readings(const struct rake_stack_CompactReadings_v1 *input,
+    int64_t count, int32_t *result);
+```
+
+The compute domain controls how many records each rack visits. An AVX2
+`i32s` traversal processes eight records, loading eight bytes from a byte
+column or sixteen bytes from a 16-bit column before widening into one
+256-bit rack. It doesn't process 32 byte records merely because the stored
+field is small. SSE2 and NEON visit four records, and AVX-512 visits sixteen.
+Outputs and updated columns remain `f32`, `i32` or `u32`. Other widening
+widths and compact outputs are work in progress.
+
+### Calling the stream
 
 On Linux x86-64 the stream follows System V: the descriptor is in `rdi`, the
 count in `rsi`, and, when there are no integer uniforms, the output in `rdx`.
@@ -378,8 +442,11 @@ storage for the read and written columns, and may leave unused pointers null.
 
 The compiler owns the loop and advances by four elements on SSE2 and NEON,
 eight on AVX2 or sixteen on AVX-512F. Full racks use unaligned vector loads
-and stores. AVX2 touches only active elements in the last rack through
-`vmaskmovps`. AVX-512F uses `vmovups` with the `k2` memory mask, independently
+and stores, with packed extension for compact input columns. AVX2 touches
+only active 32-bit elements in the last rack through `vmaskmovps`. Its compact
+tail first assembles the existing bytes or 16-bit elements with guarded
+lane transfers, then widens the packed value. AVX-512F uses `vmovups` or a
+masked extending load with the `k2` memory mask, independently
 of the expression selector's `k1`.
 
 SSE2 has no fault-suppressing float load or store. For its last one to three
@@ -412,6 +479,10 @@ checks signed and unsigned integer columns against independently computed
 wrapping bits, including multiplication, absolute values, literal shifts,
 unsigned clamps and mixed float/integer selection. Integer streams and
 column updates exercise exact aliasing and a separately shaped destination.
+Compact-column checks cover signed and unsigned byte and 16-bit boundaries,
+wrapping sums, unsigned products and separate destinations. Every compact
+input ends at a guard page for each count from zero through 65, so an
+over-read fails independently of the numerical result.
 C and Rake callers also check scale, bias and threshold arguments, including
 a quiet-NaN threshold, and eight uniform arguments preserved across racks.
 Mutable-descriptor checks cover the first and fourth columns, an unread

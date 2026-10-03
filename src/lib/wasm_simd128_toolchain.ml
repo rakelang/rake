@@ -81,6 +81,17 @@ let decode_unknown bytes_text =
       Option.value (List.assoc_opt (leb 0 0 rest) relaxed_opcodes) ~default:"<unknown>"
   | _ -> "<unknown>"
 
+(** LLVM prints extending loads with their destination lane type. The
+    WebAssembly text format uses v128 for these same six instructions. *)
+let canonical_mnemonic = function
+  | "i16x8.load8x8_s" -> "v128.load8x8_s"
+  | "i16x8.load8x8_u" -> "v128.load8x8_u"
+  | "i32x4.load16x4_s" -> "v128.load16x4_s"
+  | "i32x4.load16x4_u" -> "v128.load16x4_u"
+  | "i64x2.load32x2_s" -> "v128.load32x2_s"
+  | "i64x2.load32x2_u" -> "v128.load32x2_u"
+  | mnemonic -> mnemonic
+
 (** Function name to instruction mnemonics, from llvm-objdump's wasm disassembly. *)
 let disassembled_functions listing =
   let functions = Hashtbl.create 8 in
@@ -116,7 +127,7 @@ let disassembled_functions listing =
                      | None -> instruction)
                in
                let mnemonic = if String.trim mnemonic = "<unknown>" then decode_unknown raw else mnemonic in
-               let mnemonic = String.trim mnemonic in
+               let mnemonic = canonical_mnemonic (String.trim mnemonic) in
                if mnemonic <> "" && not (String.starts_with ~prefix:"R_WASM_" mnemonic) then
                  Hashtbl.replace functions name (Hashtbl.find functions name @ [ mnemonic ])
            | _ -> ());
@@ -174,7 +185,13 @@ let assemble_program ~include_dir c_source =
       Ok bytes)
 
 (** Facts Rake recorded while emitting one run. *)
-type run_facts = { loops : int; lane_operations : int; selected : string list; slow_calls : string list }
+type run_facts = {
+  loops : int;
+  lane_operations : int;
+  selected : string list;
+  alternatives : string list;  (** exact substitutions proved from operand bounds *)
+  slow_calls : string list;
+}
 
 (** Direct calls are authorized by their relocation symbol, never merely by
     the presence of a slow block somewhere in the function. Unresolved and
@@ -310,7 +327,8 @@ let verify_program ~scratches ~runs object_bytes =
               fail (Printf.sprintf "contains %s: a run keeps no C stack frame, so no rack passes through memory Rake didn't name" m)
           | Some m -> fail (Printf.sprintf "contains %s: vector code calls nothing" m)
           | None -> (
-              match List.find_opt (fun m -> not (m = "call" || run_scalar m || (is_simd m && equivalent facts.selected m))) mnemonics with
+              match List.find_opt (fun m -> not (m = "call" || run_scalar m
+                || (is_simd m && (equivalent facts.selected m || List.mem m facts.alternatives)))) mnemonics with
               | Some m -> fail (Printf.sprintf "contains %s, which none of its source operations selects" m)
               | None ->
                   let lane_operations = List.length (List.filter is_lane_operation mnemonics) in

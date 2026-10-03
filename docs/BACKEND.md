@@ -223,6 +223,11 @@ Integer masks and float masks share the same lane representation, so either
 can select float or integer racks. The native traversal subset accepts these
 32-bit integer columns alongside floats.
 
+A native `bitcast` between `i32s` and `u32s` keeps the same 32 bits in each
+lane. Selection uses a typed vector copy, and allocation elides the copy
+when its input register can be reused. A still-live input needs a separate
+vector register. Neither case performs a numerical conversion.
+
 ## Whole programs
 
 ```text
@@ -342,6 +347,15 @@ addressing modes and leaves rack arithmetic vectorised. Unsigned comparisons
 at 2³¹ select a packed sign-bit mask directly, with inversion for the lower
 half. Those instructions belong to Rake's selection before C compilation.
 
+Clang can move a comparison before a compact column's widening, then widen
+the mask, or combine two extensions and a multiply into an extending
+multiply. The verifier accepts these packed substitutions only with
+source-derived bounds on both operands. Typed compact columns and literals
+establish bounds, and immutable aliases, safe bitcasts and selections can
+retain them. Unproved arithmetic discards them. A narrower comparison or
+extending multiply without the required bounds is rejected. These
+alternatives grant no scalar lane instruction permission.
+
 The promise is the same as on a physical target: outside a `slow` block, rack
 work uses vector instructions wherever the selected profile implements the
 operation. A run may also contain the uniform address, loop and bounds work
@@ -364,10 +378,21 @@ embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
 This stage supports one to four `f32`, `i32` or `u32` read columns and one
-output of these types. A stream's result type matches its traversal domain.
+output of these types. It also explicitly widens `i8` and `i16` stored
+columns into `i32s`, or `u8` and `u16` into `u32s`. A stream's result type
+matches its 32-bit traversal domain.
 The output is a separate stream pointer or one column in a mutable stack.
 A separate destination stack may have a different record layout. Column
 updates load every input rack before writing the result.
+Each input pointer advances by its stored width. Full compact loads read
+four records on SSE2 or NEON, eight on AVX2, and sixteen on AVX-512F.
+SSE2 widens packed bytes or 16-bit elements with unpack and shift sequences.
+AVX2 and AVX-512F use signed or unsigned extending loads, and NEON uses
+packed `sshll` or `ushll` extension. Compact SSE2, AVX2 and NEON tails use
+count-guarded transfers before packed extension. AVX-512F masks the
+extending load. The byte/16-bit storage remains compact while the working
+rack uses the profile's full register width. No scalar arithmetic tail is
+introduced, and compact output storage remains work in progress.
 The count may be `i32` or `i64`. The former is sign-extended to the native
 address width at entry, before signed count guards or pointer access.
 Up to eight uniform `f32`, `i32`, `u32` or `bool` arguments use the platform

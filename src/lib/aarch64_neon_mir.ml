@@ -12,6 +12,7 @@ type f32_lane = Lane0 | Lane1 | Lane2 | Lane3
 let f32_lane_index = function Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
 
 type instruction =
+  | Copy_word of { dst : vreg; source : vreg; provenance : provenance }
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Mask_const of { dst : vreg; value : bool; provenance : provenance }
   | Broadcast_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
@@ -77,6 +78,7 @@ type func = {
 type t = func list
 
 let def = function
+  | Copy_word { dst; _ }
   | Uniform_f32 { dst; _ }
   | Mask_const { dst; _ }
   | Broadcast_f32 { dst; _ }
@@ -111,6 +113,7 @@ let def = function
 
 let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
+  | Copy_word { source; _ } -> [ source ]
   | Broadcast_f32 { source; _ } -> [ source ]
   | Broadcast_bool { source; _ } -> [ source ]
   | Reduce_mask { source; _ } -> [ source ]
@@ -139,6 +142,7 @@ let operands = function
   | Select { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
 
 let provenance = function
+  | Copy_word { provenance; _ }
   | Uniform_f32 { provenance; _ }
   | Mask_const { provenance; _ }
   | Broadcast_f32 { provenance; _ }
@@ -175,6 +179,7 @@ let value_location func value =
   Option.value (List.assoc_opt value func.value_locations) ~default:func.loc
 
 let instruction_name = function
+  | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"
   | Broadcast_f32 _ -> "dup.lane.f32"

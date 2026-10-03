@@ -46,8 +46,10 @@ development compiler supports native slow orchestration with uniform `f32`,
 `i32` and `u32` kernel arguments and `f32`, `bool`, `i32` or `u32` results.
 Lessons start on WebAssembly when they contain a whole program. WebAssembly
 covers general memory runs. SSE2, AVX2, AVX-512 and NEON
-also compile `f32`, `i32` and `u32` stream traversals and single-column stack updates. Other
-native memory runs give the compiler's work-in-progress diagnostic. Updates
+also compile `f32`, `i32` and `u32` stream traversals and single-column stack updates.
+Stored byte and 16-bit columns can be explicitly widened into signed or
+unsigned 32-bit racks. General native memory runs and numerical integer/float
+conversions give the compiler's work-in-progress diagnostic. Updates
 can use a separate destination stack with a different record layout. Every result and
 lane trace comes from Rake's interpreter, using the selected profile's `f32`
 rack width. The browser displays C or assembly without executing that
@@ -398,6 +400,13 @@ output, which slow code passes as the last argument. Change the count passed
 to `advance` from `<6>` to `<5>` and run. The second chunk in the Lanes tab
 now has one live lane and three empty ones. The tail loads and stores only
 the record that exists.
+
+This lesson uses WebAssembly because `to_f32` converts the widened ages to
+floats. Native profiles support the byte-column widening and the `i32s`/`u32s`
+bitcast, while their numerical integer/float conversion remains work in
+progress. A native run can already compare those ages as integers to select
+float values, or produce a 32-bit integer stream. [Compact
+columns](spec/02_packs_and_run.md#compact-columns) shows a complete native example.
 
 ## 10. A whole program
 

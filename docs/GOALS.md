@@ -100,6 +100,9 @@ Today: general runs, stacks and traversals compile on `wasm-simd128`.
 The development compiler adds `f32`, `i32` and `u32` stream traversals and single-column
 stack updates on SSE2, AVX2, AVX-512 and NEON. An update can write its input
 stack or a separate destination with a different record layout.
+Explicit `widen` also reads signed and unsigned byte or 16-bit columns into
+32-bit working racks. Each column advances by its stored element width,
+and a partial rack reads only participating records. Outputs stay 32-bit.
 [Packs and runs](spec/02_packs_and_run.md) defines
 their boundaries and checked tails.
 

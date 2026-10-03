@@ -151,12 +151,29 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | marked `i32` or `u32` uniform arguments and broadcasts | yes | yes |
 | `if` on a direct comparison of marked uniforms | yes | yes |
 | static one- and two-rack `shuffle` | yes | yes |
-| runtime shift counts, conversions, extraction and insertion | WIP* | WIP* |
+| `bitcast` between `i32s` and `u32s` | yes | yes |
+| runtime shift counts, numerical conversions, extraction and insertion | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
 float racks, and float masks can select integer racks. The
 [native stream subset](02_packs_and_run.md#native-cpu-streams) accepts `f32`,
 `i32` and `u32` columns while preserving each column's type.
+Explicit `widen` also loads signed byte and 16-bit columns into `i32s`, or
+unsigned ones into `u32s`. The stored type determines sign or zero extension.
+The [traversal contract](02_packs_and_run.md#native-cpu-streams) covers its
+compact memory transfers and partial racks.
+
+`bitcast(u32s, values)` reinterprets an `i32s` rack's bits as unsigned words,
+and `bitcast(i32s, values)` does the reverse. A lane containing −1 becomes
+4294967295 without changing a bit. The native allocator needs no instruction
+when it can reuse the input register, or a vector register copy when the
+input remains live. This does not implement numerical integer/float conversion.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch unsigned_bits(values: i32s) -> u32s:
+  bitcast(u32s, values)
+```
 
 An integer literal passed to a typed scratch or rake parameter takes that
 parameter's element type. A `u32` parameter can therefore receive
@@ -275,8 +292,9 @@ Conversions between integer and float racks:
   to even and saturating to the 32-bit range. NaN becomes zero.
 - `bitcast(i32s, x)` keeps the bits of a rack and changes its element type.
 
-Each is one instruction except `to_i32`, which is `f32x4.nearest` then
-`i32x4.trunc_sat_f32x4_s`.
+On WebAssembly each numerical conversion above is one instruction except
+`to_i32`, which is `f32x4.nearest` then `i32x4.trunc_sat_f32x4_s`. A bitcast
+reuses the same `v128` bits without a numerical conversion instruction.
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake

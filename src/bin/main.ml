@@ -170,8 +170,7 @@ let verify_whole_program (checked : Rake.Tier_ir.program) facts object_bytes =
   in
   let runs =
     Hashtbl.fold
-      (fun name (loops, lane_operations, selected, slow_calls) acc ->
-        (name, { Rake.Wasm_simd128_toolchain.loops; lane_operations; selected; slow_calls }) :: acc)
+      (fun name facts acc -> (name, facts) :: acc)
       facts []
   in
   match Rake.Wasm_simd128_toolchain.verify_program ~scratches ~runs object_bytes with

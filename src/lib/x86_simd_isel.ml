@@ -422,6 +422,10 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
               || List.exists (fun lane -> lane < 0 || lane >= lanes * List.length racks) indices then
             fail func.name ~instruction:index "shuffle indices must cover one rack and stay within its inputs";
           Some (M.Shuffle_word { dst; racks; indices; provenance })
+      | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
+          let dst = word_rack_result () in
+          ensure_operand_i32 func.name environment index operand;
+          Some (M.Copy_word { dst; source = operand; provenance })
       | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ ->
           fail func.name ~instruction:index

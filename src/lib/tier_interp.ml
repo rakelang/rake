@@ -603,8 +603,8 @@ and exec_rstmt renv ~tail (s : rstmt) =
               (* A uniform written where a rack is expected, as in out[<i>] <- <x>, is broadcast. *)
               match v with
               | R.F32_scalar f -> set name (VRack (R.splat (f32_lanes renv.machine) f))
-              | R.Int_scalar (_, x) -> set name (VRack (R.splat_int element x))
-              | R.U32_scalar x -> set name (VRack (R.splat_int element (Int64.of_int x)))
+              | R.Int_scalar (_, x) -> set name (VRack (R.splat_int ~lanes:(f32_lanes renv.machine) element x))
+              | R.U32_scalar x -> set name (VRack (R.splat_int ~lanes:(f32_lanes renv.machine) element (Int64.of_int x)))
               | rack -> set name (VRack rack))
           | _ -> set name (VRack v))
       | Error error -> trap loc "%s" (R.format_error error))

@@ -21,6 +21,43 @@ pack WordResults {
   u32: unsigned_value;
 }
 
+pack Compact {
+  u8: byte;
+  i16: small;
+  u16: word;
+  i8: tiny;
+  i32: value;
+}
+
+run widened_words(input: stack Compact, <count: i64>, <offset: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    let byte = bitcast(i32s, widen(row.byte))
+    let small = widen(row.small)
+    let word = bitcast(i32s, widen(row.word))
+    let tiny = widen(row.tiny)
+    yield ((byte + small) + word) + tiny + <offset>
+
+run widened_unsigned(input: stack Compact, <count: i32>) -> u32:
+  for row in input using u32s up to <count>:
+    let byte = widen(row.byte)
+    let word = widen(row.word)
+    let tiny = widen(row.tiny)
+    yield if tiny >= <0> then byte * word else byte + word
+
+run widened_update(input: mut stack Compact, <count: i32>, <offset: i32>):
+  for row in input using i32s up to <count>:
+    let byte = bitcast(i32s, widen(row.byte))
+    let small = widen(row.small)
+    let word = bitcast(i32s, widen(row.word))
+    let tiny = widen(row.tiny)
+    input.value <- ((byte + small) + word) + tiny + <offset>
+
+run widened_destination(input: stack Compact, <count: i64>, result: mut stack WordResults):
+  for row in input using u32s up to <count>:
+    let byte = widen(row.byte)
+    let word = widen(row.word)
+    result.unsigned_value <- byte + word
+
 run signed_words(input: stack Words, <count: i32>) -> i32:
   for row in input using i32s up to <count>:
     let first = row.first
@@ -34,6 +71,16 @@ run unsigned_words(input: stack Words, <count: i64>, <low: u32>, <offset: u32>) 
 run shifted_words(input: stack Words, <count: i32>) -> i32:
   for row in input using i32s up to <count>:
     yield shift_bits_right_signed(row.first, 31)
+
+run reinterpreted_words(input: stack Words, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    let bits = row.bits
+    let signed = bitcast(i32s, bits)
+    yield if bits >= <2147483648> then signed else bitcast(i32s, bits + <1>)
+
+run reinterpreted_unsigned(input: stack Words, <count: i32>) -> u32:
+  for row in input using u32s up to <count>:
+    yield bitcast(u32s, row.first) + <1>
 
 run selected_words(input: stack Words, <count: i64>, <enabled: bool>) -> i32:
   for row in input using i32s up to <count>:
@@ -200,6 +247,18 @@ slow main() -> i32:
   let unsigned_a: [9]u32 = [0, 2147483647, 2147483648, 4294967295, 1, 2147483649, 4294967294, 17, 29]
   signed_output: [9]i32 := [0; 9]
   unsigned_output: [9]u32 := [0; 9]
+  reinterpreted_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
+  for i from 0 up to 9:
+    let raw = if unsigned_a[i] >= 2147483648 then i64(unsigned_a[i]) else i64(unsigned_a[i]) + 1
+    let expected = if raw >= 2147483648 then raw - 4294967296 else raw
+    if i64(signed_output[i]) != expected:
+      return 1
+  reinterpreted_unsigned(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, unsigned_output)
+  for i from 0 up to 9:
+    let unsigned_value = if signed_a[i] < 0 then i64(signed_a[i]) + 4294967296 else i64(signed_a[i])
+    let expected = (unsigned_value + 1) % 4294967296
+    if i64(unsigned_output[i]) != expected:
+      return 1
   signed_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
   for i from 0 up to 9:
     let magnitude = if signed_a[i] < 0 then wrap_sub(0, signed_a[i]) else signed_a[i]
@@ -223,5 +282,23 @@ slow main() -> i32:
   write_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output }, <true>)
   for i from 0 up to 9:
     if unsigned_output[i] != (if a[i] >= 0.0 then unsigned_a[i] else wrap_add(unsigned_a[i], 1)):
+      return 1
+  let bytes: [9]u8 = [0, 1, 127, 128, 255, 17, 254, 42, 0]
+  let smalls: [9]i16 = [-32768, -1, 0, 1, 32767, 128, -128, 17, -17]
+  let words: [9]u16 = [0, 1, 32767, 32768, 65535, 128, 65408, 17, 29]
+  let tinies: [9]i8 = [-128, -1, 0, 1, 127, 17, -17, -128, 127]
+  widened_words(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, value: signed_a }, <9>, <2147483647>, signed_output)
+  for i from 0 up to 9:
+    let expected = wrap_add(((i32(bytes[i]) + i32(smalls[i])) + i32(words[i])) + i32(tinies[i]), 2147483647)
+    if signed_output[i] != expected:
+      return 1
+  widened_unsigned(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, value: signed_a }, <9>, unsigned_output)
+  for i from 0 up to 9:
+    let expected = if tinies[i] >= 0 then u32(bytes[i]) * u32(words[i]) else u32(bytes[i]) + u32(words[i])
+    if unsigned_output[i] != expected:
+      return 1
+  widened_destination(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, value: signed_a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output })
+  for i from 0 up to 9:
+    if unsigned_output[i] != u32(bytes[i]) + u32(words[i]):
       return 1
   return pair + weighted + combined + updated + written + magnitude_sum

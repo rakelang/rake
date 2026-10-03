@@ -455,33 +455,34 @@ let int_scalar s value =
     let signed = match s with Types.SInt8 | SInt16 | SInt -> true | _ -> false in
     Int_scalar (s, if signed && logand low (shift_left 1L (bits - 1)) <> 0L then sub low (shift_left 1L bits) else low)
 
-(** The 16 bytes of a rack or mask, little-endian. *)
-let rack_bytes = function
+(** The bytes of a profile-width rack or mask, little-endian. *)
+let rack_bytes ~lanes = function
   | F32_rack xs ->
-      Some (Array.init 16 (fun i -> Int32.to_int (Int32.logand (Int32.shift_right_logical (Int32.bits_of_float xs.(i / 4)) (8 * (i mod 4))) 0xffl)))
+      Some (Array.init (4 * Array.length xs) (fun i -> Int32.to_int (Int32.logand (Int32.shift_right_logical (Int32.bits_of_float xs.(i / 4)) (8 * (i mod 4))) 0xffl)))
   | Mask ms ->
-      let width = 16 / Array.length ms in
-      Some (Array.init 16 (fun i -> if ms.(i / width) then 0xff else 0))
+      let byte_count = 4 * lanes in
+      let width = byte_count / Array.length ms in
+      Some (Array.init byte_count (fun i -> if ms.(i / width) then 0xff else 0))
   | value -> (
       match int_lanes value with
       | Some (element, xs) ->
           let width = 16 / element_lanes element in
-          Some (Array.init 16 (fun i -> Int64.to_int (Int64.logand (Int64.shift_right_logical xs.(i / width) (8 * (i mod width))) 0xffL)))
+          Some (Array.init (width * Array.length xs) (fun i -> Int64.to_int (Int64.logand (Int64.shift_right_logical xs.(i / width) (8 * (i mod width))) 0xffL)))
       | None -> None)
 
 let rack_of_bytes element bytes =
   match element with
   | Types.SFloat ->
       F32_rack
-        (Array.init 4 (fun lane ->
+        (Array.init (Array.length bytes / 4) (fun lane ->
              let word = ref 0l in
              for b = 3 downto 0 do
                word := Int32.logor (Int32.shift_left !word 8) (Int32.of_int bytes.((lane * 4) + b))
              done;
              Int32.float_of_bits !word))
   | _ ->
-      let lanes = element_lanes element in
-      let width = 16 / lanes in
+      let width = 16 / element_lanes element in
+      let lanes = Array.length bytes / width in
       int_rack element
         (Array.init lanes (fun lane ->
              let v = ref 0L in
@@ -676,12 +677,12 @@ let rec eval_expr ~lanes env (expr : expr) =
         (* A uniform operand is broadcast in its own type first. *)
         let value =
           match value with
-          | F32_scalar x -> F32_rack (Array.make 4 x)
-          | Int_scalar (s, v) -> splat_int s v
-          | U32_scalar v -> splat_int Types.SUint (Int64.of_int v)
+          | F32_scalar x -> F32_rack (Array.make lanes x)
+          | Int_scalar (s, v) -> splat_int ~lanes s v
+          | U32_scalar v -> splat_int ~lanes Types.SUint (Int64.of_int v)
           | v -> v
         in
-        match rack_bytes value with
+        match rack_bytes ~lanes value with
         | Some bytes -> Ok (rack_of_bytes element bytes)
         | None -> error expr.loc (Operand_kind_mismatch { operation = "bitcast"; left = value_kind value; right = None }))
     | EReduce (((RAnd | ROr) as operation), operand) -> (

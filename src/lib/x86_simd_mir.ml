@@ -27,6 +27,7 @@ let f32_lane_of_int = function
   | _ -> None
 
 type instruction =
+  | Copy_word of { dst : vreg; source : vreg; provenance : provenance }
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Uniform_mask of { dst : vreg; value : bool; provenance : provenance }
   | Broadcastss of { dst : vreg; source : vreg; provenance : provenance }
@@ -112,6 +113,7 @@ type func = {
 type t = func list
 
 let def = function
+  | Copy_word { dst; _ }
   | Uniform_f32 { dst; _ }
   | Uniform_mask { dst; _ }
   | Broadcastss { dst; _ }
@@ -150,6 +152,7 @@ let def = function
 
 let operands = function
   | Uniform_f32 _ | Uniform_mask _ -> []
+  | Copy_word { source; _ }
   | Broadcastss { source; _ }
   | Broadcast_bool { source; _ }
   | Extract_f32 { source; _ }
@@ -180,6 +183,7 @@ let operands = function
   | Blendvps { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
 
 let provenance = function
+  | Copy_word { provenance; _ }
   | Uniform_f32 { provenance; _ }
   | Uniform_mask { provenance; _ }
   | Broadcastss { provenance; _ }
@@ -223,6 +227,7 @@ let value_location func value =
   Option.value (List.assoc_opt value func.value_locations) ~default:func.loc
 
 let instruction_name = function
+  | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "vbroadcastss"
   | Uniform_mask _ -> "mask.constant"
   | Broadcastss _ -> "vbroadcastss.xmm"

@@ -41,9 +41,30 @@ typedef struct {
     uint8_t *tag;
     uint32_t *unsigned_value;
 } rake_mut_stack_WordResults_v1;
+typedef struct {
+    const uint8_t *byte;
+    const int16_t *small;
+    const uint16_t *word;
+    const int8_t *tiny;
+    const int32_t *value;
+} rake_stack_Compact_v1;
+typedef struct {
+    uint8_t *byte;
+    int16_t *small;
+    uint16_t *word;
+    int8_t *tiny;
+    int32_t *value;
+} rake_mut_stack_Compact_v1;
+extern void widened_words(const rake_stack_Compact_v1 *, int64_t, int32_t, int32_t *);
+extern void widened_unsigned(const rake_stack_Compact_v1 *, int32_t, uint32_t *);
+extern void widened_update(const rake_mut_stack_Compact_v1 *, int32_t, int32_t);
+extern void widened_destination(const rake_stack_Compact_v1 *, int64_t,
+    const rake_mut_stack_WordResults_v1 *);
 extern void signed_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
 extern void unsigned_words(const rake_stack_Words_v1 *, int64_t, uint32_t, uint32_t, uint32_t *);
 extern void shifted_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
+extern void reinterpreted_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
+extern void reinterpreted_unsigned(const rake_stack_Words_v1 *, int32_t, uint32_t *);
 extern void selected_words(const rake_stack_Words_v1 *, int64_t, bool, int32_t *);
 extern void update_words(const rake_mut_stack_Words_v1 *, int32_t, int32_t);
 extern void write_words(const rake_stack_Words_v1 *, int64_t, const rake_mut_stack_WordResults_v1 *, bool);
@@ -131,6 +152,64 @@ static float root(float value)
     return value >= 0.0f ? sqrtf(value) : 0.0f;
 }
 
+static void check_widened_columns(unsigned char *const storage[5], size_t page)
+{
+    const uint8_t byte_values[] = { 0, 1, 127, 128, 255, 17, 254 };
+    const int16_t small_values[] = { -32768, -1, 0, 1, 32767, 128, -128 };
+    const uint16_t word_values[] = { 0, 1, 32767, 32768, 65535, 128, 65408 };
+    const int8_t tiny_values[] = { -128, -1, 0, 1, 127, 17, -17 };
+    const int32_t offsets[] = { INT32_MIN, -1, 0, INT32_MAX };
+    for (size_t count = 0; count <= 65; ++count) {
+        uint8_t *byte = storage[0] + page - count;
+        int16_t *small = (int16_t *)(storage[1] + page) - count;
+        uint16_t *word = (uint16_t *)(storage[2] + page) - count;
+        int8_t *tiny = (int8_t *)(storage[3] + page) - count;
+        uint32_t *output = (uint32_t *)(storage[4] + page) - count;
+        const rake_stack_Compact_v1 input = { byte, small, word, tiny, NULL };
+        const rake_mut_stack_Compact_v1 mutable_input = {
+            byte, small, word, tiny, (int32_t *)output
+        };
+        const rake_mut_stack_WordResults_v1 destination = { NULL, NULL, output };
+        for (size_t i = 0; i < count; ++i) {
+            byte[i] = byte_values[(i + count) % 7];
+            small[i] = small_values[(i + count + 1) % 7];
+            word[i] = word_values[(i + count + 3) % 7];
+            tiny[i] = tiny_values[(i + count + 5) % 7];
+        }
+        for (size_t scenario = 0; scenario < 4; ++scenario) {
+            const int32_t offset = offsets[scenario];
+            widened_words(&input, (int64_t)count, offset, (int32_t *)output);
+            for (size_t i = 0; i < count; ++i) {
+                const int64_t sum = (int64_t)byte[i] + small[i] + word[i] + tiny[i] + offset;
+                if (output[i] != (uint32_t)sum) abort();
+            }
+            widened_update(&mutable_input, (int32_t)count, offset);
+            for (size_t i = 0; i < count; ++i) {
+                const int64_t sum = (int64_t)byte[i] + small[i] + word[i] + tiny[i] + offset;
+                if (output[i] != (uint32_t)sum
+                    || byte[i] != byte_values[(i + count) % 7]
+                    || small[i] != small_values[(i + count + 1) % 7]
+                    || word[i] != word_values[(i + count + 3) % 7]
+                    || tiny[i] != tiny_values[(i + count + 5) % 7]) abort();
+            }
+        }
+        widened_unsigned(&input, (int32_t)count, output);
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t expected = tiny[i] >= 0
+                ? (uint32_t)byte[i] * word[i] : (uint32_t)byte[i] + word[i];
+            if (output[i] != expected) abort();
+        }
+        widened_destination(&input, (int64_t)count, &destination);
+        for (size_t i = 0; i < count; ++i)
+            if (output[i] != (uint32_t)byte[i] + word[i]) abort();
+    }
+    widened_words(NULL, 0, INT32_MAX, NULL);
+    widened_words(NULL, -1, INT32_MIN, NULL);
+    widened_unsigned(NULL, INT32_MIN, NULL);
+    widened_update(NULL, -1, INT32_MIN);
+    widened_destination(NULL, 0, NULL);
+}
+
 static void check_integer_columns(unsigned char *const storage[5], size_t page)
 {
     const uint32_t inputs[] = { 0, 1, 0x7fffffffu, 0x80000000u,
@@ -156,6 +235,15 @@ static void check_integer_columns(unsigned char *const storage[5], size_t page)
             const uint32_t magnitude = (uint32_t)(first[i] < 0 ? -(int64_t)first[i] : first[i]);
             expected[i] = first[i] < second[i]
                 ? original_first[i] * original_second[i] : magnitude + original_second[i];
+        }
+        reinterpreted_words(&input, (int32_t)count, (int32_t *)output);
+        for (size_t i = 0; i < count; ++i)
+            if (output[i] != (words[i] >= 0x80000000u ? words[i] : words[i] + 1u)) abort();
+        reinterpreted_unsigned(&input, (int32_t)count, output);
+        for (size_t i = 0; i < count; ++i) {
+            uint32_t original;
+            memcpy(&original, &first[i], sizeof(original));
+            if (output[i] != original + 1u) abort();
         }
         signed_words(&input, (int32_t)count, (int32_t *)output);
         for (size_t i = 0; i < count; ++i)
@@ -524,6 +612,7 @@ int main(void)
     write_roots(NULL, 0, NULL, NAN, NAN);
     write_roots(NULL, -1, NULL, NAN, NAN);
     check_integer_columns(storage, page);
+    check_widened_columns(storage, page);
     for (size_t column = 0; column < 5; ++column)
         if (munmap(storage[column], page * 2)) abort();
     puts("native multi-column guard-page and scalar-oracle checks passed");

@@ -71,6 +71,12 @@ let column_type = function
 
 let column_supported = function Types.SFloat | Types.SInt | Types.SUint -> true | _ -> false
 
+let column_load_supported element stored =
+  column_supported element && (element = stored || match element, stored with
+    | Types.SInt, (Types.SInt8 | Types.SInt16)
+    | Types.SUint, (Types.SUint8 | Types.SUint16) -> true
+    | _ -> false)
+
 let output_pack program run owner =
   match List.find_opt (function Run_stack (name, _, true) -> name = owner | _ -> false) run.run_params with
   | Some (Run_stack (_, schema, _)) -> find_pack program schema
@@ -108,8 +114,8 @@ let compile_body ~profile program run traverse uniforms output ~tail =
   List.iter (fun statement ->
     if !result <> None then reject statement.rloc "native traversal must end with its yield or column update";
     match statement.r with
-    | R_chunk_load (name, element, field, stored) when column_supported element && element = stored ->
-        columns := !columns @ [ name, element, field ]
+    | R_chunk_load (name, element, field, stored) when column_load_supported element stored ->
+        columns := !columns @ [ name, element, field, stored ]
     | R_pure (name, Rack (Types.SFloat | Types.SInt | Types.SUint), expression, false)
     | R_pure (name, Mask _, expression, false) ->
         bindings := (name, expand !bindings expression) :: !bindings
@@ -119,11 +125,11 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     | R_output (owner, field, name) when output = Column (owner, field) ->
         result := List.assoc_opt name !bindings
     | _ -> reject statement.rloc
-        "native traversals currently support f32/i32/u32 columns, immutable lane expressions and one final yield or column update; this run operation is work in progress") traverse.t_body;
+        "native traversals currently support f32/i32/u32 columns, explicit byte/16-bit widening, immutable lane expressions and one final yield or column update; this run operation is work in progress") traverse.t_body;
   let expression = match !result with Some e -> e | None -> reject run.run_loc "native traversal requires a 32-bit rack output expression" in
   if List.length !columns = 0 || List.length !columns > 4 then
-    reject run.run_loc "native streams currently load one to four f32/i32/u32 columns";
-  let parameters = List.map (fun (name, element, _) -> name, column_type element) !columns
+    reject run.run_loc "native streams currently load one to four columns into f32/i32/u32 racks";
+  let parameters = List.map (fun (name, element, _, _) -> name, column_type element) !columns
     @ List.map (fun (name, scalar) -> name, uniform_type scalar) uniforms in
   let mask = if tail then Some "$native_tail" else None in
   let parameters = match mask with None -> parameters | Some name -> parameters @ [ name, Native_ir.Mask ] in
@@ -220,6 +226,35 @@ let emit_x86_run ~profile program buffer (run : run) =
     let block = Buffer.create 512 in
     List.iter (X86_simd_asm.emit_instruction profile pool block) allocated.X86_simd_regalloc.instructions;
     Buffer.add_string buffer (Buffer.contents block) in
+  let widening_instruction stored =
+    "vpmov" ^ (if is_signed stored then "sx" else "zx")
+    ^ (if bytes stored = 1 then "bd" else "wd") in
+  let widen_register index stored =
+    if bytes stored < 4 then
+      if sse2 then (
+        (* Duplicate each stored element through its dword, then use one
+           packed shift to retain either its sign or its unsigned value. *)
+        if bytes stored = 1 then emit "punpcklbw xmm%d, xmm%d" index index;
+        emit "punpcklwd xmm%d, xmm%d" index index;
+        emit "%s xmm%d, %d" (if is_signed stored then "psrad" else "psrld")
+          index (32 - bits stored))
+      else emit "%s %s, xmm%d" (widening_instruction stored) (register index) index in
+  let load_column ~masked index (_, _, _, stored) =
+    let width = bytes stored in
+    let address = Printf.sprintf "[%s + rax*%d]" pointers.(index) width in
+    if width = 4 then
+      emit "%s %s%s, %s PTR %s" move (register index)
+        (if masked then "{k2}{z}" else "") memory address
+    else if sse2 then (
+      emit "%s xmm%d, %s PTR %s" (if width = 1 then "movd" else "movq") index
+        (if width = 1 then "DWORD" else "QWORD") address;
+      widen_register index stored)
+    else
+      let source_memory = match lanes * width with
+        | 8 -> "QWORD" | 16 -> "XMMWORD" | 32 -> "YMMWORD"
+        | _ -> invalid_arg "native widening load width" in
+      emit "%s %s%s, %s PTR %s" (widening_instruction stored) (register index)
+        (if masked then "{k2}{z}" else "") source_memory address in
   (* Match the literal-pool alignment at the function entry. Its relative
      offsets then stay identical in isolated and mixed-program objects. *)
   Printf.bprintf buffer ".intel_syntax noprefix\n.text\n.p2align %d\n.globl %s\n.type %s, @function\n%s:\n"
@@ -243,7 +278,7 @@ let emit_x86_run ~profile program buffer (run : run) =
   Option.iter (fun slot ->
     let source = List.nth [ "rdi"; "rsi"; "rdx"; "rcx"; "r8"; "r9" ] slot in
     if source <> "rdx" then emit "mov rdx, %s" source) output_slot;
-  List.iteri (fun index (_, _, field) ->
+  List.iteri (fun index (_, _, field, _) ->
     emit "mov %s, QWORD PTR [rdi + %d]" pointers.(index) (column_offset schema field)) columns;
   (match output with
    | Stream -> ()
@@ -254,7 +289,7 @@ let emit_x86_run ~profile program buffer (run : run) =
   emit "cmp rsi, %d" lanes;
   emit "jl %s" (label "tail");
   Printf.bprintf buffer "%s:\n" (label "loop");
-  List.iteri (fun index _ -> emit "%s %s, %s PTR [%s + rax*4]" move (register index) memory pointers.(index)) columns;
+  List.iteri (load_column ~masked:false) columns;
   body full;
   emit "%s %s PTR [rdx + rax*4], %s" move memory (register 0);
   emit "add rax, %d" lanes;
@@ -274,18 +309,30 @@ let emit_x86_run ~profile program buffer (run : run) =
     emit "shl edi, %d" alignment;
     emit "add rcx, rdi";
     emit "movaps %s, %s PTR [rcx]" (register mask_register) memory;
+    List.iteri (fun index (_, _, _, stored) ->
+      if bytes stored < 4 then emit "pxor xmm%d, xmm%d" index index) columns;
     for lane = 0 to lanes - 2 do
       if lane > 0 then (
         emit "cmp rsi, %d" (lane + 1);
         emit "jl %s" (label "tail_loaded"));
-      List.iteri (fun index _ ->
-        if lane = 0 then
+      List.iteri (fun index (_, _, _, stored) ->
+        if bytes stored = 1 then (
+          (* SSE2 has no byte lane load. This transfers one guarded byte
+             into compact storage; widening remains a packed operation. *)
+          emit "movzx edi, BYTE PTR [%s + rax + %d]" pointers.(index) lane;
+          emit "movd xmm15, edi";
+          if lane > 0 then emit "pslldq xmm15, %d" lane;
+          emit "por xmm%d, xmm15" index)
+        else if bytes stored = 2 then
+          emit "pinsrw xmm%d, WORD PTR [%s + rax*2 + %d], %d" index pointers.(index) (lane * 2) lane
+        else if lane = 0 then
           emit "movss %s, DWORD PTR [%s + rax*4]" (register index) pointers.(index)
         else (
           emit "movss xmm15, DWORD PTR [%s + rax*4 + %d]" pointers.(index) (lane * 4);
           emit "%s %s, xmm15" (if lane = 1 then "unpcklps" else "movlhps") (register index))) columns
     done;
-    Printf.bprintf buffer "%s:\n" (label "tail_loaded"))
+    Printf.bprintf buffer "%s:\n" (label "tail_loaded");
+    List.iteri (fun index (_, _, _, stored) -> widen_register index stored) columns)
   else if avx512 then (
     (* k1 belongs to the register selector. k2 preserves the memory
        participation mask through comparisons and blends in the body. *)
@@ -296,15 +343,33 @@ let emit_x86_run ~profile program buffer (run : run) =
     emit "kmovw k2, edi";
     emit "vpxord %s, %s, %s" (register mask_register) (register mask_register) (register mask_register);
     emit "vpternlogd %s{k2}, %s, %s, 0xff" (register mask_register) (register mask_register) (register mask_register);
-    List.iteri (fun index _ ->
-      emit "vmovups %s{k2}{z}, %s PTR [%s + rax*4]" (register index) memory pointers.(index)) columns)
+    List.iteri (load_column ~masked:true) columns)
   else (
     emit "lea rcx, [rip + %s]" (label "masks");
-    emit "shl rsi, %d" alignment;
-    emit "add rcx, rsi";
+    emit "mov edi, esi";
+    emit "shl edi, %d" alignment;
+    emit "add rcx, rdi";
     emit "vmovups %s, %s PTR [rcx]" (register mask_register) memory;
-    List.iteri (fun index _ ->
-      emit "vmaskmovps %s, %s, %s PTR [%s + rax*4]" (register index) (register mask_register) memory pointers.(index)) columns);
+    List.iteri (fun index (_, _, _, stored) ->
+      if bytes stored = 4 then
+        emit "vmaskmovps %s, %s, %s PTR [%s + rax*4]" (register index) (register mask_register) memory pointers.(index)
+      else emit "vpxor xmm%d, xmm%d, xmm%d" index index index) columns;
+    if List.exists (fun (_, _, _, stored) -> bytes stored < 4) columns then (
+      (* AVX2 lacks fault-suppressing byte/word extension loads. Assemble
+         only participating storage elements, then widen the whole rack. *)
+      for lane = 0 to lanes - 2 do
+        if lane > 0 then (
+          emit "cmp rsi, %d" (lane + 1);
+          emit "jl %s" (label "tail_narrow_loaded"));
+        List.iteri (fun index (_, _, _, stored) ->
+          if bytes stored < 4 then
+            emit "%s xmm%d, xmm%d, %s PTR [%s + rax*%d + %d], %d"
+              (if bytes stored = 1 then "vpinsrb" else "vpinsrw") index index
+              (if bytes stored = 1 then "BYTE" else "WORD") pointers.(index)
+              (bytes stored) (lane * bytes stored) lane) columns
+      done;
+      Printf.bprintf buffer "%s:\n" (label "tail_narrow_loaded");
+      List.iteri (fun index (_, _, _, stored) -> widen_register index stored) columns));
   body tail;
   (* AVX2 allocation may reuse the input mask register; reload it only after
      the result has reached its ABI register. ymm1 is dead at this point. *)
@@ -356,6 +421,11 @@ let emit_neon_run program buffer (run : run) =
     | Native_backend.Neon [ func ] ->
         List.iter (Aarch64_neon_asm.emit_instruction pool buffer) func.instructions
     | _ -> assert false in
+  let widen_register index stored =
+    if bytes stored < 4 then (
+      let instruction = if is_signed stored then "sshll" else "ushll" in
+      if bytes stored = 1 then emit "%s v%d.8h, v%d.8b, #0" instruction index index;
+      emit "%s v%d.4s, v%d.4h, #0" instruction index index) in
   Printf.bprintf buffer ".arch armv8-a+simd\n.text\n.p2align 4\n.globl %s\n.type %s, %%function\n%s:\n"
     run.run_name run.run_name run.run_name;
   (match count_width with Count32 -> emit "sxtw x1, w1" | Count64 -> ());
@@ -366,7 +436,7 @@ let emit_neon_run program buffer (run : run) =
       emit "dup v%d.4s, v%d.s[0]" (uniform_register profile index) slot
     else emit "fmov s%d, w%d" (uniform_register profile index) slot) arguments;
   Option.iter (fun slot -> if slot <> 2 then emit "mov x2, x%d" slot) output_slot;
-  List.iteri (fun index (_, _, field) ->
+  List.iteri (fun index (_, _, field, _) ->
     let displacement = column_offset schema field in
     if displacement > 32760 then
       reject run.run_loc "native NEON stream column exceeds the supported descriptor offset";
@@ -382,7 +452,10 @@ let emit_neon_run program buffer (run : run) =
   emit "cmp x1, #4";
   emit "b.lt %s" (label "tail");
   Printf.bprintf buffer "%s:\n" (label "loop");
-  List.iteri (fun index _ -> emit "ldr q%d, [%s], #16" index (pointer index)) columns;
+  List.iteri (fun index (_, _, _, stored) ->
+    emit "ldr %s%d, [%s], #%d" (match bytes stored with 1 -> "s" | 2 -> "d" | _ -> "q")
+      index (pointer index) (4 * bytes stored);
+    widen_register index stored) columns;
   body full;
   emit "str q0, [x2], #16";
   emit "sub x1, x1, #4";
@@ -400,10 +473,13 @@ let emit_neon_run program buffer (run : run) =
     if lane > 0 then (
       emit "cmp x1, #%d" (lane + 1);
       emit "b.lt %s" (label "tail_loaded"));
-    List.iteri (fun index _ ->
-      emit "ld1 {v%d.s}[%d], [%s], #4" index lane (pointer index)) columns
+    List.iteri (fun index (_, _, _, stored) ->
+      emit "ld1 {v%d.%s}[%d], [%s], #%d" index
+        (match bytes stored with 1 -> "b" | 2 -> "h" | _ -> "s")
+        lane (pointer index) (bytes stored)) columns
   done;
   Printf.bprintf buffer "%s:\n" (label "tail_loaded");
+  List.iteri (fun index (_, _, _, stored) -> widen_register index stored) columns;
   body tail;
   for lane = 0 to 2 do
     if lane > 0 then (

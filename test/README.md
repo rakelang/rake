@@ -98,6 +98,19 @@ Intel SDE, and NEON uses AArch64 QEMU. The shared independent C numerical
 oracle checks all six comparisons, including quiet NaNs and exception flags,
 on the x86 and NEON register kernels.
 
+The same guarded stream checks cover `i8`, `u8`, `i16` and `u16` stored
+columns widened into 32-bit racks. Scalar C checks signed extension,
+unsigned products, wrapping sums, retained inputs, column updates and
+separate destination layouts for counts from zero through 65. Signedness
+bitcasts are compared as memory bits, including values with bit 31 set.
+The interpreter runs the compact fixture at every CPU profile's rack width.
+
+`wasm_simd128_verify_test.ml` independently compiles packed comparison and
+extending-multiply C objects. The verifier rejects them without narrower
+operand bounds, then accepts them when source-derived bounds justify the
+instructions. The stream fixture also compiles and agrees with scalar
+expected values in both WebAssembly addressing modes.
+
 The shared fold oracle compares the four reductions and inclusive scans with
 a volatile scalar left fold on each physical profile. Adversarial addition
 checks rounding order, and integer binary32 ordering checks strict extrema,

@@ -289,6 +289,9 @@ let allocate_function ?parameter_assignment func =
               maximum_live := max !maximum_live
                 (I.cardinal !allocation + (if reused = None then 1 else 0) + scratch_count);
               (match instruction with
+              | M.Copy_word { source; _ } ->
+                  if reused <> Some source then
+                    emit loc provenance (Move { dst; source = p source })
               | M.Uniform_f32 { bits; _ } -> emit loc provenance (Uniform_f32 { dst; bits })
               | M.Mask_const { value; _ } -> emit loc provenance (Mask_const { dst; value })
               | M.Broadcast_f32 { source; lane; _ } ->
