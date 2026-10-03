@@ -40,6 +40,9 @@ let registers = function
   | A.Fsub { dst; left; right }
   | A.Add_i32 { dst; left; right }
   | A.Sub_i32 { dst; left; right }
+  | A.Mul_i32 { dst; left; right }
+  | A.Min_i32 { dst; left; right }
+  | A.Max_i32 { dst; left; right }
   | A.Compare_i32 { dst; left; right; _ }
   | A.Fmul { dst; left; right }
   | A.Fdiv { dst; left; right }
@@ -49,7 +52,7 @@ let registers = function
   | A.And { dst; left; right }
   | A.Orr { dst; left; right }
   | A.Eor { dst; left; right } -> [ dst; left; right ]
-  | A.Fsqrt { dst; source } | A.Round_f32 { dst; source; _ } | A.Mvn { dst; source } | A.Move { dst; source } ->
+  | A.Neg_i32 { dst; source } | A.Shift_i32 { dst; source; _ } | A.Fsqrt { dst; source } | A.Round_f32 { dst; source; _ } | A.Mvn { dst; source } | A.Move { dst; source } ->
       [ dst; source ]
   | A.Fmla { dst; multiplicand; multiplier } -> [ dst; multiplicand; multiplier ]
   | A.Bsl { dst_mask; if_true; if_false } -> [ dst_mask; if_true; if_false ]
@@ -142,6 +145,24 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "add %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Sub_i32 { dst; left; right } ->
       emit "sub %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Mul_i32 { dst; left; right } ->
+      emit "mul %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Min_i32 { dst; left; right } ->
+      emit "smin %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Max_i32 { dst; left; right } ->
+      emit "smax %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Neg_i32 { dst; source } ->
+      emit "neg %s, %s" (lanes_f32 dst) (lanes_f32 source)
+  | A.Shift_i32 { dst; source; count; shift } ->
+      let count = Native_ir.I32_shift_count.to_int count in
+      if count = 0 then (
+        if dst <> source then emit "mov %s, %s" (lanes_bits dst) (lanes_bits source))
+      else
+        let mnemonic = match shift with
+          | Native_ir.Shift_left -> "shl"
+          | Native_ir.Shift_right -> "ushr"
+          | Native_ir.Shift_right_signed -> "sshr" in
+        emit "%s %s, %s, #%d" mnemonic (lanes_f32 dst) (lanes_f32 source) count
   | A.Compare_i32 { dst; predicate; left; right } ->
       let mnemonic, left, right = match predicate with
         | Native_ir.Eq | Native_ir.Ne -> "cmeq", left, right

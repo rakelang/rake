@@ -46,6 +46,8 @@ let registers = function
   | A.Scan_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Round_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Extreme_f32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
+  | A.Extreme_i32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
+  | A.Mul_i32 { dst; left; right; scratch } -> dst :: left :: right :: scratch
   | A.Addps { dst; left; right }
   | A.Subps { dst; left; right }
   | A.Add_i32 { dst; left; right }
@@ -58,6 +60,8 @@ let registers = function
   | A.Mask_xorps { dst; left; right } -> [ dst; left; right ]
   | A.Sqrtps { dst; source }
   | A.Negps { dst; source }
+  | A.Neg_i32 { dst; source }
+  | A.Shift_i32 { dst; source; _ }
   | A.Absps { dst; source }
   | A.Mask_notps { dst; source }
   | A.Moveaps { dst; source } -> [ dst; source ]
@@ -383,6 +387,47 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       binary "paddd" dst left right
   | A.Sub_i32 { dst; left; right } ->
       binary "psubd" dst left right
+  | A.Mul_i32 { dst; left; right; scratch } ->
+      if sse then (
+        let odd_left, odd_right = match scratch with
+          | [ odd_left; odd_right ] -> odd_left, odd_right
+          | _ -> invalid_arg "SSE2 integer multiplication requires two allocated temporaries" in
+        (* PMULUDQ multiplies lanes 0 and 2 into two 64-bit products.
+           Capture lanes 1 and 3 before a dying input becomes the destination.
+           The final shuffles keep each product's low word in source order. *)
+        move odd_left left;
+        emit "shufps %s, %s, 0xb1" (ymm odd_left) (ymm odd_left);
+        move odd_right right;
+        emit "shufps %s, %s, 0xb1" (ymm odd_right) (ymm odd_right);
+        binary "pmuludq" dst left right;
+        emit "pmuludq %s, %s" (ymm odd_left) (ymm odd_right);
+        emit "shufps %s, %s, 0x88" (ymm dst) (ymm odd_left);
+        emit "shufps %s, %s, 0xd8" (ymm dst) (ymm dst))
+      else binary "pmulld" dst left right
+  | A.Neg_i32 { dst; source } ->
+      logical "xorps" dst dst dst;
+      binary "psubd" dst dst source
+  | A.Extreme_i32 { dst; left; right; operation; scratch } ->
+      if sse then (
+        let mask = match scratch with
+          | [ mask ] -> mask
+          | _ -> invalid_arg "SSE2 integer extrema require an allocated mask register" in
+        binary "pcmpgtd" mask left right;
+        (match operation with
+        | M.Minimum -> blend dst mask right left
+        | M.Maximum -> blend dst mask left right))
+      else binary (match operation with M.Minimum -> "pminsd" | M.Maximum -> "pmaxsd") dst left right
+  | A.Shift_i32 { dst; source; count; shift } ->
+      let count = Native_ir.I32_shift_count.to_int count in
+      let mnemonic = match shift with
+        | Native_ir.Shift_left -> "pslld"
+        | Native_ir.Shift_right -> "psrld"
+        | Native_ir.Shift_right_signed -> "psrad" in
+      if count = 0 then move dst source
+      else if sse then (
+        move dst source;
+        emit "%s %s, %d" mnemonic (ymm dst) count)
+      else emit "v%s %s, %s, %d" mnemonic (ymm dst) (ymm source) count
   | A.Compare_i32 { dst; predicate; left; right } ->
       if avx512 then (
         let immediate = match predicate with

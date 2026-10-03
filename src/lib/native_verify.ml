@@ -243,7 +243,8 @@ let allowed_avx2 = function
   | "vblendvps" | "vandps" | "vorps" | "vmovaps" | "ret" | "retq" ->
       true
   | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" | "vroundps" -> true
-  | "vpxor" | "vpcmpeqd" | "vpcmpgtd" | "vpaddd" | "vpsubd" -> true
+  | "vpxor" | "vpcmpeqd" | "vpcmpgtd" | "vpaddd" | "vpsubd" | "vpmulld"
+  | "vpminsd" | "vpmaxsd" | "vpslld" | "vpsrld" | "vpsrad" -> true
   | _ -> false
 
 let is_fma profile =
@@ -268,6 +269,30 @@ let is_alignment_padding decoded =
 
 let cross_lane_mnemonic = function
   | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" -> true
+  | _ -> false
+
+let full_integer_rack_operands profile operands =
+  let pattern = match profile with
+    | Target.X86_sse2 -> "^xmm[0-9]+,[ \\t]*xmm[0-9]+$"
+    | Target.X86_avx2 -> "^ymm[0-9]+,[ \\t]*ymm[0-9]+,[ \\t]*ymm[0-9]+$"
+    | Target.X86_avx512 -> "^zmm[0-9]+,[ \\t]*zmm[0-9]+,[ \\t]*zmm[0-9]+$"
+    | _ -> invalid_arg "integer rack operands require an x86 SIMD profile" in
+  Str.string_match (Str.regexp pattern) operands 0
+
+let full_integer_shift_operands profile operands =
+  let register = match profile with
+    | Target.X86_sse2 -> "xmm"
+    | Target.X86_avx2 -> "ymm"
+    | Target.X86_avx512 -> "zmm"
+    | _ -> invalid_arg "integer shift operands require an x86 SIMD profile" in
+  let full_register text =
+    Str.string_match (Str.regexp ("^" ^ register ^ "[0-9]+$")) text 0 in
+  let valid_count text =
+    Option.bind (Int32.of_string_opt text) Native_ir.I32_shift_count.of_int32 <> None in
+  match List.map String.trim (String.split_on_char ',' operands), profile with
+  | [ dst; count ], Target.X86_sse2 -> full_register dst && valid_count count
+  | [ dst; source; count ], (Target.X86_avx2 | Target.X86_avx512) ->
+      full_register dst && full_register source && valid_count count
   | _ -> false
 
 let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
@@ -298,6 +323,17 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if contains operands "zmm" then
     error ~source ~function_name ~obligation:"one YMM per rack"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
+  else if mnemonic = "vpmulld" && not (full_integer_rack_operands Target.X86_avx2 operands) then
+    error ~source ~function_name ~obligation:"full-width integer multiply"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
+  else if List.mem mnemonic [ "vpminsd"; "vpmaxsd" ]
+      && not (full_integer_rack_operands Target.X86_avx2 operands) then
+    error ~source ~function_name ~obligation:"full-width signed integer extrema"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
+  else if List.mem mnemonic [ "vpslld"; "vpsrld"; "vpsrad" ]
+      && not (full_integer_shift_operands Target.X86_avx2 operands) then
+    error ~source ~function_name ~obligation:"full-width literal integer shift"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if cross_lane_mnemonic mnemonic && not allow_cross_lane then
     error ~source ~function_name ~obligation:"source-authorized cross-lane operation"
       (Printf.sprintf "encountered %s outside a source-authorized cross-lane operation" mnemonic)
@@ -321,7 +357,8 @@ let regexp_contains pattern text =
 
 let allowed_sse2 = function
   | "movaps" | "xorps" | "andps" | "orps" | "pxor" | "pcmpeqd"
-  | "paddd" | "psubd" | "pcmpgtd"
+  | "paddd" | "psubd" | "pcmpgtd" | "pmuludq"
+  | "pslld" | "psrld" | "psrad"
   | "addps" | "subps" | "mulps" | "divps" | "sqrtps" | "shufps"
   | "cvtps2dq" | "cvttps2dq" | "cvtdq2ps"
   | "cmpps" | "cmpeqps" | "cmpneqps" | "cmpltps" | "cmpleps"
@@ -330,7 +367,9 @@ let allowed_sse2 = function
 
 let allowed_avx512f = function
   | "vbroadcastss" | "vpxord" | "vpandd" | "vpord" | "vpternlogd"
-  | "vpaddd" | "vpsubd" | "vpcmpd" | "vpcmpeqd" | "vpcmpneqd"
+  | "vpaddd" | "vpsubd" | "vpmulld" | "vpcmpd" | "vpcmpeqd" | "vpcmpneqd"
+  | "vpminsd" | "vpmaxsd"
+  | "vpslld" | "vpsrld" | "vpsrad"
   | "vpcmpltd" | "vpcmpled" | "vpcmpnltd" | "vpcmpnled"
   | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
   | "vrndscaleps"
@@ -364,13 +403,20 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
   else if sse && (contains operands "ymm" || contains operands "zmm") then fail "one XMM per rack"
   else if not sse && (contains operands "ymm" || (contains operands "xmm" && mnemonic <> "vbroadcastss")) then fail "one ZMM per rack"
   else if not sse && regexp_contains "\\bk\\(0\\|[2-7]\\)\\b" operands then fail "reserved opmask register"
+  else if (mnemonic = "pmuludq" || mnemonic = "vpmulld")
+      && not (full_integer_rack_operands profile operands) then fail "full-width integer multiply"
+  else if List.mem mnemonic [ "vpminsd"; "vpmaxsd" ]
+      && not (full_integer_rack_operands profile operands) then fail "full-width signed integer extrema"
+  else if List.mem mnemonic [ "pslld"; "psrld"; "psrad"; "vpslld"; "vpsrld"; "vpsrad" ]
+      && not (full_integer_shift_operands profile operands) then fail "full-width literal integer shift"
   else if cross_lane && not allow_cross_lane then fail "source-authorized cross-lane operation"
   else if not ((if sse then allowed_sse2 else allowed_avx512f) mnemonic) then fail "instruction allow-list"
   else Ok ()
 
 let allowed_neon = function
   | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv" | "fmin" | "fmax"
-  | "add" | "sub" | "cmeq" | "cmgt" | "cmge"
+  | "add" | "sub" | "mul" | "neg" | "smin" | "smax" | "cmeq" | "cmgt" | "cmge"
+  | "shl" | "ushr" | "sshr"
   | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "orr"
   | "frintm" | "frintp" | "frintz" | "frintn"
   | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ext" | "ret" -> true
@@ -403,6 +449,18 @@ let valid_neon_mask_fold operands =
     "^v[0-9]+\\.16b,[ \\t]*\\(v[0-9]+\\.16b\\),[ \\t]*\\1,[ \\t]*#\\(4\\|8\\|0x4\\|0x8\\)$"
     operands
 
+let valid_neon_integer_shift mnemonic operands =
+  let full_register text =
+    Str.string_match (Str.regexp "^v[0-9]+\\.4s$") text 0 in
+  match List.map String.trim (String.split_on_char ',' operands) with
+  | [ dst; source; count ] when full_register dst && full_register source
+      && String.starts_with ~prefix:"#" count ->
+      let literal = String.sub count 1 (String.length count - 1) in
+      (match Option.bind (Int32.of_string_opt literal) Native_ir.I32_shift_count.of_int32 with
+      | Some count -> mnemonic = "shl" || Native_ir.I32_shift_count.to_int count > 0
+      | None -> false)
+  | _ -> false
+
 let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   let mnemonic = decoded.mnemonic in
   let operands = decoded.operands in
@@ -419,10 +477,18 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if neon_general_register operands then
     error ~source ~function_name ~obligation:"no scalarized lane control"
       (Printf.sprintf "encountered general register in %s %s" mnemonic operands)
-  else if List.mem mnemonic [ "add"; "sub"; "cmeq"; "cmgt"; "cmge" ]
+  else if List.mem mnemonic [ "add"; "sub"; "mul"; "smin"; "smax"; "cmeq"; "cmgt"; "cmge" ]
       && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
     error ~source ~function_name ~obligation:"four 32-bit integer lanes"
       (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
+  else if mnemonic = "neg"
+      && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
+    error ~source ~function_name ~obligation:"four 32-bit integer lanes"
+      (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
+  else if List.mem mnemonic [ "shl"; "ushr"; "sshr" ]
+      && not (valid_neon_integer_shift mnemonic operands) then
+    error ~source ~function_name ~obligation:"four-lane literal integer shift"
+      (Printf.sprintf "encountered unsupported shift form in %s %s" mnemonic operands)
   else if mnemonic = "ext" && not (allow_cross_lane && valid_neon_mask_fold operands) then
     error ~source ~function_name ~obligation:"source-authorized mask fold"
       (Printf.sprintf "encountered %s %s" mnemonic operands)

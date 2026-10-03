@@ -573,7 +573,8 @@ let rec lower_expr state provenance (expr : expr) =
                    if value < 0L || value >= Int64.of_int bits then
                      errorf count.loc "a shift of %d-bit lanes takes a count from 0 to %d, got %Ld" bits (bits - 1) value
                    else
-                     Ok (fst (emit state count.loc provenance (Ir.Scalar Ir.I32) (Ir.Const (Ir.Int32 (Int64.to_int32 value)))))
+                     let* count = lower_scalar state count (Ir.Scalar Ir.I32) in
+                     Ok (fst count)
                | None, (EScalarVar scalar | EBroadcast { v = EScalarVar scalar; _ }) ->
                    let* found = find_binding state count.loc scalar in
                    let* () = expect_type count.loc name (Ir.Scalar Ir.I32) found in

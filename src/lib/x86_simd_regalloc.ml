@@ -46,6 +46,21 @@ type operation =
   | Subps of { dst : vector_register; left : vector_register; right : vector_register }
   | Add_i32 of { dst : vector_register; left : vector_register; right : vector_register }
   | Sub_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mul_i32 of {
+      dst : vector_register;
+      left : vector_register;
+      right : vector_register;
+      scratch : vector_register list;
+    }
+  | Neg_i32 of { dst : vector_register; source : vector_register }
+  | Shift_i32 of { dst : vector_register; source : vector_register; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift }
+  | Extreme_i32 of {
+      dst : vector_register;
+      left : vector_register;
+      right : vector_register;
+      operation : M.extremum;
+      scratch : vector_register list;
+    }
   | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; left : vector_register; right : vector_register }
   | Mulps of { dst : vector_register; left : vector_register; right : vector_register }
   | Divps of { dst : vector_register; left : vector_register; right : vector_register }
@@ -276,6 +291,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
           let candidates =
             match instruction with
             | M.Uniform_f32 _ | M.Uniform_mask _ -> []
+            (* The zero-minus sequence must retain its source until subtraction. *)
+            | M.Neg_i32 _ -> []
             | M.Broadcastss { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
             (* Two permutations still need both original racks. *)
@@ -301,6 +318,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                 match instruction with
                 | M.Insert_f32 _ -> 1
                 | M.Reduce_mask _ -> 1
+                | M.Mul_i32 _ when profile = Target.X86_sse2 -> 2
+                | M.Extreme_i32 _ when profile = Target.X86_sse2 -> 1
                 | M.Shuffle_f32 { racks; _ } ->
                     (if profile = Target.X86_sse2 then 0 else 1)
                     + (if List.length racks = 2 then 1 else 0)
@@ -359,6 +378,12 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               | M.Subps { left; right; _ } -> emit loc provenance (Subps { dst; left = p left; right = p right })
               | M.Add_i32 { left; right; _ } -> emit loc provenance (Add_i32 { dst; left = p left; right = p right })
               | M.Sub_i32 { left; right; _ } -> emit loc provenance (Sub_i32 { dst; left = p left; right = p right })
+              | M.Mul_i32 { left; right; _ } -> emit loc provenance (Mul_i32 { dst; left = p left; right = p right; scratch })
+              | M.Extreme_i32 { left; right; operation; _ } ->
+                  emit loc provenance (Extreme_i32 { dst; left = p left; right = p right; operation; scratch })
+              | M.Neg_i32 { source; _ } -> emit loc provenance (Neg_i32 { dst; source = p source })
+              | M.Shift_i32 { source; count; shift; _ } ->
+                  emit loc provenance (Shift_i32 { dst; source = p source; count; shift })
               | M.Compare_i32 { predicate; left; right; _ } ->
                   emit loc provenance (Compare_i32 { dst; predicate; left = p left; right = p right })
               | M.Mulps { left; right; _ } -> emit loc provenance (Mulps { dst; left = p left; right = p right })

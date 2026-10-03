@@ -145,7 +145,32 @@ Native 32-bit integer racks share the float racks' register widths and C
 vector argument slots. Add and subtract select packed `paddd` and `psubd`
 on SSE2, their full-width VEX/EVEX forms on AVX2 and AVX-512F, or NEON
 `add` and `sub` with four 32-bit lanes. Bitwise operations use the existing
-register-only logical instructions. Signed comparisons use `pcmpeqd` and
+register-only logical instructions. Signed integer negation subtracts each
+lane from zero. The x86 profiles clear a separate destination register before
+packed subtraction, preserving the source until it's consumed. NEON selects
+one full-width `neg vD.4s, vS.4s` instruction.
+Multiplication keeps the low 32 bits for signed and unsigned racks. AVX2 and
+AVX-512F select full-width `vpmulld`, and NEON selects `mul .4s`. SSE2
+multiplies the even lanes with `pmuludq`, then multiplies the odd lanes in two
+allocated temporaries. Four `shufps` instructions put the low product words
+back in lane order. Those temporaries participate in the no-spill register
+allocation. The final-object verifier permits these shuffles for the selected
+SSE2 multiply and checks full-register multiply operands on every profile.
+Signed lane-wise extrema select `vpminsd` or `vpmaxsd` on AVX2 and AVX-512F,
+or `smin .4s` and `smax .4s` on NEON. SSE2 uses `pcmpgtd` in an allocated
+mask register, followed by vector logical selection. Both input racks remain
+available until the selection finishes, including when the destination
+reuses a dying input. The verifier checks full-width extrema operands and
+rejects the SSE4.1 `pminsd` and `pmaxsd` instructions in the SSE2 profile.
+Literal bit shifts use packed `pslld`, `psrld` or `psrad` on SSE2 and their
+full-width VEX/EVEX forms on AVX2 and AVX-512F. NEON uses `shl`, `ushr` or
+`sshr` with `.4s` operands. Instruction selection consumes a literal count
+from 0 to 31. A zero count needs only a register copy, elided when the
+destination reuses the input. The final-object verifier checks register
+widths and immediate bounds, rejecting register-supplied counts and memory
+operands in these register kernels. Native runtime shift counts remain
+work in progress.
+Signed comparisons use `pcmpeqd` and
 `pcmpgtd` on SSE2 and AVX2, with operand reversal or mask inversion for the
 other predicates. AVX-512F uses `vpcmpd` and expands its `k1` result into a
 full rack without requiring AVX-512DQ. NEON uses `cmeq`, `cmgt` and `cmge`,

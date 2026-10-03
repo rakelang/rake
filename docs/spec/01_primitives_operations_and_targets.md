@@ -135,22 +135,47 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 
 | Native operation | `i32s` | `u32s` |
 | --- | :-: | :-: |
-| wrapping `+` and `-` | yes | yes |
+| wrapping `+`, `-` and `*` | yes | yes |
+| signed negation | yes | WIP* |
+| signed `min` and `max` | yes | WIP* |
 | `bit_and`, `bit_or`, `bit_xor` | yes | yes |
+| bit shifts with literal counts from 0 to 31 | yes | yes |
 | six signed comparisons | yes | WIP* |
 | select an integer rack with a lane mask | yes | yes |
 | `all`, `any`, `bitmask` of a comparison | yes | WIP* |
 | integer literal broadcast | yes | yes |
-| integer uniform arguments, multiplication, negation, extrema, shifts, conversions and lane transfers | WIP* | WIP* |
+| integer uniform arguments, runtime shift counts, conversions and lane transfers | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
 float racks, and float masks can select integer racks. Native streams still
 accept float columns only.
+Signed negation wraps too: negating −2³¹ gives −2³¹ because +2³¹ doesn't fit
+in a signed 32-bit lane. Unary minus takes signed integer racks only.
+Multiplication keeps the low 32 bits of each lane's product. AVX2, AVX-512F
+and NEON each use one packed multiply instruction. SSE2 uses two packed
+even-lane multiplies and four shuffles to restore all four lanes in order.
+It needs two temporary vector registers, and refuses a rack expression that
+would require spills. None of these profiles uses a scalar loop for `*`.
+
+Signed `min` and `max` choose the smaller or larger lane value, including
+−2³¹ and 2³¹−1. AVX2, AVX-512F and NEON each use a full-width packed
+instruction. SSE2 compares the lanes with `pcmpgtd` and selects their bits
+using vector logical operations, with one allocated mask register.
+Unsigned extrema remain work in progress.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 scratch increment(values: u32s) -> u32s:
   values + <1>
+
+scratch negate(values: i32s) -> i32s:
+  -values
+
+scratch product(a: u32s, b: u32s) -> u32s:
+  a * b
+
+scratch clamp_signed(values: i32s) -> i32s:
+  min(max(values, <-17>), <29>)
 
 scratch greater(a: i32s, b: i32s) -> i32s:
   if a > b then a else b
@@ -216,6 +241,25 @@ end, filling with zeros. `shift_bits_right(x, n)` moves them towards the low
 end, filling with zeros, and `shift_bits_right_signed(x, n)` fills with the
 sign bit. The count is an integer literal below the lane's width in bits, or
 a uniform `u32` taken modulo that width.
+
+The physical profiles support all three bit shifts on `i32s` and `u32s`
+with literal counts from 0 to 31. Zero leaves the rack unchanged.
+SSE2, AVX2 and AVX-512F use full-width packed shifts, and NEON uses
+`shl`, `ushr` or `sshr` on four 32-bit lanes. The signed-right operation
+copies each lane's high bit, even when the rack's element type is unsigned.
+Runtime uniform counts remain WIP* on physical profiles.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch high_bits(values: u32s) -> u32s:
+  shift_bits_right(values, 24)
+
+scratch sign_bits(values: i32s) -> i32s:
+  shift_bits_right_signed(values, 31)
+
+scratch shifted(values: u32s) -> u32s:
+  shift_bits_left(values, 7)
+```
 
 These shift bits within a lane. The reserved identifiers `shift_left`,
 `shift_right`, `rotate_left` and `rotate_right` are for moving whole lanes,
@@ -383,7 +427,7 @@ exception.
 
 `wasm-simd128` contracts nothing, so the target and `rakec --interpret`
 agree on every result bit that isn't a NaN. `x86-avx2`, `x86-avx512` and `aarch64-neon`
-contract a multiply and an add into one fused multiply-add when both are in
+contract an `f32` multiply and an add into one fused multiply-add when both are in
 one fused region, as [fused bindings](04_fused_bindings.md) describe, and
 the result then has the fused rounding. A NaN result's sign and payload
 aren't specified, except where an operation defines them, as the strict

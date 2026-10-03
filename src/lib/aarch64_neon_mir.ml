@@ -21,6 +21,11 @@ type instruction =
   | Fsub of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Add_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Sub_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Mul_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Min_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Max_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Neg_i32 of { dst : vreg; source : vreg; provenance : provenance }
+  | Shift_i32 of { dst : vreg; source : vreg; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift; provenance : provenance }
   | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; left : vreg; right : vreg; provenance : provenance }
   | Fmul of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fdiv of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -78,6 +83,11 @@ let def = function
   | Fsub { dst; _ }
   | Add_i32 { dst; _ }
   | Sub_i32 { dst; _ }
+  | Mul_i32 { dst; _ }
+  | Min_i32 { dst; _ }
+  | Max_i32 { dst; _ }
+  | Neg_i32 { dst; _ }
+  | Shift_i32 { dst; _ }
   | Compare_i32 { dst; _ }
   | Fmul { dst; _ }
   | Fdiv { dst; _ }
@@ -97,11 +107,15 @@ let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
   | Broadcast_f32 { source; _ } -> [ source ]
   | Reduce_mask { source; _ } -> [ source ]
+  | Shift_i32 { source; _ } -> [ source ]
   | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
   | Fadd { left; right; _ }
   | Fsub { left; right; _ }
   | Add_i32 { left; right; _ }
   | Sub_i32 { left; right; _ }
+  | Mul_i32 { left; right; _ }
+  | Min_i32 { left; right; _ }
+  | Max_i32 { left; right; _ }
   | Compare_i32 { left; right; _ }
   | Fmul { left; right; _ }
   | Fdiv { left; right; _ }
@@ -111,7 +125,7 @@ let operands = function
   | And { left; right; _ }
   | Orr { left; right; _ }
   | Eor { left; right; _ } -> [ left; right ]
-  | Fsqrt { source; _ } | Round_f32 { source; _ } | Mvn { source; _ } -> [ source ]
+  | Neg_i32 { source; _ } | Fsqrt { source; _ } | Round_f32 { source; _ } | Mvn { source; _ } -> [ source ]
   | Fma { multiplicand; multiplier; addend; _ } ->
       [ multiplicand; multiplier; addend ]
   | Select { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
@@ -126,6 +140,11 @@ let provenance = function
   | Fsub { provenance; _ }
   | Add_i32 { provenance; _ }
   | Sub_i32 { provenance; _ }
+  | Mul_i32 { provenance; _ }
+  | Min_i32 { provenance; _ }
+  | Max_i32 { provenance; _ }
+  | Neg_i32 { provenance; _ }
+  | Shift_i32 { provenance; _ }
   | Compare_i32 { provenance; _ }
   | Fmul { provenance; _ }
   | Fdiv { provenance; _ }
@@ -154,6 +173,11 @@ let instruction_name = function
   | Fsub _ -> "fsub"
   | Add_i32 _ -> "add.4s"
   | Sub_i32 _ -> "sub.4s"
+  | Mul_i32 _ -> "mul.4s"
+  | Min_i32 _ -> "smin.4s"
+  | Max_i32 _ -> "smax.4s"
+  | Neg_i32 _ -> "neg.4s"
+  | Shift_i32 _ -> "shift.bits.4s"
   | Compare_i32 _ -> "compare.i32"
   | Fmul _ -> "fmul"
   | Fdiv _ -> "fdiv"

@@ -128,12 +128,22 @@ checks cover stream tails and in-place output. Integer and Boolean uniform
 conditions remain work in progress on the physical profiles.
 
 We will bring the physical profiles up to the language's published operation
-set. The development compiler now supports 32-bit integer wrapping add/subtract
-and bitwise AND/OR/XOR on all four physical profiles. Signed `i32s`
-comparisons produce masks for integer or float selection and mask reductions.
+set. The development compiler now supports 32-bit integer wrapping add/subtract/multiply
+and bitwise AND/OR/XOR on all four physical profiles, along with signed
+negation and lane-wise `min` and `max`. Signed `i32s` comparisons produce
+masks for integer or float selection and mask reductions.
 Independent C checks exact overflow bits, signed boundary values and still-live
-inputs across the vector ABI. Other integer operations and native integer
-streams remain work in progress.
+inputs across the vector ABI, including masked negation of the minimum signed
+value. Multiplication checks signed and unsigned overflow, lane order and
+destructive register reuse. SSE2 uses a packed vector sequence, while AVX2,
+AVX-512F and NEON each have a full-width multiply instruction. Signed extrema
+checks cover signed boundaries, nested clamps, masked branches and retained
+inputs. SSE2 uses packed comparison and selection, while the other physical
+profiles use direct vector extrema instructions. Literal bit shifts also
+compile on all four profiles. Independent C checks every count from 0 to 31,
+including sign extension, masked branches and retained input racks.
+Runtime shift counts, other integer operations and native integer streams
+remain work in progress.
 
 The next work covers substantial maths, the remaining integer operations, integer shuffles,
 integer extraction and insertion, the remaining uniform conditionals and

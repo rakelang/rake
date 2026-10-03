@@ -7,6 +7,33 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Native `i32s` and `u32s` bit shifts accept literal counts from 0 to 31 on
+  all four physical profiles. Full-width packed instructions implement left,
+  logical-right and signed-right shifts. A zero count leaves the rack unchanged.
+  Independent C checks every count, sign extension, masked use and retained
+  inputs. Final-object checks reject narrowed or scalar shifts, runtime
+  counts and out-of-range immediates. Native uniform counts remain WIP.
+
+- Native signed `i32s` `min` and `max` compile on all four physical profiles.
+  SSE2 uses packed comparison and logical selection with an allocated mask
+  register. AVX2, AVX-512F and NEON use direct full-width extrema instructions.
+  Independent C checks signed limits, nested clamps, masked branches and
+  retained inputs. Final-object checks reject narrower extrema and SSE4.1
+  instructions in the SSE2 profile.
+
+- Native `i32s` and `u32s` multiplication wraps to the low 32 bits on all
+  four physical profiles. SSE2 uses two packed multiplies and four shuffles
+  with allocated vector temporaries. AVX2, AVX-512F and NEON select one
+  full-width multiply instruction. Independent C checks overflow, lane order,
+  masked products and destructive input reuse. Final-object checks refuse
+  MMX, narrowed vectors, scalar work and memory multiply operands.
+
+- Native signed `i32s` negation uses full-width packed zero/subtract on
+  SSE2, AVX2 and AVX-512F, and `neg .4s` on NEON. The independent C oracle
+  checks wrapping bits, retained inputs and lane-masked selection, including
+  the minimum signed value. The final-object verifier rejects narrower NEON
+  negation forms.
+
 - Native `i32s` and `u32s` support wrapping add/subtract and bitwise
   AND/OR/XOR on SSE2, AVX2, AVX-512F and NEON. Signed `i32s` comparisons
   produce masks for selection and mask reductions. Mixed integer/float

@@ -237,9 +237,12 @@ let select_function (func : N.func) =
           let id, _ = result func.name index instruction in
           (match N.IntMap.find_opt id constant_uses with
           | Some operations when operations <> []
-              && List.for_all (function N.Extract { lane; _ } | N.Insert { lane; _ } -> lane = id | _ -> false) operations -> []
+              && List.for_all (function
+                  | N.Extract { lane; _ } | N.Insert { lane; _ } -> lane = id
+                  | N.Shift { count; _ } -> count = id
+                  | _ -> false) operations -> []
           | _ -> fail func.name ~instruction:index
-              "an i32 constant is only legal as a static extraction or insertion index in this vector selector")
+              "an i32 constant is only legal as a static lane index or bit-shift count in this vector selector")
       | N.Const literal ->
           fail func.name ~instruction:index
             ("scalar constant " ^ N.string_of_literal literal
@@ -273,6 +276,10 @@ let select_function (func : N.func) =
                   fail func.name ~instruction:index
                     (Printf.sprintf "rack.broadcast requires scalar<f32>, got %s"
                        (N.string_of_typ typ))))
+      | N.Unary (N.Neg, source)
+          when find_type func.name environment index source = N.Rack N.I32 ->
+          let dst = word_rack_result () in
+          [ M.Neg_i32 { dst; source; provenance } ]
       | N.Unary (N.Neg, source) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
@@ -297,12 +304,15 @@ let select_function (func : N.func) =
             | N.Trunc -> N.Toward_zero | N.Nearest -> N.Nearest_even
             | _ -> assert false in
           [ M.Round_f32 { dst; source; mode; provenance } ]
-      | N.Binary (((N.Add | N.Sub) as operation), left, right)
+      | N.Binary (((N.Add | N.Sub | N.Mul) as operation), left, right)
           when find_type func.name environment index left = N.Rack N.I32 ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index right;
-          [ (if operation = N.Add then M.Add_i32 { dst; left; right; provenance }
-             else M.Sub_i32 { dst; left; right; provenance }) ]
+          [ (match operation with
+            | N.Add -> M.Add_i32 { dst; left; right; provenance }
+            | N.Sub -> M.Sub_i32 { dst; left; right; provenance }
+            | N.Mul -> M.Mul_i32 { dst; left; right; provenance }
+            | _ -> assert false) ]
       | N.Binary (((N.Add | N.Sub | N.Mul | N.Div) as operation), left, right) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index left;
@@ -313,6 +323,12 @@ let select_function (func : N.func) =
             | N.Mul -> M.Fmul { dst; left; right; provenance }
             | N.Div -> M.Fdiv { dst; left; right; provenance }
             | _ -> assert false) ]
+      | N.Binary (((N.Min | N.Max) as operation), left, right)
+          when find_type func.name environment index left = N.Rack N.I32 ->
+          let dst = word_rack_result () in
+          ensure_operand_i32 func.name environment index right;
+          [ (if operation = N.Min then M.Min_i32 { dst; left; right; provenance }
+             else M.Max_i32 { dst; left; right; provenance }) ]
       | N.Binary (((N.Min | N.Max) as operation), left, right) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index left;
@@ -328,6 +344,13 @@ let select_function (func : N.func) =
             | N.Or -> M.Orr { dst; left; right; provenance }
             | N.Xor -> M.Eor { dst; left; right; provenance }
             | _ -> assert false) ]
+      | N.Shift { operand; count; shift } ->
+          let dst = word_rack_result () in
+          ensure_operand_i32 func.name environment index operand;
+          (match Option.bind (N.IntMap.find_opt count integer_constants) N.I32_shift_count.of_int32 with
+          | Some count -> [ M.Shift_i32 { dst; source = operand; count; shift; provenance } ]
+          | None -> fail func.name ~instruction:index
+              "32-bit rack shifts require a literal count from 0 to 31; native uniform counts remain work in progress")
       | N.Fma (multiplicand, multiplier, addend) ->
           let dst = rack_result () in
           List.iter (ensure_operand_f32 func.name environment index)
@@ -476,7 +499,7 @@ let select_function (func : N.func) =
           [ M.Broadcast_f32 { dst = initial; source; lane; provenance } ]
           @ steps initial [ M.Lane1; M.Lane2; M.Lane3 ]
       | N.Reinterpret _ | N.Relaxed _
-      | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
+      | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
             "operation has no mapping in this native 32-bit rack profile"
     in

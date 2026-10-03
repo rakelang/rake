@@ -50,6 +50,10 @@ type instruction =
   | Subps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Add_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Sub_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Mul_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Extreme_i32 of { dst : vreg; left : vreg; right : vreg; operation : extremum; provenance : provenance }
+  | Neg_i32 of { dst : vreg; source : vreg; provenance : provenance }
+  | Shift_i32 of { dst : vreg; source : vreg; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift; provenance : provenance }
   | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; left : vreg; right : vreg; provenance : provenance }
   | Mulps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Divps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -118,6 +122,10 @@ let def = function
   | Subps { dst; _ }
   | Add_i32 { dst; _ }
   | Sub_i32 { dst; _ }
+  | Mul_i32 { dst; _ }
+  | Extreme_i32 { dst; _ }
+  | Neg_i32 { dst; _ }
+  | Shift_i32 { dst; _ }
   | Compare_i32 { dst; _ }
   | Mulps { dst; _ }
   | Divps { dst; _ }
@@ -142,12 +150,15 @@ let operands = function
   | Reduce_f32 { source; _ }
   | Scan_f32 { source; _ }
   | Round_f32 { source; _ } -> [ source ]
+  | Shift_i32 { source; _ } -> [ source ]
   | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
   | Shuffle_f32 { racks; _ } -> racks
   | Addps { left; right; _ }
   | Subps { left; right; _ }
   | Add_i32 { left; right; _ }
   | Sub_i32 { left; right; _ }
+  | Mul_i32 { left; right; _ }
+  | Extreme_i32 { left; right; _ }
   | Compare_i32 { left; right; _ }
   | Mulps { left; right; _ }
   | Divps { left; right; _ }
@@ -156,7 +167,7 @@ let operands = function
   | Mask_andps { left; right; _ }
   | Mask_orps { left; right; _ }
   | Mask_xorps { left; right; _ } -> [ left; right ]
-  | Negps { source; _ } | Absps { source; _ } | Sqrtps { source; _ } | Mask_notps { source; _ } -> [ source ]
+  | Neg_i32 { source; _ } | Negps { source; _ } | Absps { source; _ } | Sqrtps { source; _ } | Mask_notps { source; _ } -> [ source ]
   | Fma_ps { multiplicand; multiplier; addend; _ } -> [ multiplicand; multiplier; addend ]
   | Blendvps { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
 
@@ -174,6 +185,10 @@ let provenance = function
   | Subps { provenance; _ }
   | Add_i32 { provenance; _ }
   | Sub_i32 { provenance; _ }
+  | Mul_i32 { provenance; _ }
+  | Extreme_i32 { provenance; _ }
+  | Neg_i32 { provenance; _ }
+  | Shift_i32 { provenance; _ }
   | Compare_i32 { provenance; _ }
   | Mulps { provenance; _ }
   | Divps { provenance; _ }
@@ -210,6 +225,11 @@ let instruction_name = function
   | Subps _ -> "vsubps"
   | Add_i32 _ -> "vpaddd"
   | Sub_i32 _ -> "vpsubd"
+  | Mul_i32 _ -> "multiply.low.i32"
+  | Extreme_i32 { operation = Minimum; _ } -> "min.i32"
+  | Extreme_i32 { operation = Maximum; _ } -> "max.i32"
+  | Neg_i32 _ -> "zero.sub.i32"
+  | Shift_i32 _ -> "shift.bits.i32"
   | Compare_i32 _ -> "compare.i32"
   | Mulps _ -> "vmulps"
   | Divps _ -> "vdivps"

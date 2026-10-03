@@ -30,6 +30,17 @@ type binary = Add | Sub | Mul | Div | Min | Max | And | Or | Xor
 (** A lane shift: left, or right filling with zeros or with the sign bit. *)
 type shift = Shift_left | Shift_right | Shift_right_signed
 
+module I32_shift_count : sig
+  type t
+  val of_int32 : int32 -> t option
+  val to_int : t -> int
+end = struct
+  type t = int
+  let of_int32 count =
+    if count >= 0l && count < 32l then Some (Int32.to_int count) else None
+  let to_int count = count
+end
+
 type unary = Neg | Sqrt
   | Abs | Floor | Ceil | Trunc | Nearest  (** lane-wise; Abs and Neg also take integer racks on wasm-simd128 *)
 

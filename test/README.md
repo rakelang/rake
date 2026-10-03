@@ -122,14 +122,26 @@ Exact selected lane bits cross the mixed vector/scalar C ABI. Literal
 operands, an extracted scalar, untaken roots and division, and conditions
 nested inside a through mask check the composed participation contract.
 
-`test/native_integer_rack_test.sh` compares 32-bit wrapping add/subtract,
-bitwise AND/OR/XOR and all six signed comparisons with independent scalar C
-on the four physical profiles. The oracle uses unsigned arithmetic for exact
-overflow bits and reinterprets signed predicates separately. It checks literal
+`test/native_integer_rack_test.sh` compares 32-bit wrapping add/subtract/multiply,
+signed negation and extrema, literal bit shifts, bitwise AND/OR/XOR and all six signed comparisons with
+independent scalar C on the four physical profiles. The oracle uses unsigned
+arithmetic for exact overflow bits and reinterprets signed predicates
+separately. It checks literal
 broadcasts, mask bitsets, integer/float selection through the vector C ABI,
-through/gaps coverage and still-live inputs in fused expressions. Independent
-machine objects check rejection of narrowed integer vectors, scalar arithmetic
-and memory work inside a register kernel.
+through/gaps coverage and still-live inputs in fused expressions. Negation
+checks include the minimum signed value, retained input racks and both arms
+of a lane-masked conditional. Multiplication checks all lanes against unsigned
+C products, including overflow, shared operands and still-live inputs that
+force destructive register reuse on SSE2. Signed extrema checks cover boundary
+values, aliased operands, nested clamps, lane masks and retained inputs.
+Bit-shift checks cover every literal count from 0 to 31 on signed and unsigned
+racks. Unsigned scalar bit operations independently compute sign extension,
+and composition checks preserve live inputs across shifts and lane masks.
+Independently assembled machine objects check
+rejection of narrowed integer vectors, scalar arithmetic
+and memory work inside a register kernel. SSE2 also rejects direct SSE4.1
+extrema instructions. Shift fixtures reject runtime counts and out-of-range
+immediates as well as narrowed and scalar instructions.
 
 The shared absolute-value oracle supplies explicit binary32 input and output
 bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.

@@ -25,6 +25,11 @@ type operation =
   | Fsub of { dst : vector_register; left : vector_register; right : vector_register }
   | Add_i32 of { dst : vector_register; left : vector_register; right : vector_register }
   | Sub_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mul_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Min_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Max_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Neg_i32 of { dst : vector_register; source : vector_register }
+  | Shift_i32 of { dst : vector_register; source : vector_register; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift }
   | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; left : vector_register; right : vector_register }
   | Fmul of { dst : vector_register; left : vector_register; right : vector_register }
   | Fdiv of { dst : vector_register; left : vector_register; right : vector_register }
@@ -281,6 +286,12 @@ let allocate_function ?parameter_assignment func =
               | M.Fsub { left; right; _ } -> emit loc provenance (Fsub { dst; left = p left; right = p right })
               | M.Add_i32 { left; right; _ } -> emit loc provenance (Add_i32 { dst; left = p left; right = p right })
               | M.Sub_i32 { left; right; _ } -> emit loc provenance (Sub_i32 { dst; left = p left; right = p right })
+              | M.Mul_i32 { left; right; _ } -> emit loc provenance (Mul_i32 { dst; left = p left; right = p right })
+              | M.Min_i32 { left; right; _ } -> emit loc provenance (Min_i32 { dst; left = p left; right = p right })
+              | M.Max_i32 { left; right; _ } -> emit loc provenance (Max_i32 { dst; left = p left; right = p right })
+              | M.Neg_i32 { source; _ } -> emit loc provenance (Neg_i32 { dst; source = p source })
+              | M.Shift_i32 { source; count; shift; _ } ->
+                  emit loc provenance (Shift_i32 { dst; source = p source; count; shift })
               | M.Compare_i32 { predicate; left; right; _ } ->
                   emit loc provenance (Compare_i32 { dst; predicate; left = p left; right = p right })
               | M.Fmul { left; right; _ } -> emit loc provenance (Fmul { dst; left = p left; right = p right })

@@ -12,13 +12,36 @@ typedef float float_rack __attribute__((vector_size(LANES * 4)));
 #define DECLARE_ARITHMETIC(kind) \
     extern integer_rack kind##_add(integer_rack, integer_rack); \
     extern integer_rack kind##_sub(integer_rack, integer_rack); \
+    extern integer_rack kind##_mul(integer_rack, integer_rack); \
     extern integer_rack kind##_and(integer_rack, integer_rack); \
     extern integer_rack kind##_or(integer_rack, integer_rack); \
     extern integer_rack kind##_xor(integer_rack, integer_rack); \
     extern integer_rack kind##_increment(integer_rack); \
-    extern integer_rack kind##_keep_inputs(integer_rack, integer_rack);
+    extern integer_rack kind##_keep_inputs(integer_rack, integer_rack); \
+    extern integer_rack kind##_multiply_keep_inputs(integer_rack, integer_rack); \
+    extern integer_rack kind##_multiply_keep_left(integer_rack, integer_rack); \
+    extern integer_rack kind##_square(integer_rack);
 DECLARE_ARITHMETIC(i32s)
 DECLARE_ARITHMETIC(u32s)
+
+#define FOR_EACH_SHIFT_COUNT(apply, kind) \
+    apply(kind, 0)  apply(kind, 1)  apply(kind, 2)  apply(kind, 3) \
+    apply(kind, 4)  apply(kind, 5)  apply(kind, 6)  apply(kind, 7) \
+    apply(kind, 8)  apply(kind, 9)  apply(kind, 10) apply(kind, 11) \
+    apply(kind, 12) apply(kind, 13) apply(kind, 14) apply(kind, 15) \
+    apply(kind, 16) apply(kind, 17) apply(kind, 18) apply(kind, 19) \
+    apply(kind, 20) apply(kind, 21) apply(kind, 22) apply(kind, 23) \
+    apply(kind, 24) apply(kind, 25) apply(kind, 26) apply(kind, 27) \
+    apply(kind, 28) apply(kind, 29) apply(kind, 30) apply(kind, 31)
+#define DECLARE_SHIFT(kind, count) \
+    extern integer_rack kind##_shift_left_##count(integer_rack); \
+    extern integer_rack kind##_shift_right_##count(integer_rack); \
+    extern integer_rack kind##_shift_right_signed_##count(integer_rack);
+FOR_EACH_SHIFT_COUNT(DECLARE_SHIFT, i32s)
+FOR_EACH_SHIFT_COUNT(DECLARE_SHIFT, u32s)
+extern integer_rack i32s_shift_keep_input(integer_rack);
+extern integer_rack u32s_shift_keep_input(integer_rack);
+extern integer_rack signed_shift_selected(integer_rack, integer_rack);
 
 #define DECLARE_COMPARISON(comparison) \
     extern integer_rack signed_##comparison(integer_rack, integer_rack); \
@@ -29,6 +52,21 @@ DECLARE_COMPARISON(ge) DECLARE_COMPARISON(eq) DECLARE_COMPARISON(ne)
 extern float_rack select_float(integer_rack, integer_rack, float_rack, float_rack);
 extern integer_rack select_integer(float_rack, float_rack, integer_rack, integer_rack);
 extern integer_rack integer_gaps(integer_rack);
+extern integer_rack signed_negate(integer_rack);
+extern integer_rack signed_negate_keep_input(integer_rack);
+extern integer_rack signed_negate_selected(integer_rack, integer_rack);
+extern integer_rack signed_multiply_selected(integer_rack, integer_rack);
+extern integer_rack signed_min(integer_rack, integer_rack);
+extern integer_rack signed_max(integer_rack, integer_rack);
+extern integer_rack signed_min_keep_inputs(integer_rack, integer_rack);
+extern integer_rack signed_max_keep_inputs(integer_rack, integer_rack);
+extern integer_rack signed_min_keep_left(integer_rack, integer_rack);
+extern integer_rack signed_max_keep_left(integer_rack, integer_rack);
+extern integer_rack signed_min_same(integer_rack);
+extern integer_rack signed_max_same(integer_rack);
+extern integer_rack signed_clamp(integer_rack);
+extern integer_rack signed_extreme_selected(integer_rack, integer_rack);
+extern integer_rack signed_extreme_literal_first(integer_rack);
 
 static int32_t signed_bits(uint32_t bits)
 {
@@ -50,6 +88,17 @@ static bool compare_signed(int comparison, uint32_t left, uint32_t right)
     }
 }
 
+/* Define sign extension with unsigned bits. The oracle neither relies on a
+   C implementation's signed right shift nor shifts by 32 at count zero. */
+static uint32_t shift_lane_bits(uint32_t bits, unsigned count, int operation)
+{
+    if (operation == 0) return bits << count;
+    uint32_t result = bits >> count;
+    if (operation == 2 && count != 0 && (bits & 0x80000000u) != 0)
+        result |= UINT32_MAX << (32 - count);
+    return result;
+}
+
 static int check_bits(const char *operation, integer_rack result, const uint32_t expected[LANES])
 {
     uint32_t actual[LANES];
@@ -65,12 +114,26 @@ static int check_bits(const char *operation, integer_rack result, const uint32_t
 
 int main(void)
 {
-    integer_rack (*const arithmetic[2][5])(integer_rack, integer_rack) = {
-        {i32s_add, i32s_sub, i32s_and, i32s_or, i32s_xor},
-        {u32s_add, u32s_sub, u32s_and, u32s_or, u32s_xor}
+    integer_rack (*const arithmetic[2][6])(integer_rack, integer_rack) = {
+        {i32s_add, i32s_sub, i32s_mul, i32s_and, i32s_or, i32s_xor},
+        {u32s_add, u32s_sub, u32s_mul, u32s_and, u32s_or, u32s_xor}
     };
     integer_rack (*const increments[])(integer_rack) = {i32s_increment, u32s_increment};
     integer_rack (*const compositions[])(integer_rack, integer_rack) = {i32s_keep_inputs, u32s_keep_inputs};
+    integer_rack (*const multiply_compositions[])(integer_rack, integer_rack) = {i32s_multiply_keep_inputs, u32s_multiply_keep_inputs};
+    integer_rack (*const multiply_keep_left[])(integer_rack, integer_rack) = {i32s_multiply_keep_left, u32s_multiply_keep_left};
+    integer_rack (*const squares[])(integer_rack) = {i32s_square, u32s_square};
+#define SHIFT_FUNCTIONS(kind, count) \
+    {kind##_shift_left_##count, kind##_shift_right_##count, kind##_shift_right_signed_##count},
+    integer_rack (*const shifts[2][32][3])(integer_rack) = {
+        {FOR_EACH_SHIFT_COUNT(SHIFT_FUNCTIONS, i32s)},
+        {FOR_EACH_SHIFT_COUNT(SHIFT_FUNCTIONS, u32s)}
+    };
+    integer_rack (*const shift_keep_input[])(integer_rack) = {i32s_shift_keep_input, u32s_shift_keep_input};
+    integer_rack (*const extrema[])(integer_rack, integer_rack) = {signed_min, signed_max};
+    integer_rack (*const extrema_keep_inputs[])(integer_rack, integer_rack) = {signed_min_keep_inputs, signed_max_keep_inputs};
+    integer_rack (*const extrema_keep_left[])(integer_rack, integer_rack) = {signed_min_keep_left, signed_max_keep_left};
+    integer_rack (*const extrema_same[])(integer_rack) = {signed_min_same, signed_max_same};
     integer_rack (*const comparisons[])(integer_rack, integer_rack) = {
         signed_lt, signed_le, signed_gt, signed_ge, signed_eq, signed_ne
     };
@@ -83,26 +146,39 @@ int main(void)
     };
     const uint32_t patterns[] = {
         0u, 1u, 0xffffffffu, 0x7fffffffu, 0x80000000u, 0x80000001u,
-        0x7ffffffeu, 0x55555555u, 0xaaaaaaaau, 0x12345678u, 0xfedcba98u
+        0x7ffffffeu, 0x55555555u, 0xaaaaaaaau, 0x12345678u, 0xfedcba98u,
+        65535u, 65536u, 65537u, 0xffff8001u
     };
-    for (int l = 0; l < 11; ++l) for (int r = 0; r < 11; ++r) {
+    const int pattern_count = sizeof patterns / sizeof patterns[0];
+    for (int l = 0; l < pattern_count; ++l) for (int r = 0; r < pattern_count; ++r) {
         uint32_t left[LANES], right[LANES], expected[LANES];
         for (int lane = 0; lane < LANES; ++lane) {
-            left[lane] = patterns[(l + lane) % 11];
-            right[lane] = patterns[(r + 3 * lane) % 11];
+            left[lane] = patterns[(l + lane) % pattern_count];
+            right[lane] = patterns[(r + 3 * lane) % pattern_count];
         }
         integer_rack a, b;
         memcpy(&a, left, sizeof a);
         memcpy(&b, right, sizeof b);
         for (int kind = 0; kind < 2; ++kind) {
-            for (int operation = 0; operation < 5; ++operation) {
+            for (unsigned count = 0; count < 32; ++count) {
+                for (int operation = 0; operation < 3; ++operation) {
+                    for (int lane = 0; lane < LANES; ++lane)
+                        expected[lane] = shift_lane_bits(left[lane], count, operation);
+                    if (check_bits("literal integer bit shifts", shifts[kind][count][operation](a), expected)) return 1;
+                }
+            }
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = shift_lane_bits(left[lane] + 1u, 7, 2) + left[lane];
+            if (check_bits("live shift input", shift_keep_input[kind](a), expected)) return 1;
+            for (int operation = 0; operation < 6; ++operation) {
                 for (int lane = 0; lane < LANES; ++lane) {
                     const uint32_t x = left[lane], y = right[lane];
                     switch (operation) {
                         case 0: expected[lane] = x + y; break;
                         case 1: expected[lane] = x - y; break;
-                        case 2: expected[lane] = x & y; break;
-                        case 3: expected[lane] = x | y; break;
+                        case 2: expected[lane] = x * y; break;
+                        case 3: expected[lane] = x & y; break;
+                        case 4: expected[lane] = x | y; break;
                         default: expected[lane] = x ^ y; break;
                     }
                 }
@@ -112,7 +188,63 @@ int main(void)
             if (check_bits("integer literal", increments[kind](a), expected)) return 1;
             for (int lane = 0; lane < LANES; ++lane) expected[lane] = ((left[lane] - right[lane]) ^ left[lane]) + right[lane];
             if (check_bits("live integer inputs", compositions[kind](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = ((left[lane] * right[lane]) ^ left[lane]) + right[lane];
+            if (check_bits("live multiplication inputs", multiply_compositions[kind](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] * right[lane] + left[lane];
+            if (check_bits("destructive multiplication right input", multiply_keep_left[kind](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] * left[lane];
+            if (check_bits("aliased multiplication inputs", squares[kind](a), expected)) return 1;
         }
+        for (int lane = 0; lane < LANES; ++lane)
+            expected[lane] = compare_signed(0, left[lane], right[lane])
+                ? shift_lane_bits(left[lane], 31, 0) : shift_lane_bits(right[lane], 31, 2);
+        if (check_bits("masked integer bit shifts", signed_shift_selected(a, b), expected)) return 1;
+        for (int operation = 0; operation < 2; ++operation) {
+            for (int lane = 0; lane < LANES; ++lane) {
+                const bool choose_left = operation == 0
+                    ? signed_bits(left[lane]) < signed_bits(right[lane])
+                    : signed_bits(left[lane]) > signed_bits(right[lane]);
+                expected[lane] = choose_left ? left[lane] : right[lane];
+            }
+            if (check_bits("signed integer extrema", extrema[operation](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = (expected[lane] ^ left[lane]) + right[lane];
+            if (check_bits("live extrema inputs", extrema_keep_inputs[operation](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) {
+                const bool choose_left = operation == 0
+                    ? signed_bits(left[lane]) < signed_bits(right[lane])
+                    : signed_bits(left[lane]) > signed_bits(right[lane]);
+                expected[lane] = (choose_left ? left[lane] : right[lane]) + left[lane];
+            }
+            if (check_bits("destructive extrema right input", extrema_keep_left[operation](a, b), expected)) return 1;
+            if (check_bits("aliased extrema inputs", extrema_same[operation](a), left)) return 1;
+        }
+        for (int lane = 0; lane < LANES; ++lane) {
+            const int32_t value = signed_bits(left[lane]);
+            expected[lane] = value < -17 ? (uint32_t)-17 : value > 29 ? 29u : left[lane];
+        }
+        if (check_bits("nested signed extrema literals", signed_clamp(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) {
+            const int32_t x = signed_bits(left[lane]), y = signed_bits(right[lane]);
+            expected[lane] = x < y ? (x > 0 ? left[lane] : 0u) : (y < 0 ? right[lane] : 0u);
+        }
+        if (check_bits("masked signed extrema", signed_extreme_selected(a, b), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) {
+            const int32_t value = signed_bits(left[lane]);
+            expected[lane] = value < 0 ? 0u : value > 29 ? 29u : left[lane];
+        }
+        if (check_bits("literal-first signed extrema", signed_extreme_literal_first(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) {
+            const uint32_t x = left[lane], y = right[lane];
+            expected[lane] = compare_signed(0, x, y) ? x * y : (x + 1u) * (y - 1u);
+        }
+        if (check_bits("masked wrapping multiplication", signed_multiply_selected(a, b), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = 0u - left[lane];
+        if (check_bits("signed wrapping negation", signed_negate(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] ^= left[lane];
+        if (check_bits("live negation input", signed_negate_keep_input(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane)
+            expected[lane] = 0u - (compare_signed(0, left[lane], right[lane]) ? left[lane] : right[lane]);
+        if (check_bits("masked signed negation", signed_negate_selected(a, b), expected)) return 1;
         for (int comparison = 0; comparison < 6; ++comparison) {
             uint32_t expected_mask = 0;
             for (int lane = 0; lane < LANES; ++lane) {

@@ -67,7 +67,7 @@ the profile. Different profiles may therefore round one floating-point
 expression differently.
 
 The compiler implements part of that. It substitutes fused identifiers, and on
-`x86-avx2`, `x86-avx512` and `aarch64-neon` it contracts a multiply feeding an add in the
+`x86-avx2`, `x86-avx512` and `aarch64-neon` it contracts an `f32` multiply feeding an add in the
 same fused region into one fused multiply-add, removing the multiply when
 nothing else uses it. `advance` above compiles to one `vfmadd231ps` on AVX2
 and AVX-512, and one `fmla` on NEON. A multiply and an add outside a fused region, or in
@@ -75,6 +75,8 @@ two different regions, stay separate. `wasm-simd128` contracts nothing,
 because WebAssembly SIMD128 has no fused multiply-add. SSE2 also keeps the
 multiply and add separate, because its ISA has no fused instruction. Reassociation,
 factoring, distribution and the sharing of subexpressions aren't implemented.
+Integer multiply and add retain their wrapping integer semantics. This
+floating-point rewrite doesn't apply to them.
 
 `fma(a, b, c)` says the program needs `a * b + c` rounded once. It is for
 correctness, not speed: the compiler forms fused multiply-adds by itself

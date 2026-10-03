@@ -14,9 +14,9 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     esac
     source="${tmp}/${profile}.rk"
     for kind in i32s u32s; do
-        for operation in add sub and or xor; do
+        for operation in add sub mul and or xor; do
             case "$operation" in
-                add) expression='a + b' ;; sub) expression='a - b' ;;
+                add) expression='a + b' ;; sub) expression='a - b' ;; mul) expression='a * b' ;;
                 and) expression='bit_and(a, b)' ;; or) expression='bit_or(a, b)' ;;
                 xor) expression='bit_xor(a, b)' ;;
             esac
@@ -25,7 +25,27 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         done
         printf 'scratch %s_increment(a: %s) -> %s:\n  a + <1>\n\n' "$kind" "$kind" "$kind"
         printf 'scratch %s_keep_inputs(a: %s, b: %s) -> %s:\n  | changed <| a - b\n  | mixed <| bit_xor(changed, a)\n  mixed + b\n\n' "$kind" "$kind" "$kind" "$kind"
+        printf 'scratch %s_multiply_keep_inputs(a: %s, b: %s) -> %s:\n  | product <| a * b\n  | mixed <| bit_xor(product, a)\n  mixed + b\n\n' "$kind" "$kind" "$kind" "$kind"
+        printf 'scratch %s_multiply_keep_left(a: %s, b: %s) -> %s:\n  let product = a * b\n  product + a\n\n' "$kind" "$kind" "$kind" "$kind"
+        printf 'scratch %s_square(a: %s) -> %s:\n  a * a\n\n' "$kind" "$kind" "$kind"
     done > "$source"
+    for kind in i32s u32s; do
+        for count in {0..31}; do
+            for operation in left right right_signed; do
+                printf 'scratch %s_shift_%s_%s(a: %s) -> %s:\n  shift_bits_%s(a, %s)\n\n' \
+                    "$kind" "$operation" "$count" "$kind" "$kind" "$operation" "$count" >> "$source"
+            done
+        done
+        printf 'scratch %s_shift_keep_input(a: %s) -> %s:\n  | incremented <| a + <1>\n  | shifted <| shift_bits_right_signed(incremented, 7)\n  shifted + a\n\n' "$kind" "$kind" "$kind" >> "$source"
+    done
+    printf 'scratch signed_shift_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then shift_bits_left(a, 31) else shift_bits_right_signed(b, 31)\n\n' >> "$source"
+    for operation in min max; do
+        printf 'scratch signed_%s(a: i32s, b: i32s) -> i32s:\n  %s(a, b)\n\nscratch signed_%s_keep_inputs(a: i32s, b: i32s) -> i32s:\n  | chosen <| %s(a, b)\n  | mixed <| bit_xor(chosen, a)\n  mixed + b\n\nscratch signed_%s_keep_left(a: i32s, b: i32s) -> i32s:\n  let chosen = %s(a, b)\n  chosen + a\n\nscratch signed_%s_same(a: i32s) -> i32s:\n  %s(a, a)\n\n' \
+            "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" "$operation" >> "$source"
+    done
+    printf 'scratch signed_clamp(a: i32s) -> i32s:\n  min(max(a, <-17>), <29>)\n\nscratch signed_extreme_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then max(a, <0>) else min(b, <0>)\n\nscratch signed_extreme_literal_first(a: i32s) -> i32s:\n  max(<0>, min(<29>, a))\n\n' >> "$source"
+    printf 'scratch signed_multiply_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then a * b else (a + <1>) * (b - <1>)\n\n' >> "$source"
+    printf 'scratch signed_negate(a: i32s) -> i32s:\n  -a\n\nscratch signed_negate_keep_input(a: i32s) -> i32s:\n  | negative <| -a\n  bit_xor(negative, a)\n\nscratch signed_negate_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then -a else -b\n\n' >> "$source"
     for comparison in lt le gt ge eq ne; do
         case "$comparison" in
             lt) operator='<' ;; le) operator='<=' ;; gt) operator='>' ;;

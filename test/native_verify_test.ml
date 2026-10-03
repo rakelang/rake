@@ -171,6 +171,73 @@ integer_kernel:
       "vpaddd xmm0, xmm0, xmm1", "vpaddd ymm0, ymm0, YMMWORD PTR [rax]", "one YMM per rack";
       Rake.Target.X86_avx512, "vpaddd zmm0, zmm0, zmm1", "vpcmpd k1, zmm0, zmm1, 1",
       "vpaddd ymm0, ymm0, ymm1", "vpaddd zmm0, zmm0, ZMMWORD PTR [rax]", "one ZMM per rack" ];
+  (* Independent multiply objects exercise the ISA boundary, including MMX,
+     narrowed vectors, memory sources and scalar work that the emitter avoids. *)
+  List.iter (fun (profile, valid, wrong_width, memory, scalar, width_obligation) ->
+    let source = "integer-multiply-verifier-fixture" in
+    let check body = Rake.Native_verify.verify ~profile ~source ~functions:[ "multiply_kernel" ]
+      (assemble ~profile ~source
+        (".intel_syntax noprefix\n.text\n.globl multiply_kernel\nmultiply_kernel:\n    " ^ body ^ "\n    ret\n")) in
+    expect_ok (check valid);
+    expect_obligation width_obligation (check wrong_width);
+    expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only") (check memory);
+    expect_obligation "instruction allow-list" (check scalar))
+    [ Rake.Target.X86_sse2, "pmuludq xmm0, xmm1", "pmuludq mm0, mm1",
+        "pmuludq xmm0, XMMWORD PTR [rax]", "imul eax, ecx", "full-width integer multiply";
+      Rake.Target.X86_avx2, "vpmulld ymm0, ymm0, ymm1", "vpmulld xmm0, xmm0, xmm1",
+        "vpmulld ymm0, ymm0, YMMWORD PTR [rax]", "imul eax, ecx", "one YMM per rack";
+      Rake.Target.X86_avx512, "vpmulld zmm0, zmm0, zmm1", "vpmulld ymm0, ymm0, ymm1",
+        "vpmulld zmm0, zmm0, ZMMWORD PTR [rax]", "imul eax, ecx", "one ZMM per rack" ];
+  (* These separately assembled bytes check the new shift contract independently
+     of selection: full racks, literal counts, no memory and no scalar lanes. *)
+  List.iter (fun (profile, prefix, register, wrong_width, width_obligation) ->
+    List.iter (fun operation ->
+      let source = "integer-shift-verifier-fixture" in
+      let check body = Rake.Native_verify.verify ~profile ~source ~functions:[ "shift_kernel" ]
+        (assemble ~profile ~source
+          (".intel_syntax noprefix\n.text\n.globl shift_kernel\nshift_kernel:\n    " ^ body ^ "\n    ret\n")) in
+      let shift count = if profile = Rake.Target.X86_sse2 then
+          Printf.sprintf "%s%s %s0, %d" prefix operation register count
+        else Printf.sprintf "%s%s %s0, %s0, %d" prefix operation register register count in
+      List.iter (fun count -> expect_ok (check (shift count))) [ 0; 1; 31 ];
+      expect_obligation "full-width literal integer shift" (check (shift 32));
+      expect_obligation width_obligation
+        (check (if profile = Rake.Target.X86_sse2 then operation ^ " mm0, 1"
+          else Printf.sprintf "%s%s %s0, %s0, 1" prefix operation wrong_width wrong_width));
+      expect_obligation (if profile = Rake.Target.X86_sse2 then "full-width literal integer shift" else width_obligation)
+        (check (if profile = Rake.Target.X86_sse2 then operation ^ " xmm0, xmm1"
+          else Printf.sprintf "%s%s %s0, %s0, xmm1" prefix operation register register));
+      expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only")
+        (check (if profile = Rake.Target.X86_sse2 then operation ^ " xmm0, XMMWORD PTR [rax]"
+          else Printf.sprintf "%s%s %s0, %s0, XMMWORD PTR [rax]" prefix operation register register));
+      expect_obligation "instruction allow-list" (check "shl eax, 1")) [ "pslld"; "psrld"; "psrad" ])
+    [ Rake.Target.X86_sse2, "", "xmm", "mm", "full-width literal integer shift";
+      Rake.Target.X86_avx2, "v", "ymm", "xmm", "one YMM per rack";
+      Rake.Target.X86_avx512, "v", "zmm", "ymm", "one ZMM per rack" ];
+  List.iter (fun profile ->
+    let register, memory, width = match profile with
+      | Rake.Target.X86_avx2 -> "ymm", "YMMWORD", "one YMM per rack"
+      | Rake.Target.X86_avx512 -> "zmm", "ZMMWORD", "one ZMM per rack"
+      | _ -> assert false in
+    List.iter (fun mnemonic ->
+      let source = "signed-integer-extrema-verifier-fixture" in
+      let check body = Rake.Native_verify.verify ~profile ~source ~functions:[ "extrema_kernel" ]
+        (assemble ~profile ~source
+          (".intel_syntax noprefix\n.text\n.globl extrema_kernel\nextrema_kernel:\n    " ^ body ^ "\n    ret\n")) in
+      expect_ok (check (Printf.sprintf "%s %s0, %s0, %s1" mnemonic register register register));
+      expect_obligation width (check (mnemonic ^ " xmm0, xmm0, xmm1"));
+      expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only")
+        (check (Printf.sprintf "%s %s0, %s0, %s PTR [rax]" mnemonic register register memory));
+      expect_obligation "instruction allow-list" (check "cmovg eax, ecx")) [ "vpminsd"; "vpmaxsd" ])
+    [ Rake.Target.X86_avx2; Rake.Target.X86_avx512 ];
+  (* Direct PMINSD needs SSE4.1 and cannot enter the SSE2 profile. *)
+  List.iter (fun mnemonic ->
+    let profile = Rake.Target.X86_sse2 and source = "sse2-extrema-verifier-fixture" in
+    expect_obligation "instruction allow-list"
+      (Rake.Native_verify.verify ~profile ~source ~functions:[ "extrema_kernel" ]
+        (assemble ~profile ~source
+          (".intel_syntax noprefix\n.text\n.globl extrema_kernel\nextrema_kernel:\n    " ^ mnemonic ^ " xmm0, xmm1\n    ret\n"))))
+    [ "pminsd"; "pmaxsd" ];
   let profile = Rake.Target.Aarch64_neon in
   let source = "neon-integer-verifier-fixture" in
   let check instruction =
@@ -189,8 +256,29 @@ integer_kernel:
       (assemble ~profile ~source assembly) in
   expect_ok (check "add v0.4s, v0.4s, v1.4s");
   expect_ok (check "cmgt v0.4s, v0.4s, v1.4s");
+  expect_ok (check "neg v0.4s, v0.4s");
+  expect_ok (check "mul v0.4s, v0.4s, v1.4s");
+  List.iter (fun mnemonic ->
+    List.iter (fun count -> expect_ok (check (Printf.sprintf "%s v0.4s, v0.4s, #%d" mnemonic count))) [ 1; 31 ];
+    expect_obligation "four-lane literal integer shift" (check (mnemonic ^ " v0.2s, v0.2s, #1"));
+    expect_obligation "four-lane literal integer shift" (check (mnemonic ^ " v0.8h, v0.8h, #1")))
+    [ "shl"; "ushr"; "sshr" ];
+  expect_ok (check "shl v0.4s, v0.4s, #0");
+  expect_obligation "four-lane literal integer shift" (check "ushr v0.4s, v0.4s, #32");
+  expect_obligation "four-lane literal integer shift" (check "sshr v0.4s, v0.4s, #32");
+  expect_obligation "no scalarized lane control" (check "lsl w0, w0, #1");
+  List.iter (fun mnemonic ->
+    expect_ok (check (mnemonic ^ " v0.4s, v0.4s, v1.4s"));
+    expect_obligation "four 32-bit integer lanes" (check (mnemonic ^ " v0.2s, v0.2s, v1.2s"));
+    expect_obligation "four 32-bit integer lanes" (check (mnemonic ^ " v0.8h, v0.8h, v1.8h")))
+    [ "smin"; "smax" ];
   expect_obligation "four 32-bit integer lanes" (check "add v0.8h, v0.8h, v1.8h");
   expect_obligation "four 32-bit integer lanes" (check "cmeq v0.16b, v0.16b, v1.16b");
+  expect_obligation "four 32-bit integer lanes" (check "neg v0.2s, v0.2s");
+  expect_obligation "four 32-bit integer lanes" (check "neg v0.8h, v0.8h");
+  expect_obligation "four 32-bit integer lanes" (check "mul v0.2s, v0.2s, v1.2s");
+  expect_obligation "four 32-bit integer lanes" (check "mul v0.8h, v0.8h, v1.8h");
+  expect_obligation "no scalarized lane control" (check "mul w0, w0, w1");
   expect_obligation "no scalarized lane control" (check "add w0, w0, w1");
   (* A selected traversal extent includes control flow and embedded literals.
      Independent mutations must fail even if their mnemonics look harmless. *)
