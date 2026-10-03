@@ -36,6 +36,27 @@ let check_integer_argument_boundaries () =
       Rake.Target.X86_avx512, ".intel_syntax noprefix", "    vmovd xmm1, edi", "    vmovd xmm1, esi", "    vaddps zmm0, zmm0, zmm0";
       Rake.Target.Aarch64_neon, ".arch armv8-a+simd", "    fmov s1, w0", "    fmov s1, w1", "    fadd v0.4s, v0.4s, v0.4s" ]
 
+let check_conversion_instruction_boundaries () =
+  List.iter (fun (profile, prefix, full, wrong) ->
+    let source = "conversion-instruction-boundary" in
+    let check body =
+      let assembly = prefix ^ "\n.text\n.globl converted\nconverted:\n" ^ body ^ "\n    ret\n" in
+      Rake.Native_verify.verify ~profile ~source ~functions:[ "converted" ]
+        (assemble ~profile ~source assembly) in
+    expect_ok (check full);
+    match check wrong with
+    | Error _ -> ()
+    | Ok () -> failwith "a scalar or narrowed conversion passed rack verification")
+    [ Rake.Target.X86_sse2, ".intel_syntax noprefix",
+        "    cvtdq2ps xmm0, xmm0", "    cvtsi2ss xmm0, eax";
+      Rake.Target.X86_avx2, ".intel_syntax noprefix",
+        "    vcvtdq2ps ymm0, ymm0", "    vcvtdq2ps xmm0, xmm0";
+      Rake.Target.X86_avx512, ".intel_syntax noprefix",
+        "    vcvtdq2ps zmm0, zmm0", "    vcvtdq2ps ymm0, ymm0";
+      Rake.Target.Aarch64_neon, ".arch armv8-a+simd",
+        "    scvtf v0.4s, v0.4s\n    fcvtns v0.4s, v0.4s",
+        "    scvtf v0.2s, v0.2s" ]
+
 let valid =
   {|
 .intel_syntax noprefix
@@ -591,4 +612,5 @@ neon_unselected_lane:
     (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-unselected-lane-fixture"
       ~functions:[ "neon_unselected_lane" ] ~cross_lane_functions:[ "neon_unselected_lane" ] neon_unselected_lane);
   check_integer_argument_boundaries ();
+  check_conversion_instruction_boundaries ();
   print_endline "native object-code verification test passed"

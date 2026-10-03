@@ -153,6 +153,8 @@ let saturate low high x = if x < low then low else if x > high then high else x
     i32; NaN becomes zero, as WebAssembly's nearest then trunc_sat. *)
 let nearest_i32 x =
   if Float.is_nan x then 0
+  else if x >= 2147483647.0 then 2147483647
+  else if x <= -2147483648.0 then -2147483648
   else
     let floor = Float.of_int (int_of_float (Float.round (x -. 0.5))) in
     let nearest =

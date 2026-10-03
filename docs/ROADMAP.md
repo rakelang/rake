@@ -203,9 +203,13 @@ bitcasts keep the rack's bits and selected profile width. Independent C
 checks all four compact types, updates and destinations against guarded
 arrays. WebAssembly verifies its packed widening in both addressing modes,
 with source bounds required for narrower comparisons or extending multiplies.
-We will extend the remaining column and output widths, implement numerical
-integer/float conversion, then define participation for cross-lane operations
-before admitting them in tails.
+Signed `i32s`/`f32s` numerical conversion now compiles on every physical
+profile, in register kernels and streams. An independent integer-bit oracle
+checks nearest-even rounding, saturation, infinities and NaNs. Masked calls
+check inactive-lane exceptions, and stream arrays end at guard pages.
+We will extend the remaining column and output widths and unsigned numerical
+conversions, then define participation for cross-lane operations before
+admitting them in tails.
 
 The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
 integer extraction and insertion, the remaining scalar expressions and

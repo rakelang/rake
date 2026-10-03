@@ -411,10 +411,10 @@ let select_function (func : N.func) =
               (find_type func.name environment index value)) [ if_true; if_false ];
           [ M.Select { dst; mask = condition; if_true; if_false; provenance } ]
       | N.Sanitize { mask; active; benign } ->
-          let dst = rack_result () in
+          let dst = word_rack_result () in
           ensure_mask func.name environment index mask;
-          ensure_operand_f32 func.name environment index active;
-          ensure_operand_f32 func.name environment index benign;
+          List.iter (fun value -> require_word_rack func.name ~instruction:index "sanitized operand"
+            (find_type func.name environment index value)) [ active; benign ];
           [ M.Select
               { dst; mask; if_true = active; if_false = benign; provenance } ]
       | N.Mask_binary (((N.And | N.Or | N.Xor) as operation), left, right) ->
@@ -510,6 +510,14 @@ let select_function (func : N.func) =
                 @ steps accumulated rest in
           [ M.Broadcast_f32 { dst = initial; source; lane; provenance } ]
           @ steps initial [ M.Lane1; M.Lane2; M.Lane3 ]
+      | N.Convert { operand; element = N.F32 } ->
+          let dst = rack_result () in
+          ensure_operand_i32 func.name environment index operand;
+          [ M.Convert_i32_f32 { dst; source = operand; conversion = N.I32_to_f32; provenance } ]
+      | N.Convert { operand; element = N.I32 } ->
+          let dst = word_rack_result () in
+          ensure_operand_f32 func.name environment index operand;
+          [ M.Convert_i32_f32 { dst; source = operand; conversion = N.F32_to_i32; provenance } ]
       | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index operand;

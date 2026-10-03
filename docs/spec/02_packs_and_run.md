@@ -18,7 +18,7 @@ one contiguous column for each field. Remember the hierarchy as "define our
 pack, then rack 'em and stack 'em". A `run` traverses the stack, splitting its
 unsized columns into racks for the rakes and scratches in its body:
 
-<!-- rake-check: verify wasm-simd128 -->
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 pack Samples {
   f32: value;
@@ -227,7 +227,7 @@ and combines immutable lane expressions, including
 calls to rakes and scratches. A float mask can select integer values, and an
 integer mask can select floats: each column keeps its own element type while
 sharing the traversal's lane count. General loops, multiple column stores,
-other scalar parameter types, numerical integer/float conversions, reductions,
+other scalar parameter types, reductions,
 scans, extraction, insertion and shuffles
 remain work in progress and fail compilation. Unused stored columns may have
 other scalar types.
@@ -283,6 +283,31 @@ column or sixteen bytes from a 16-bit column before widening into one
 field is small. SSE2 and NEON visit four records, and AVX-512 visits sixteen.
 Outputs and updated columns remain `f32`, `i32` or `u32`. Other widening
 widths and compact outputs are work in progress.
+
+### Numerical conversions
+
+`to_f32` converts an `i32s` rack to floating-point values, and `to_i32`
+rounds floats to signed integers with ties to even and saturation. Both
+compile in native streams, including a compact signed column widened before
+conversion. The `u8` and `u16` values above also fit in signed 32-bit lanes,
+so `to_f32(bitcast(i32s, widen(row.quality)))` preserves their numerical
+values. A general `u32` column may exceed that signed range, and unsigned
+numerical conversion remains WIP*.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Measurements {
+  f32: value;
+}
+
+run rounded_values(input: stack Measurements, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    yield to_i32(row.value)
+```
+
+The result column stores one signed integer per record. Empty counts touch
+no storage, and a tail converts only participating values. NaNs become zero,
+and values beyond the signed range saturate to its endpoints.
 
 ### Calling the stream
 

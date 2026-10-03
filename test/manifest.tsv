@@ -95,3 +95,5 @@ test/reject/global_tine_capture.rk	reject	x86-avx2	8	frontend	reject	Undefined s
 test/reject/global_tine_argument_type.rk	reject	x86-avx2	8	frontend	reject	argument type mismatch
 test/reject/global_tine_unmarked_uniform.rk	reject	x86-avx2	8	frontend	reject	uniform argument must use angle brackets
 test/reject/sweep_numeric_coverage.rk	reject	x86-avx2	8	frontend	reject	Sweep does not provably cover every lane
+test/abi/native_conversions.rk	abi	wasm-simd128	4	program	boundary	-
+test/program/signed_conversions.rk	program	wasm-simd128	4	program	differential	-

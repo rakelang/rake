@@ -48,8 +48,9 @@ Lessons start on WebAssembly when they contain a whole program. WebAssembly
 covers general memory runs. SSE2, AVX2, AVX-512 and NEON
 also compile `f32`, `i32` and `u32` stream traversals and single-column stack updates.
 Stored byte and 16-bit columns can be explicitly widened into signed or
-unsigned 32-bit racks. General native memory runs and numerical integer/float
-conversions give the compiler's work-in-progress diagnostic. Updates
+unsigned 32-bit racks. `to_f32` and `to_i32` convert between signed 32-bit
+integer and float racks, including in streams. General native memory runs
+give the compiler's work-in-progress diagnostic. Updates
 can use a separate destination stack with a different record layout. Every result and
 lane trace comes from Rake's interpreter, using the selected profile's `f32`
 rack width. The browser displays C or assembly without executing that
@@ -401,12 +402,12 @@ to `advance` from `<6>` to `<5>` and run. The second chunk in the Lanes tab
 now has one live lane and three empty ones. The tail loads and stores only
 the record that exists.
 
-This lesson uses WebAssembly because `to_f32` converts the widened ages to
-floats. Native profiles support the byte-column widening and the `i32s`/`u32s`
-bitcast, while their numerical integer/float conversion remains work in
-progress. A native run can already compare those ages as integers to select
-float values, or produce a 32-bit integer stream. [Compact
-columns](spec/02_packs_and_run.md#compact-columns) shows a complete native example.
+This lesson starts on WebAssembly, with four records per rack. It also
+compiles on SSE2 and NEON with four, AVX2 with eight, or AVX-512 with sixteen.
+On AVX2 and AVX-512, both counts above fit in one partial rack. Select a
+profile to inspect that difference. `widen` extends each byte age to an
+unsigned 32-bit lane, `bitcast` retains those bits as signed integers, and
+`to_f32` converts the values to floats for the calculation.
 
 ## 10. A whole program
 

@@ -228,6 +228,19 @@ lane. Selection uses a typed vector copy, and allocation elides the copy
 when its input register can be reused. A still-live input needs a separate
 vector register. Neither case performs a numerical conversion.
 
+Signed `i32s` to `f32s` conversion selects `cvtdq2ps` on SSE2,
+full-width `vcvtdq2ps` on AVX2 and AVX-512F, or `scvtf .4s` on NEON.
+These preserve the rack width and use the caller's nearest-even rounding.
+The reverse conversion sanitises NaNs to zero, checks the signed range with
+packed masks, and converts the remaining values with `cvtps2dq`,
+`vcvtps2dq` or `fcvtns .4s`. Vector selections restore the saturated
+endpoints. Four allocated temporary vector registers hold its masks and
+safe values, and spills still cause rejection. Inside `through`, inactive
+integer or float operands become zero before either conversion, including
+in partial streams. The final-object verifier checks full-width conversion
+operands and rejects scalar or narrowed forms. Independent C bit arithmetic
+checks rounding and saturation separately from these instructions.
+
 ## Whole programs
 
 ```text

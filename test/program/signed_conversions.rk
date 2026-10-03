@@ -1,0 +1,31 @@
+pack ConversionSamples {
+  i32: words;
+  f32: values;
+}
+
+run rounded_floats(input: stack ConversionSamples, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    yield to_i32(row.values)
+
+run rounded_words(input: stack ConversionSamples, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield to_f32(row.words)
+
+slow main() -> i32:
+  words: [7]i32 := [0, 1, -1, 16777217, 16777219, 2147483647, -2147483648]
+  values: [7]f32 := [2.5, -2.5, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0, 2147483648.0, -2147483648.0]
+  integers: [7]i32 := [0; 7]
+  floats: [7]f32 := [0.0; 7]
+  rounded_floats(stack ConversionSamples { words: words, values: values }, <7>, integers)
+  rounded_words(stack ConversionSamples { words: words, values: values }, <7>, floats)
+  if integers[0] != 2 or integers[1] != -2 or integers[2] != 0:
+    return 1
+  if integers[3] != 2147483647 or integers[4] != -2147483648:
+    return 2
+  if integers[5] != 2147483647 or integers[6] != -2147483648:
+    return 3
+  if floats[3] != 16777216.0 or floats[4] != 16777220.0:
+    return 4
+  if floats[5] != 2147483648.0 or floats[6] != -2147483648.0:
+    return 5
+  return 171

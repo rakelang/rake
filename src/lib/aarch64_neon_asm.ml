@@ -31,6 +31,7 @@ let lanes_f32 register = vector register ^ ".4s"
 let lanes_bits register = vector register ^ ".16b"
 
 let registers = function
+  | A.Convert_i32_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Integer_parameter { dst; _ } -> [ dst ]
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Mask_const { dst; _ } -> [ dst ]
@@ -197,6 +198,30 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "fmax %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fsqrt { dst; source } ->
       emit "fsqrt %s, %s" (lanes_f32 dst) (lanes_f32 source)
+  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.I32_to_f32; _ } ->
+      emit "scvtf %s, %s" (lanes_f32 dst) (lanes_f32 source)
+  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.F32_to_i32; scratch } ->
+      (match scratch with
+      | [ low; high; safe; constant ] ->
+          let splat bits =
+            let label = intern pool (List.init 4 (fun _ -> bits)) in
+            emit "ldr %s, %s" (q constant) label in
+          emit "fcmeq %s, %s, %s" (lanes_f32 low) (lanes_f32 source) (lanes_f32 source);
+          emit "and %s, %s, %s" (lanes_bits safe) (lanes_bits source) (lanes_bits low);
+          splat 0xcf000000l;
+          emit "fcmgt %s, %s, %s" (lanes_f32 low) (lanes_f32 constant) (lanes_f32 safe);
+          splat 0x4f000000l;
+          emit "fcmgt %s, %s, %s" (lanes_f32 high) (lanes_f32 constant) (lanes_f32 safe);
+          emit "and %s, %s, %s" (lanes_bits safe) (lanes_bits safe) (lanes_bits high);
+          emit "bic %s, %s, %s" (lanes_bits safe) (lanes_bits safe) (lanes_bits low);
+          emit "fcvtns %s, %s" (lanes_f32 dst) (lanes_f32 safe);
+          splat Int32.min_int;
+          emit "and %s, %s, %s" (lanes_bits low) (lanes_bits low) (lanes_bits constant);
+          emit "orr %s, %s, %s" (lanes_bits dst) (lanes_bits dst) (lanes_bits low);
+          splat Int32.max_int;
+          emit "bic %s, %s, %s" (lanes_bits high) (lanes_bits constant) (lanes_bits high);
+          emit "orr %s, %s, %s" (lanes_bits dst) (lanes_bits dst) (lanes_bits high)
+      | _ -> invalid_arg "saturating NEON conversion requires four temporary registers")
   | A.Round_f32 { dst; source; mode } ->
       let mnemonic = match mode with
         | Native_ir.Toward_negative -> "frintm" | Native_ir.Toward_positive -> "frintp"

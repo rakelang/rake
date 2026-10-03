@@ -11,6 +11,7 @@ module S = Native_ir.IntSet
 type vector_register = int
 
 type operation =
+  | Convert_i32_f32 of { dst : vector_register; source : vector_register; conversion : Native_ir.signed_word_conversion; scratch : vector_register list }
   | Integer_parameter of { dst : vector_register; argument : int }
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Mask_const of { dst : vector_register; value : bool }
@@ -267,6 +268,7 @@ let allocate_function ?parameter_assignment func =
           let candidates =
             match instruction with
             | M.Uniform_f32 _ | M.Mask_const _ -> []
+            | M.Convert_i32_f32 { conversion = Native_ir.F32_to_i32; _ } -> []
             | M.Broadcast_f32 { source; _ } -> [ source ]
             | M.Broadcast_bool { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
@@ -278,7 +280,9 @@ let allocate_function ?parameter_assignment func =
           | Error _ as error -> error
           | Ok (dst, reused) ->
               let p = physical in
-              let scratch_count = match instruction with M.Reduce_mask _ -> 1 | _ -> 0 in
+              let scratch_count = match instruction with
+                | M.Convert_i32_f32 { conversion = Native_ir.F32_to_i32; _ } -> 4
+                | M.Reduce_mask _ -> 1 | _ -> 0 in
               let occupied = occupied !allocation in
               let scratch = List.filter (fun register ->
                 register <> dst && not (S.mem register occupied)) allocatable_registers
@@ -289,6 +293,8 @@ let allocate_function ?parameter_assignment func =
               maximum_live := max !maximum_live
                 (I.cardinal !allocation + (if reused = None then 1 else 0) + scratch_count);
               (match instruction with
+              | M.Convert_i32_f32 { source; conversion; _ } ->
+                  emit loc provenance (Convert_i32_f32 { dst; source = p source; conversion; scratch })
               | M.Copy_word { source; _ } ->
                   if reused <> Some source then
                     emit loc provenance (Move { dst; source = p source })

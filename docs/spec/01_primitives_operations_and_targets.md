@@ -62,6 +62,7 @@ features after that tag.
 | `abs` | yes | yes | yes | yes | yes |
 | `min` `max` | yes | yes | yes | yes | yes |
 | `floor` `ceil` `trunc` `nearest` | yes | yes | yes | yes | yes |
+| `to_i32` (nearest-even, saturating signed conversion) | yes | yes | yes | yes | yes |
 | `exp` `log` `log2` `tanh` | WIP* | WIP* | WIP* | WIP* | yes |
 | `if` on a direct uniform `f32` comparison | yes | yes | yes | yes | yes |
 | `if` on a direct uniform `i32` or `u32` comparison | yes | yes | yes | yes | yes |
@@ -152,7 +153,8 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | `if` on a direct comparison of marked uniforms | yes | yes |
 | static one- and two-rack `shuffle` | yes | yes |
 | `bitcast` between `i32s` and `u32s` | yes | yes |
-| runtime shift counts, numerical conversions, extraction and insertion | WIP* | WIP* |
+| `to_f32` (`i32s` to `f32s`) | yes | WIP* |
+| runtime shift counts, extraction and insertion | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
 float racks, and float masks can select integer racks. The
@@ -167,7 +169,7 @@ compact memory transfers and partial racks.
 and `bitcast(i32s, values)` does the reverse. A lane containing −1 becomes
 4294967295 without changing a bit. The native allocator needs no instruction
 when it can reuse the input register, or a vector register copy when the
-input remains live. This does not implement numerical integer/float conversion.
+input remains live. Numerical conversion uses `to_f32` or `to_i32` instead.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -287,7 +289,8 @@ Conversions between integer and float racks:
   lanes then `b`'s, each saturated to the 16-bit range.
 - `widen_low(x)` and `widen_high(x)` take the low or high eight lanes of a
   `u8s` rack, zero-extended to an `i16s` rack.
-- `to_f32(x)` converts an `i32s` rack to `f32s`, rounding to nearest.
+- `to_f32(x)` converts an `i32s` rack to `f32s`, rounding to nearest with
+  ties to even.
 - `to_i32(x)` converts an `f32s` rack to `i32s`, rounding to nearest with ties
   to even and saturating to the 32-bit range. NaN becomes zero.
 - `bitcast(i32s, x)` keeps the bits of a rack and changes its element type.
@@ -295,6 +298,28 @@ Conversions between integer and float racks:
 On WebAssembly each numerical conversion above is one instruction except
 `to_i32`, which is `f32x4.nearest` then `i32x4.trunc_sat_f32x4_s`. A bitcast
 reuses the same `v128` bits without a numerical conversion instruction.
+
+`to_f32` and `to_i32` also compile on all four physical CPU profiles,
+in register kernels and the native stream subset. They preserve the lane
+count. `to_f32` uses a packed signed-integer conversion. `to_i32` combines
+packed comparisons, conversion and selections to preserve the saturation
+and NaN rules above. It requires four temporary vector registers in addition
+to its input and result, included in the no-spill allocation check.
+Both conversions protect inactive lanes inside `through` and partial racks
+by substituting zero before conversion. Active signalling NaNs can raise
+invalid-operation exceptions, and an active conversion can raise inexact.
+The caller's floating-point environment follows the
+[native rounding contract](#floating-point-values).
+Unsigned numerical conversion remains WIP*.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch signed_floats(values: i32s) -> f32s:
+  to_f32(values)
+
+scratch rounded_integers(values: f32s) -> i32s:
+  to_i32(values)
+```
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake

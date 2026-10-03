@@ -7,6 +7,15 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Signed `to_f32` and `to_i32` compile on SSE2, AVX2, AVX-512F and NEON,
+  in register kernels and streams. Packed operations preserve nearest-even
+  rounding, saturating float-to-integer results and NaN-to-zero conversion.
+  Masked operands become zero before conversion. Independent integer-bit
+  oracles check boundary and raw values, retained inputs, exception flags
+  and guarded tails. Final-object fixtures reject scalar and narrowed
+  instructions. The interpreter now clamps infinities and out-of-range
+  values before scalar integer conversion.
+
 - Native streams explicitly widen `i8` and `i16` columns into `i32s`, or
   `u8` and `u16` columns into `u32s`, on SSE2, AVX2, AVX-512F and NEON.
   Packed extension preserves signed values, with guarded compact transfers

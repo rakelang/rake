@@ -12,6 +12,7 @@ type f32_lane = Lane0 | Lane1 | Lane2 | Lane3
 let f32_lane_index = function Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
 
 type instruction =
+  | Convert_i32_f32 of { dst : vreg; source : vreg; conversion : Native_ir.signed_word_conversion; provenance : provenance }
   | Copy_word of { dst : vreg; source : vreg; provenance : provenance }
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Mask_const of { dst : vreg; value : bool; provenance : provenance }
@@ -78,6 +79,7 @@ type func = {
 type t = func list
 
 let def = function
+  | Convert_i32_f32 { dst; _ }
   | Copy_word { dst; _ }
   | Uniform_f32 { dst; _ }
   | Mask_const { dst; _ }
@@ -113,6 +115,7 @@ let def = function
 
 let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
+  | Convert_i32_f32 { source; _ } -> [ source ]
   | Copy_word { source; _ } -> [ source ]
   | Broadcast_f32 { source; _ } -> [ source ]
   | Broadcast_bool { source; _ } -> [ source ]
@@ -142,6 +145,7 @@ let operands = function
   | Select { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
 
 let provenance = function
+  | Convert_i32_f32 { provenance; _ }
   | Copy_word { provenance; _ }
   | Uniform_f32 { provenance; _ }
   | Mask_const { provenance; _ }
@@ -179,6 +183,8 @@ let value_location func value =
   Option.value (List.assoc_opt value func.value_locations) ~default:func.loc
 
 let instruction_name = function
+  | Convert_i32_f32 { conversion = Native_ir.I32_to_f32; _ } -> "scvtf.4s"
+  | Convert_i32_f32 { conversion = Native_ir.F32_to_i32; _ } -> "nearest.saturate.f32.i32"
   | Copy_word _ -> "copy.32"
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"

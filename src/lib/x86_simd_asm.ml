@@ -35,6 +35,7 @@ let vector_register profile register =
   Printf.sprintf "%s%d" (Option.get (Target.info profile).mir_register_class) register
 
 let registers = function
+  | A.Convert_i32_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
   | A.Integer_parameter { dst; _ } -> [ dst ]
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Uniform_mask { dst; _ } -> [ dst ]
@@ -516,6 +517,30 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       let magnitude = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.max_int))) in
       if sse then (move dst source; emit "andps %s, XMMWORD PTR [rip + %s]" (ymm dst) magnitude)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpandd" else "vandps") (ymm dst) (ymm source) memory magnitude
+  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.I32_to_f32; _ } ->
+      emit "%scvtdq2ps %s, %s" (if sse then "" else "v") (ymm dst) (ymm source)
+  | A.Convert_i32_f32 { dst; source; conversion = Native_ir.F32_to_i32; scratch } ->
+      (match scratch with
+      | [ low; high; safe; constant ] ->
+          (* Keep NaNs and overflow away from CVTPS2DQ. Packed masks restore
+             saturated endpoints afterwards; every lane still converts in
+             parallel. The caller supplies nearest-even MXCSR rounding. *)
+          compare M.Oeq low source source;
+          logical "andps" safe source low;
+          load_splat constant 0xcf000000l;
+          compare M.Olt low safe constant;
+          load_splat constant 0x4f000000l;
+          compare M.Olt high safe constant;
+          logical "andps" safe safe high;
+          binary (if avx512 then "pandnd" else "andnps") safe low safe;
+          emit "%scvtps2dq %s, %s" (if sse then "" else "v") (ymm dst) (ymm safe);
+          load_splat constant Int32.min_int;
+          logical "andps" low low constant;
+          logical "orps" dst dst low;
+          load_splat constant Int32.max_int;
+          binary (if avx512 then "pandnd" else "andnps") high high constant;
+          logical "orps" dst dst high
+      | _ -> invalid_arg "saturating x86 conversion requires four temporary registers")
   | A.Round_f32 { dst; source; mode; scratch } ->
       let immediate = match mode with
         | Native_ir.Nearest_even -> 0 | Native_ir.Toward_negative -> 1

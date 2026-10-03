@@ -103,6 +103,9 @@ stack or a separate destination with a different record layout.
 Explicit `widen` also reads signed and unsigned byte or 16-bit columns into
 32-bit working racks. Each column advances by its stored element width,
 and a partial rack reads only participating records. Outputs stay 32-bit.
+Signed integer/float numerical conversions preserve those 32-bit lanes,
+with masked protection, nearest-even rounding and saturating float-to-integer
+results.
 [Packs and runs](spec/02_packs_and_run.md) defines
 their boundaries and checked tails.
 

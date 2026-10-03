@@ -341,10 +341,10 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
               (find_type func.name environment index value)) [ if_true; if_false ];
           Some (M.Blendvps { dst; mask = condition; if_true; if_false; provenance })
       | N.Sanitize { mask; active; benign } ->
-          let dst = rack_result () in
+          let dst = word_rack_result () in
           ensure_mask func.name environment index mask;
-          ensure_operand_f32 func.name environment index active;
-          ensure_operand_f32 func.name environment index benign;
+          List.iter (fun value -> require_word_rack func.name ~instruction:index "sanitized operand"
+            (find_type func.name environment index value)) [ active; benign ];
           Some (M.Blendvps { dst; mask; if_true = active; if_false = benign; provenance })
       | N.Mask_binary (((N.And | N.Or | N.Xor) as operation), left, right) ->
           let dst = mask_result () in
@@ -422,6 +422,14 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
               || List.exists (fun lane -> lane < 0 || lane >= lanes * List.length racks) indices then
             fail func.name ~instruction:index "shuffle indices must cover one rack and stay within its inputs";
           Some (M.Shuffle_word { dst; racks; indices; provenance })
+      | N.Convert { operand; element = N.F32 } ->
+          let dst = rack_result () in
+          ensure_operand_i32 func.name environment index operand;
+          Some (M.Convert_i32_f32 { dst; source = operand; conversion = N.I32_to_f32; provenance })
+      | N.Convert { operand; element = N.I32 } ->
+          let dst = word_rack_result () in
+          ensure_operand_f32 func.name environment index operand;
+          Some (M.Convert_i32_f32 { dst; source = operand; conversion = N.F32_to_i32; provenance })
       | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index operand;

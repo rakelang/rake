@@ -345,6 +345,10 @@ let check_fused_contiguity verifier context (instructions : instruction list) =
     inactive lane can't raise anything and needs no sanitising. *)
 let floating_point_exceptions = ref true
 
+(** Equal-width numerical conversions. Neither permits an unsigned input
+    reinterpretation or a change in rack participation. *)
+type signed_word_conversion = I32_to_f32 | F32_to_i32
+
 let rec verify_instruction verifier context environment (instruction : instruction) =
   List.iter
     (fun operand ->
@@ -617,11 +621,24 @@ and verify_block verifier context ~expected_result ~yielding environment block =
     (fun (instruction : instruction) ->
       match instruction.provenance.through with
       | None -> ()
+      | Some mask when !floating_point_exceptions && (match instruction.op with
+          | Convert { element = F32; _ } -> true | _ -> false) ->
+          (match instruction.op with
+          | Convert { operand; _ } ->
+              (match IntMap.find_opt operand definitions with
+              | Some (Sanitize { mask = operand_mask; benign; _ }) when operand_mask = mask ->
+                  (match IntMap.find_opt benign definitions with
+                  | Some (Rack_splat (Int32 0l)) -> ()
+                  | _ -> complain verifier context "masked i32-to-f32 conversion requires benign integer zero")
+              | _ -> complain verifier context "masked i32-to-f32 conversion requires sanitized participation")
+          | _ -> assert false)
       | Some _ when (match instruction.op with Load _ | Store _ | Gather _ | Scatter _ -> false | op -> not (!floating_point_exceptions && float_operands (operands op))) -> ()
       | Some mask ->
           (match instruction.op with
           | Unary (Sqrt, operand) -> require_sanitized mask 0x3f800000l operand
           | Unary ((Floor | Ceil | Trunc | Nearest), operand) ->
+              require_sanitized mask 0x00000000l operand
+          | Convert { operand; element = I32 } ->
               require_sanitized mask 0x00000000l operand
           | Binary ((Add | Sub | Min | Max), left, right)
           | Compare (_, left, right) ->

@@ -1,0 +1,61 @@
+scratch signed_to_float(values: i32s) -> f32s:
+  to_f32(values)
+
+scratch float_to_signed(values: f32s) -> i32s:
+  to_i32(values)
+
+scratch conversion_keep_integer(values: i32s) -> i32s:
+  | rounded <| to_i32(to_f32(values))
+  rounded + values
+
+scratch conversion_keep_float(values: f32s) -> i32s:
+  | first <| to_i32(values)
+  | second <| to_i32(values + <0.25>)
+  first + second
+
+rake masked_signed_to_float(selector: f32s, values: i32s) -> f32s:
+  tine #enabled means selector > <0.0>
+  through #enabled into converted:
+    to_f32(values)
+  sweep:
+    | #enabled => converted
+    | #enabled gaps => <-2.0>
+
+rake masked_float_to_signed(selector: f32s, values: f32s) -> i32s:
+  tine #enabled means selector > <0.0>
+  through #enabled into converted:
+    to_i32(values)
+  sweep:
+    | #enabled => converted
+    | #enabled gaps => <-2>
+
+pack ConversionInput {
+  f32: values;
+  i32: words;
+  i16: compact;
+}
+
+pack ConversionOutput {
+  i32: words;
+  f32: values;
+}
+
+run convert_to_signed(input: stack ConversionInput, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    yield to_i32(row.values)
+
+run convert_to_float(input: stack ConversionInput, <count: i64>) -> f32:
+  for row in input using f32s up to <count>:
+    yield to_f32(row.words)
+
+run convert_compact(input: stack ConversionInput, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield to_f32(widen(row.compact))
+
+run conversion_destination(input: stack ConversionInput, <count: i64>, output: mut stack ConversionOutput):
+  for row in input using i32s up to <count>:
+    output.words <- to_i32(row.values)
+
+run conversion_update(input: mut stack ConversionOutput, <count: i32>):
+  for row in input using f32s up to <count>:
+    input.values <- to_f32(to_i32(row.values))
