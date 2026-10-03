@@ -12,5 +12,6 @@ bash "${test_dir}/x86_profiles_test.sh"
 bash "${test_dir}/program_test.sh"
 bash "${test_dir}/abi_test.sh"
 bash "${test_dir}/native_program_test.sh"
+bash "${test_dir}/native_stream_test.sh"
 
 echo "full conformance suite passed"

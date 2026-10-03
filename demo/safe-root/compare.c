@@ -32,10 +32,10 @@ static void check_tail_memory(void) {
         mprotect(output + page, page, PROT_NONE)) abort();
     const float special[] = { -4.0f, -0.0f, 0.0f, 1.0f, 2.0f,
         INFINITY, -INFINITY, NAN, 25.0f, -1.0f, 0.25f };
-    for (size_t count = 0; count <= 33; ++count) {
+    for (size_t count = 0; count <= 65; ++count) {
         float *values = (float *)(input + page) - count;
         float *results = (float *)(output + page) - count;
-        float expected[33];
+        float expected[65];
         for (size_t i = 0; i < count; ++i) values[i] = special[i % 11];
         safe_root_c(values, expected, count);
         rake_stack_Samples_v1 stack = { values };
@@ -65,8 +65,13 @@ static int order(const void *a, const void *b) {
     return (left > right) - (left < right);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     check_tail_memory();
+    if (argc == 2 && strcmp(argv[1], "--check-only") == 0) {
+        puts("native safe-root guard-page and scalar-oracle checks passed");
+        return 0;
+    }
+    if (argc != 1) abort();
     const size_t count = 1000000;
     float *values = malloc((count + 3) * sizeof(float));
     float *expected = malloc((count + 3) * sizeof(float));

@@ -57,7 +57,13 @@ returned records and independently derived sums after each thread unwinds.
 Mixed-program fixtures check the final object's kernels,
 signed-zero transfer through the scalar C boundary, and x86 reductions against
 both the selected-profile interpreter and hand-derived lane counts. Native
-memory runs remain work in progress.
+general memory runs remain work in progress.
+
+`test/native_stream_test.sh` checks the AVX2 and AVX-512 stream subset against
+independent scalar C. One, two and four input columns end at guard pages,
+as does the output, for counts from zero through 65. The checks cover every
+tail remainder, exact in-place output, inactive-lane arithmetic and an unread
+byte column in the descriptor. AVX-512 uses capable hardware or Intel SDE.
 
 The callback fixture uses independently authored C prototypes and padded
 structs. C retains and invokes Rake function pointers, and Rake invokes

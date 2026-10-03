@@ -39,7 +39,7 @@ file with a C main entry point. External tools only assemble or compile Rake's t
 into an object file, which --verify-native then disassembles and checks.
 Native slow-only programs emit C and compile with the platform C compiler.
 Native programs may call register kernels through f32 C boundaries.
-Native AVX2 supports f32 stream traversals; general native runs remain WIP.
+Native AVX2 and AVX-512 support f32 streams; general native runs remain WIP.
 
 |}
 

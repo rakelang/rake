@@ -44,8 +44,9 @@ all the lanes at once, the idea the whole tutorial builds on.
 The target menu offers WebAssembly, SSE2, AVX2, AVX-512 and NEON. The browser
 development compiler supports native slow orchestration with uniform `f32`
 kernel calls too. Lessons start on WebAssembly when they contain a whole
-program. Memory runs still require WebAssembly; choosing a physical target
-for one gives the compiler's work-in-progress diagnostic. Every result and
+program. WebAssembly covers general memory runs. AVX2 and AVX-512 also compile
+read-only `f32` stream traversals. Other native memory runs give the compiler's
+work-in-progress diagnostic. Every result and
 lane trace comes from Rake's interpreter, using the selected profile's `f32`
 rack width. The browser displays C or assembly without executing that
 generated machine code. Native object verification still requires `rakec`

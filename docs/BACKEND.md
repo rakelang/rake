@@ -102,7 +102,7 @@ explicit slow code -> scalar C and C ABI declarations ────────�
                                                               register-kernel verifier
 ```
 
-This development path supports the limited AVX2 stream traversal below.
+This development path supports the limited AVX2 and AVX-512 stream traversal below.
 General native runs remain work in progress. Slow callers can pass
 uniform `f32` arguments and receive `f32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
@@ -157,7 +157,7 @@ written in its source. It never replaces rack work with scalar lane loops.
 
 ## Native traversal selection
 
-An AVX2 stream's loop, addresses, full-rack transfers and masked tail are
+An AVX2 or AVX-512 stream's loop, addresses, full-rack transfers and masked tail are
 selected by Rake. Its lane expression goes through the same SSA selector
 and no-spill allocator as a register kernel. The tail is lowered under its
 participation mask, so inactive operands cannot raise arithmetic exceptions.
@@ -170,7 +170,7 @@ embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
 This stage supports one to four `f32` read columns and an `f32` output.
-[Native AVX2 streams](spec/02_packs_and_run.md#native-avx2-streams) defines
+[Native x86 streams](spec/02_packs_and_run.md#native-x86-streams) defines
 the accepted subset and caller obligations.
 
 ## Object verification
@@ -202,7 +202,7 @@ relocations, linking and start-up. Debug information and exception unwinding
 aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile scratches
 and rakes only. The development compiler adds native mixed programs through
 the limited scalar C boundary above. General runs compile on WebAssembly;
-AVX2 implements the stream subset. Other native run profiles remain WIP.
+AVX2 and AVX-512 implement the stream subset. Other native run profiles remain WIP.
 
 ## Planned GPU pipeline
 

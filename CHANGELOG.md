@@ -7,6 +7,10 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Extend native `f32` streams to AVX-512F: sixteen-lane racks, masked
+  loads and stores, and inactive-input sanitisation. Independent C and
+  guard-page checks exercise one, two and four columns on both x86 stream
+  profiles, including every tail remainder and exact in-place output.
 - Place slow-local aggregate frames using their actual C size and alignment,
   including header-backed records nested in arrays and Rake records. Small
   frames retain aligned host-stack storage. Arena padding is reclaimed on
