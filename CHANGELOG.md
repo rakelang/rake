@@ -7,6 +7,43 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- `u32s` supports all six comparisons on SSE2, AVX2, AVX-512F, NEON and
+  WebAssembly. Unsigned rack and uniform types retain their signedness in
+  the IR and interpreter. SSE2 and AVX2 compare sign-bit-biased copies,
+  AVX-512F uses `vpcmpud`, and NEON uses `cmhi` and `cmhs`. Independent C
+  checks high-bit boundaries, operand order, mask reductions and live inputs.
+  Interpreter goldens and a whole-program WebAssembly fixture check unsigned
+  ordering and broadcasts. Native unsigned extrema remain WIP.
+
+- Static `i32s` and `u32s` shuffles compile on all four physical profiles.
+  They share the float shuffle's bit-preserving selection, allocation and
+  final-object checks. Independent C checks one- and two-rack permutations,
+  repeated lanes, whole-register selection and still-live or aliased inputs.
+  The interpreter also selects 32-bit integer lanes, with hand-specified
+  boundary-bit cases at four, eight and sixteen lanes. Native stream
+  shuffles remain WIP until their tail participation contract is defined.
+
+- Native signed `i32s` `abs` compiles on all four physical profiles,
+  retaining the wrapping −2³¹ result. SSE2 uses packed sign extension,
+  XOR and subtraction with an allocated temporary register. AVX2, AVX-512F
+  and NEON use direct full-width absolute-value instructions. Independent
+  widened C arithmetic checks exact bits, retained inputs, nested calls and
+  masked selection. Final-object fixtures refuse narrowed and memory forms,
+  and SSSE3 instructions in the SSE2 profile.
+
+- Native `i32s` and `u32s` `bit_andnot(a, b)` uses a full-width packed
+  instruction on every physical profile, preserving `a & ~b`. The x86
+  emitter reverses instruction operands, and SSE2 preserves inputs across
+  destructive register reuse. Independent C checks exact bits, equal
+  operands, literal masks and masked selection. Final-object fixtures
+  refuse narrowed, scalar and memory forms.
+
+- Integer rack mask literals use their scalar element's range check. Valid
+  `u32s` masks up to 4294967295 are accepted, including a literal as the
+  first operand of `bit_andnot`. Native lowering preserves those high-bit
+  masks in its 32-bit representation. An untyped integer literal retains
+  the signed `i32` range.
+
 - Native `i32s` and `u32s` bit shifts accept literal counts from 0 to 31 on
   all four physical profiles. Full-width packed instructions implement left,
   logical-right and signed-right shifts. A zero count leaves the rack unchanged.

@@ -424,15 +424,6 @@ let integer_literal_value (expr: Ast.expr) =
   | EInt value | EBroadcast { v = EInt value; _ } -> value
   | _ -> invalid_arg "integer_literal_value: not an integer literal"
 
-(** Whether an integer literal fits a lane of this integer rack. *)
-let literal_fits rack value =
-  match rack with
-  | Rack SUint8 -> value >= 0L && value <= 255L
-  | Rack SInt64 -> true
-  | Rack SInt16 -> value >= -32768L && value <= 32767L
-  | Rack SInt -> value >= -2147483648L && value <= 2147483647L
-  | _ -> false
-
 let is_integer_rack = function Rack (SInt16 | SInt) -> true | _ -> false
 
 let is_integer_scalar_type = function
@@ -448,6 +439,12 @@ let literal_fits_scalar s value =
   | SInt -> value >= -2147483648L && value <= 2147483647L
   | SUint -> value >= 0L && value <= 4294967295L
   | _ -> true
+
+(** A rack lane has the same literal range as its scalar element. *)
+let literal_fits rack value =
+  match rack with
+  | Rack scalar when is_integer_scalar_type scalar -> literal_fits_scalar scalar value
+  | _ -> false
 
 (** Integer rack arithmetic: + and - of any integer rack, * of 16-, 32- and
     64-bit lanes; there is no lane division. *)
@@ -491,7 +488,10 @@ let require_marked loc (l : Ast.expr) lt (r : Ast.expr) rt =
 let rec infer_expr env (expr: Ast.expr) : t =
   require_feature env expr.loc (Capabilities.feature_of_expr expr.v);
   match expr.v with
-  | EInt _ -> Rack SInt  (* integer literals are rack by default in vector context *)
+  | EInt value ->
+      if not (literal_fits_scalar SInt value) then
+        type_errorf expr.loc "integer literal %Ld does not fit an i32 lane" value;
+      Rack SInt
   | EFloat _ -> Rack SFloat
   | EBool _ -> Mask
 
@@ -518,14 +518,14 @@ let rec infer_expr env (expr: Ast.expr) : t =
              type_errorf literal.loc "integer literal %Ld does not fit a u8 lane" value;
            let _ = op in
            Mask
-       | Rack (SInt16 | SInt | SInt64) | Rack SFloat ->
+       | Rack (SInt16 | SInt | SUint | SInt64) | Rack SFloat ->
            let value = integer_literal_value literal in
            if not (literal_fits rack_t value || rack_t = Rack SInt64 || rack_t = Rack SFloat) then
              type_errorf literal.loc "integer literal %Ld does not fit a %s lane" value (show_concise (element_type rack_t));
            Mask
        | Scalar s when s <> SBool -> Scalar SBool
        | actual ->
-           type_errorf expr.loc "integer literal comparison requires a u8 rack, got %s"
+           type_errorf expr.loc "integer literal comparison requires an integer or f32 rack, got %s"
              (show_concise actual))
 
   | EBinop (l, ((Add | Sub | Mul | Div) as op), r)
@@ -559,8 +559,8 @@ let rec infer_expr env (expr: Ast.expr) : t =
                | _ -> false) -> (
            match (lt, rt) with
            | Scalar _, Scalar _ -> Scalar SBool
-           | Rack (SUint | SUint16 | SInt8 | SUint64), _ | _, Rack (SUint | SUint16 | SInt8 | SUint64) ->
-               type_errorf expr.loc "wasm-simd128 compares u8 and signed i16, i32 and i64 lanes; this rack has unsigned or i8 lanes"
+           | Rack (SUint16 | SInt8 | SUint64), _ | _, Rack (SUint16 | SInt8 | SUint64) ->
+               type_errorf expr.loc "rack comparisons support u8, i16, i32, u32 and i64 lanes; this rack's element remains work in progress"
            | _ -> Mask)
        | (Add | Sub) when lt = rt && is_integer_rack lt ->
            require_feature env expr.loc Capabilities.Integer_rack_arithmetic;

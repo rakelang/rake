@@ -59,7 +59,7 @@ let side_bits =
   {
     N.name = "side_bits";
     parameters = [ parameter 0 "a" (N.Rack N.U8); parameter 1 "b" (N.Rack N.U8) ];
-    result = Some (N.Scalar N.I32);
+    result = Some (N.Scalar N.U32);
     body =
       {
         instructions =
@@ -67,7 +67,7 @@ let side_bits =
               (N.Shuffle { racks = [ 0; 1 ]; indices = [ 0; 4; 8; 12; 16; 20; 24; 28; 0; 0; 0; 0; 0; 0; 0; 0 ] });
             instruction (Some (3, N.Rack N.U8)) (N.Rack_splat (N.Uint8 0));
             instruction (Some (4, N.Mask)) (N.Compare (N.Ne, 2, 3));
-            instruction (Some (5, N.Scalar N.I32)) (N.Reduce (N.Reduce_bitmask, 4)) ];
+            instruction (Some (5, N.Scalar N.U32)) (N.Reduce (N.Reduce_bitmask, 4)) ];
         terminators = [ N.Return (Some 5) ];
       };
     loc = N.unknown_location;

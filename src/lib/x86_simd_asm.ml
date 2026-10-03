@@ -40,7 +40,7 @@ let registers = function
   | A.Broadcastss { dst; source } -> [ dst; source ]
   | A.Extract_f32 { dst; source; _ } -> [ dst; source ]
   | A.Insert_f32 { dst; previous; inserted; broadcast; _ } -> [ dst; previous; inserted; broadcast ]
-  | A.Shuffle_f32 { dst; racks; scratch; _ } -> dst :: racks @ scratch
+  | A.Shuffle_word { dst; racks; scratch; _ } -> dst :: racks @ scratch
   | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
   | A.Reduce_f32 { dst; source; scratch; _ }
   | A.Scan_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
@@ -48,6 +48,7 @@ let registers = function
   | A.Extreme_f32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
   | A.Extreme_i32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
   | A.Mul_i32 { dst; left; right; scratch } -> dst :: left :: right :: scratch
+  | A.Abs_i32 { dst; source; sign } -> dst :: source :: Option.to_list sign
   | A.Addps { dst; left; right }
   | A.Subps { dst; left; right }
   | A.Add_i32 { dst; left; right }
@@ -56,6 +57,7 @@ let registers = function
   | A.Mulps { dst; left; right }
   | A.Divps { dst; left; right }
   | A.Mask_andps { dst; left; right }
+  | A.Mask_andnotps { dst; left; right }
   | A.Mask_orps { dst; left; right }
   | A.Mask_xorps { dst; left; right } -> [ dst; left; right ]
   | A.Sqrtps { dst; source }
@@ -105,7 +107,7 @@ let validate_function profile (func : A.func) =
               | A.Extract_f32 { lane; _ } | A.Insert_f32 { lane; _ }
                   when M.f32_lane_index lane >= (Target.info profile).f32_lanes ->
                   Error { function_name = func.name; loc; message = "lane transfer is outside the selected profile's rack" }
-              | A.Shuffle_f32 { racks; indices; _ }
+              | A.Shuffle_word { racks; indices; _ }
                   when let lanes = (Target.info profile).f32_lanes in
                     List.length indices <> lanes || List.length racks < 1 || List.length racks > 2
                     || List.exists (fun lane -> lane < 0 || lane >= lanes * List.length racks) indices ->
@@ -285,7 +287,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       if sse then (move broadcast inserted; emit "shufps %s, %s, 0x00" (ymm broadcast) (ymm broadcast))
       else emit "vbroadcastss %s, xmm%d" (ymm broadcast) inserted;
       insert_broadcast_lane dst previous broadcast (M.f32_lane_index lane)
-  | A.Shuffle_f32 { dst; racks; indices; scratch } ->
+  | A.Shuffle_word { dst; racks; indices; scratch } ->
       let mask_bits = List.map (fun index -> if index >= lanes then -1l else 0l) indices in
       let load_indices register =
         let label = intern pool (Vector_bits (List.map (fun index -> Int32.of_int (index mod lanes)) indices)) in
@@ -319,7 +321,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
             let mask = List.mapi (fun lane index -> if index >= lanes then 1 lsl lane else 0) indices
               |> List.fold_left (lor) 0 in
             emit "vblendps %s, %s, %s, 0x%02x" (ymm dst) (ymm dst) (ymm other) mask)
-      | _ -> invalid_arg "float shuffle requires one or two racks")
+      | _ -> invalid_arg "32-bit shuffle requires one or two racks")
   | A.Reduce_mask { dst; source; operation; scratch } ->
       move dst source;
       if operation = Native_ir.Mask_bits then (
@@ -407,6 +409,18 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
   | A.Neg_i32 { dst; source } ->
       logical "xorps" dst dst dst;
       binary "psubd" dst dst source
+  | A.Abs_i32 { dst; source; sign } ->
+      if sse then (
+        let sign = match sign with
+          | Some register -> register
+          | None -> invalid_arg "SSE2 integer absolute value requires an allocated sign register" in
+        (* (x xor sign) - sign preserves the wrapping minimum i32 value.
+           Capture the sign before reusing a dying source as destination. *)
+        move sign source;
+        emit "psrad %s, 31" (ymm sign);
+        logical "xorps" dst source sign;
+        binary "psubd" dst dst sign)
+      else emit "vpabsd %s, %s" (ymm dst) (ymm source)
   | A.Extreme_i32 { dst; left; right; operation; scratch } ->
       if sse then (
         let mask = match scratch with
@@ -428,15 +442,28 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
         move dst source;
         emit "%s %s, %d" mnemonic (ymm dst) count)
       else emit "v%s %s, %s, %d" mnemonic (ymm dst) (ymm source) count
-  | A.Compare_i32 { dst; predicate; left; right } ->
+  | A.Compare_i32 { dst; predicate; unsigned; left; right; scratch } ->
       if avx512 then (
         let immediate = match predicate with
           | Native_ir.Eq -> 0 | Native_ir.Lt -> 1 | Native_ir.Le -> 2
           | Native_ir.Ne -> 4 | Native_ir.Ge -> 5 | Native_ir.Gt -> 6 in
-        emit "vpcmpd k1, %s, %s, 0x%02x" (ymm left) (ymm right) immediate;
+        emit "%s k1, %s, %s, 0x%02x" (if unsigned then "vpcmpud" else "vpcmpd") (ymm left) (ymm right) immediate;
         logical "xorps" dst dst dst;
         emit "vpternlogd %s{k1}, %s, %s, 0xff" (ymm dst) (ymm dst) (ymm dst))
       else (
+        (* XORing the sign bit maps unsigned order to signed order. Both
+           temporary racks are allocated so live inputs remain unchanged. *)
+        let left, right = match scratch with
+          | [ biased_left; biased_right ] ->
+              let sign = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.min_int))) in
+              let bias dst source =
+                if sse then (move dst source; emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) sign)
+                else emit "vxorps %s, %s, YMMWORD PTR [rip + %s]" (ymm dst) (ymm source) sign in
+              bias biased_left left;
+              bias biased_right right;
+              biased_left, biased_right
+          | [] -> left, right
+          | _ -> invalid_arg "unsigned comparison requires two temporary racks" in
         let mnemonic, left, right, invert = match predicate with
           | Native_ir.Eq -> "pcmpeqd", left, right, false
           | Native_ir.Ne -> "pcmpeqd", left, right, true
@@ -517,6 +544,10 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       blend dst mask if_true if_false
   | A.Mask_andps { dst; left; right } ->
       logical "andps" dst left right
+  | A.Mask_andnotps { dst; left; right } ->
+      (* x86 AND-NOT complements its first source. Rake complements the
+         right operand, so reverse the sources, including SSE2 alias saves. *)
+      binary (if avx512 then "pandnd" else "andnps") dst right left
   | A.Mask_orps { dst; left; right } ->
       logical "orps" dst left right
   | A.Mask_xorps { dst; left; right } ->
@@ -532,7 +563,7 @@ let emit_function profile pool buffer (func : A.func) =
     func.name func.name func.name func.name;
   List.iter (emit_instruction profile pool buffer) func.instructions;
   (match func.result_type with
-  | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32)) ->
+  | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32 | Native_ir.U32)) ->
       Printf.bprintf buffer "    %smovd eax, xmm0\n" (if profile = Target.X86_sse2 then "" else "v")
   | _ -> ());
   Buffer.add_string buffer "    ret\n";

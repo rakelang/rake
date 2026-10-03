@@ -137,20 +137,29 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | --- | :-: | :-: |
 | wrapping `+`, `-` and `*` | yes | yes |
 | signed negation | yes | WIP* |
+| signed `abs` | yes | WIP* |
 | signed `min` and `max` | yes | WIP* |
-| `bit_and`, `bit_or`, `bit_xor` | yes | yes |
+| `bit_and`, `bit_or`, `bit_xor`, `bit_andnot` | yes | yes |
 | bit shifts with literal counts from 0 to 31 | yes | yes |
-| six signed comparisons | yes | WIP* |
+| six lane comparisons (signed or unsigned) | yes | yes |
 | select an integer rack with a lane mask | yes | yes |
-| `all`, `any`, `bitmask` of a comparison | yes | WIP* |
+| `all`, `any`, `bitmask` of a comparison | yes | yes |
 | integer literal broadcast | yes | yes |
-| integer uniform arguments, runtime shift counts, conversions and lane transfers | WIP* | WIP* |
+| static one- and two-rack `shuffle` | yes | yes |
+| integer uniform arguments, runtime shift counts, conversions, extraction and insertion | WIP* | WIP* |
 
 These operations stay in full vector registers. Integer masks can select
 float racks, and float masks can select integer racks. Native streams still
 accept float columns only.
+
 Signed negation wraps too: negating −2³¹ gives −2³¹ because +2³¹ doesn't fit
 in a signed 32-bit lane. Unary minus takes signed integer racks only.
+
+`abs` also wraps at that boundary: `abs(−2³¹)` retains the same lane bits
+and the signed result is −2³¹. SSE2 computes `(x xor sign) - sign`, with
+the sign extended across each lane and one allocated temporary vector
+register. AVX2 and AVX-512F use `vpabsd`, and NEON uses `abs .4s`.
+
 Multiplication keeps the low 32 bits of each lane's product. AVX2, AVX-512F
 and NEON each use one packed multiply instruction. SSE2 uses two packed
 even-lane multiplies and four shuffles to restore all four lanes in order.
@@ -163,6 +172,12 @@ instruction. SSE2 compares the lanes with `pcmpgtd` and selects their bits
 using vector logical operations, with one allocated mask register.
 Unsigned extrema remain work in progress.
 
+Both `i32s` and `u32s` support all six lane comparisons. An unsigned lane
+orders 2³¹ above 2³¹−1 and 2³²−1 above both. SSE2 and AVX2 flip bit 31 in
+two allocated temporary racks, then compare the transformed lanes as signed
+integers. AVX-512F uses `vpcmpud`, and NEON uses `cmhi` or `cmhs` for
+unsigned ordering. Equality compares the original lane bits.
+
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 scratch increment(values: u32s) -> u32s:
@@ -170,6 +185,9 @@ scratch increment(values: u32s) -> u32s:
 
 scratch negate(values: i32s) -> i32s:
   -values
+
+scratch magnitude(values: i32s) -> i32s:
+  abs(values)
 
 scratch product(a: u32s, b: u32s) -> u32s:
   a * b
@@ -182,6 +200,9 @@ scratch greater(a: i32s, b: i32s) -> i32s:
 
 scratch negative_bits(values: i32s) -> u32:
   bitmask(values < <0>)
+
+scratch unsigned_high_bits(values: u32s) -> u32:
+  bitmask(values >= <2147483648>)
 ```
 
 WebAssembly supports a wider integer operation set, shown in the next table.
@@ -195,11 +216,12 @@ On its 128-bit register a `u8s` rack has 16 lanes, `i16s` 8, `i32s` and
 | negation | WIP* | yes | yes | WIP* | yes | WIP* |
 | `abs` | yes | yes | yes | WIP* | yes | WIP* |
 | `min` `max` | yes | yes | yes | WIP* | WIP* | WIP* |
-| comparisons, and so `select` and `bitmask` | yes | yes | yes | WIP* | yes | WIP* |
+| comparisons, and so `select` and `bitmask` | yes | yes | yes | yes | yes | WIP* |
 | bitwise operations and bit shifts | yes | yes | yes | yes | yes | yes |
 | `shuffle` `extract` `insert` | yes | yes | yes | yes | yes | yes |
 
-`u8s` lanes compare unsigned, and the other integer racks compare signed.
+`u8s` and `u32s` lanes compare unsigned, and the other supported integer
+comparisons are signed.
 `abs` of a `u8s` rack treats its lanes as signed bytes. No integer rack
 divides, and the reductions and scans take float racks only. An integer
 literal beside an integer rack is broadcast in the rack's element type, as in
@@ -241,6 +263,18 @@ end, filling with zeros. `shift_bits_right(x, n)` moves them towards the low
 end, filling with zeros, and `shift_bits_right_signed(x, n)` fills with the
 sign bit. The count is an integer literal below the lane's width in bits, or
 a uniform `u32` taken modulo that width.
+
+The physical profiles implement `bit_andnot(a, b)` on `i32s` and `u32s`
+with a full-width packed instruction. SSE2 uses `andnps`, AVX2 uses
+`vandnps`, AVX-512F uses `vpandnd`, and NEON uses `bic .16b`.
+The x86 instructions complement their first source, so Rake reverses the
+instruction operands to preserve `a & ~b`.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch clear_bits(values: u32s, removed: u32s) -> u32s:
+  bit_andnot(values, removed)
+```
 
 The physical profiles support all three bit shifts on `i32s` and `u32s`
 with literal counts from 0 to 31. Zero leaves the rack unchanged.
@@ -330,8 +364,8 @@ indices, one for each lane. `shuffle(a, b, [i0, i1, ...])` chooses from both,
 with `b`'s lanes numbered after `a`'s as if the two racks were laid end to
 end. Indices may repeat or omit input lanes. The list must contain exactly
 the output rack's lane count, and each index must be within its one or two
-input racks. The physical profiles support `f32s`. WebAssembly also supports
-its integer rack types.
+input racks. The physical profiles support `f32s`, `i32s` and `u32s`.
+WebAssembly also supports its other integer rack types.
 
 <!-- rake-check: verify x86-sse2 aarch64-neon wasm-simd128 -->
 ```rake
@@ -339,6 +373,9 @@ scratch reversed(values: f32s) -> f32s:
   shuffle(values, [3, 2, 1, 0])
 
 scratch interleaved(a: f32s, b: f32s) -> f32s:
+  shuffle(a, b, [0, 4, 1, 5])
+
+scratch interleaved_bits(a: u32s, b: u32s) -> u32s:
   shuffle(a, b, [0, 4, 1, 5])
 ```
 
@@ -350,11 +387,16 @@ or an out-of-range index at the shuffle's source line.
 ```rake
 scratch rotated(values: f32s) -> f32s:
   shuffle(values, [1, 2, 3, 4, 5, 6, 7, 0])
+
+scratch rotated_bits(values: i32s) -> i32s:
+  shuffle(values, [1, 2, 3, 4, 5, 6, 7, 0])
 ```
 
 This rotation crosses the AVX2 register's 128-bit subdivisions. Shuffles
 preserve each selected lane's bits, including signed zeros and signalling
-NaN payloads, without floating-point arithmetic or exceptions. The selected
+NaN payloads, without floating-point arithmetic or exceptions. Integer
+shuffles use the same bit-preserving transfers, including lanes whose high
+bit is set. The selected
 native sequences keep their temporary values in vector registers and count
 those registers in the no-spill allocation check.
 Native stream shuffles remain WIP* until their partial-rack participation
@@ -390,7 +432,7 @@ scratch remains WIP*. Cross-lane reductions are forbidden in a `through`
 block. Native stream mask reductions remain WIP* until their partial-rack
 participation contract is implemented.
 
-The native profiles also reduce `i32s` comparison masks. Masks from other
+The native profiles also reduce `i32s` and `u32s` comparison masks. Masks from other
 integer element types remain available on WebAssembly only:
 
 <!-- rake-check: verify wasm-simd128 -->

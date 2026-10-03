@@ -188,6 +188,39 @@ integer_kernel:
         "vpmulld ymm0, ymm0, YMMWORD PTR [rax]", "imul eax, ecx", "one YMM per rack";
       Rake.Target.X86_avx512, "vpmulld zmm0, zmm0, zmm1", "vpmulld ymm0, ymm0, ymm1",
         "vpmulld zmm0, zmm0, ZMMWORD PTR [rax]", "imul eax, ecx", "one ZMM per rack" ];
+  List.iter (fun (profile, valid, wrong_width, width_obligation, memory) ->
+    let source = "integer-andnot-verifier-fixture" in
+    let check body = Rake.Native_verify.verify ~profile ~source ~functions:[ "andnot_kernel" ]
+      (assemble ~profile ~source
+        (".intel_syntax noprefix\n.text\n.globl andnot_kernel\nandnot_kernel:\n    " ^ body ^ "\n    ret\n")) in
+    expect_ok (check valid);
+    expect_obligation width_obligation (check wrong_width);
+    expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only") (check memory);
+    expect_obligation "instruction allow-list" (check "not eax"))
+    [ Rake.Target.X86_sse2, "andnps xmm0, xmm1", "vandnps ymm0, ymm0, ymm1",
+        "one XMM per rack", "andnps xmm0, XMMWORD PTR [rax]";
+      Rake.Target.X86_avx2, "vandnps ymm0, ymm0, ymm1", "vandnps xmm0, xmm0, xmm1",
+        "one YMM per rack", "vandnps ymm0, ymm0, YMMWORD PTR [rax]";
+      Rake.Target.X86_avx512, "vpandnd zmm0, zmm0, zmm1", "vpandnd ymm0, ymm0, ymm1",
+        "one ZMM per rack", "vpandnd zmm0, zmm0, ZMMWORD PTR [rax]" ];
+  (* Absolute-value objects are assembled independently of Rake's selector.
+     SSE2 needs a packed sequence because PABSD was introduced in SSSE3. *)
+  List.iter (fun (profile, valid, wrong_width, width_obligation, memory) ->
+    let source = "integer-absolute-verifier-fixture" in
+    let check body = Rake.Native_verify.verify ~profile ~source ~functions:[ "absolute_kernel" ]
+      (assemble ~profile ~source
+        (".intel_syntax noprefix\n.text\n.globl absolute_kernel\nabsolute_kernel:\n    " ^ body ^ "\n    ret\n")) in
+    expect_ok (check valid);
+    expect_obligation width_obligation (check wrong_width);
+    expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only") (check memory);
+    expect_obligation "instruction allow-list" (check "neg eax"))
+    [ Rake.Target.X86_sse2,
+        "movaps xmm1, xmm0\n    psrad xmm1, 31\n    xorps xmm0, xmm1\n    psubd xmm0, xmm1",
+        "pabsd xmm0, xmm1", "instruction allow-list", "psubd xmm0, XMMWORD PTR [rax]";
+      Rake.Target.X86_avx2, "vpabsd ymm0, ymm1", "vpabsd xmm0, xmm1",
+        "one YMM per rack", "vpabsd ymm0, YMMWORD PTR [rax]";
+      Rake.Target.X86_avx512, "vpabsd zmm0, zmm1", "vpabsd ymm0, ymm1",
+        "one ZMM per rack", "vpabsd zmm0, ZMMWORD PTR [rax]" ];
   (* These separately assembled bytes check the new shift contract independently
      of selection: full racks, literal counts, no memory and no scalar lanes. *)
   List.iter (fun (profile, prefix, register, wrong_width, width_obligation) ->
@@ -231,6 +264,17 @@ integer_kernel:
       expect_obligation "instruction allow-list" (check "cmovg eax, ecx")) [ "vpminsd"; "vpmaxsd" ])
     [ Rake.Target.X86_avx2; Rake.Target.X86_avx512 ];
   (* Direct PMINSD needs SSE4.1 and cannot enter the SSE2 profile. *)
+  let unsigned_profile = Rake.Target.X86_avx512 and unsigned_source = "unsigned-compare-verifier-fixture" in
+  let unsigned_check instruction = Rake.Native_verify.verify ~profile:unsigned_profile ~source:unsigned_source ~functions:["unsigned_kernel"]
+    (assemble ~profile:unsigned_profile ~source:unsigned_source
+      (".intel_syntax noprefix\n.text\n.globl unsigned_kernel\nunsigned_kernel:\n    " ^ instruction ^ "\n    ret\n")) in
+  List.iter (fun predicate ->
+    expect_ok (unsigned_check (Printf.sprintf "vpcmpud k1, zmm0, zmm1, %d" predicate)))
+    [0; 1; 2; 4; 5; 6];
+  expect_obligation "one ZMM per rack" (unsigned_check "vpcmpud k1, ymm0, ymm1, 1");
+  expect_obligation "literal rack loads only" (unsigned_check "vpcmpud k1, zmm0, ZMMWORD PTR [rax], 1");
+  expect_obligation "reserved opmask register" (unsigned_check "vpcmpud k2, zmm0, zmm1, 1");
+  expect_obligation "full-width unsigned integer comparison" (unsigned_check "vpcmpud k1, zmm0, zmm1, 3");
   List.iter (fun mnemonic ->
     let profile = Rake.Target.X86_sse2 and source = "sse2-extrema-verifier-fixture" in
     expect_obligation "instruction allow-list"
@@ -256,8 +300,20 @@ integer_kernel:
       (assemble ~profile ~source assembly) in
   expect_ok (check "add v0.4s, v0.4s, v1.4s");
   expect_ok (check "cmgt v0.4s, v0.4s, v1.4s");
+  List.iter (fun mnemonic ->
+    expect_ok (check (mnemonic ^ " v0.4s, v0.4s, v1.4s"));
+    expect_obligation "four 32-bit integer lanes" (check (mnemonic ^ " v0.2s, v0.2s, v1.2s"));
+    expect_obligation "four 32-bit integer lanes" (check (mnemonic ^ " v0.8h, v0.8h, v1.8h"))) ["cmhi"; "cmhs"];
   expect_ok (check "neg v0.4s, v0.4s");
+  expect_ok (check "abs v0.4s, v1.4s");
+  expect_obligation "four 32-bit integer lanes" (check "abs v0.2s, v1.2s");
+  expect_obligation "four 32-bit integer lanes" (check "abs v0.8h, v1.8h");
+  expect_obligation "four 32-bit integer lanes" (check "abs d0, d1");
   expect_ok (check "mul v0.4s, v0.4s, v1.4s");
+  expect_ok (check "bic v0.16b, v0.16b, v1.16b");
+  expect_obligation "full-width integer and-not" (check "bic v0.8b, v0.8b, v1.8b");
+  expect_obligation "full-width integer and-not" (check "bic v0.4s, #1");
+  expect_obligation "no scalarized lane control" (check "bic w0, w0, w1");
   List.iter (fun mnemonic ->
     List.iter (fun count -> expect_ok (check (Printf.sprintf "%s v0.4s, v0.4s, #%d" mnemonic count))) [ 1; 31 ];
     expect_obligation "four-lane literal integer shift" (check (mnemonic ^ " v0.2s, v0.2s, #1"));

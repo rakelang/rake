@@ -205,7 +205,7 @@ let cross_lane_function_names = function
                 | X86_simd_regalloc.Scan_f32 _
                 | X86_simd_regalloc.Extract_f32 _
                 | X86_simd_regalloc.Insert_f32 _
-                | X86_simd_regalloc.Shuffle_f32 _ -> true
+                | X86_simd_regalloc.Shuffle_word _ -> true
                 (* SSE2's packed low-word multiplication permutes two sets
                    of products back into their original lane order. *)
                 | X86_simd_regalloc.Mul_i32 _ -> profile = Target.X86_sse2
@@ -226,7 +226,7 @@ let cross_lane_function_names = function
 
 let integer_result_function_names =
   let is_integer = function
-    | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32)) -> true
+    | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32 | Native_ir.U32)) -> true
     | _ -> false in
   function
   | X86 (_, allocated) -> List.filter_map (fun (func : X86_simd_regalloc.func) ->

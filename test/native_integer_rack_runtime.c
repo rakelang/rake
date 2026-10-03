@@ -16,6 +16,11 @@ typedef float float_rack __attribute__((vector_size(LANES * 4)));
     extern integer_rack kind##_and(integer_rack, integer_rack); \
     extern integer_rack kind##_or(integer_rack, integer_rack); \
     extern integer_rack kind##_xor(integer_rack, integer_rack); \
+    extern integer_rack kind##_andnot(integer_rack, integer_rack); \
+    extern integer_rack kind##_andnot_keep_inputs(integer_rack, integer_rack); \
+    extern integer_rack kind##_andnot_keep_left(integer_rack, integer_rack); \
+    extern integer_rack kind##_andnot_same(integer_rack); \
+    extern integer_rack kind##_andnot_literal(integer_rack); \
     extern integer_rack kind##_increment(integer_rack); \
     extern integer_rack kind##_keep_inputs(integer_rack, integer_rack); \
     extern integer_rack kind##_multiply_keep_inputs(integer_rack, integer_rack); \
@@ -23,6 +28,19 @@ typedef float float_rack __attribute__((vector_size(LANES * 4)));
     extern integer_rack kind##_square(integer_rack);
 DECLARE_ARITHMETIC(i32s)
 DECLARE_ARITHMETIC(u32s)
+
+#define DECLARE_SHUFFLE(kind) \
+    extern integer_rack kind##_shuffle_reverse(integer_rack); \
+    extern integer_rack kind##_shuffle_rotate(integer_rack); \
+    extern integer_rack kind##_shuffle_repeat(integer_rack); \
+    extern integer_rack kind##_shuffle_identity(integer_rack); \
+    extern integer_rack kind##_shuffle_weave(integer_rack, integer_rack); \
+    extern integer_rack kind##_shuffle_mixed(integer_rack, integer_rack); \
+    extern integer_rack kind##_shuffle_right(integer_rack, integer_rack); \
+    extern integer_rack kind##_shuffle_keep_inputs(integer_rack, integer_rack); \
+    extern integer_rack kind##_shuffle_same_input(integer_rack);
+DECLARE_SHUFFLE(i32s)
+DECLARE_SHUFFLE(u32s)
 
 #define FOR_EACH_SHIFT_COUNT(apply, kind) \
     apply(kind, 0)  apply(kind, 1)  apply(kind, 2)  apply(kind, 3) \
@@ -42,19 +60,36 @@ FOR_EACH_SHIFT_COUNT(DECLARE_SHIFT, u32s)
 extern integer_rack i32s_shift_keep_input(integer_rack);
 extern integer_rack u32s_shift_keep_input(integer_rack);
 extern integer_rack signed_shift_selected(integer_rack, integer_rack);
+extern integer_rack signed_andnot_selected(integer_rack, integer_rack);
+extern integer_rack unsigned_andnot_all(integer_rack);
 
 #define DECLARE_COMPARISON(comparison) \
     extern integer_rack signed_##comparison(integer_rack, integer_rack); \
     extern uint32_t signed_##comparison##_bits(integer_rack, integer_rack); \
-    extern integer_rack signed_##comparison##_keep_inputs(integer_rack, integer_rack);
+    extern integer_rack signed_##comparison##_keep_inputs(integer_rack, integer_rack); \
+    extern integer_rack unsigned_##comparison(integer_rack, integer_rack); \
+    extern uint32_t unsigned_##comparison##_bits(integer_rack, integer_rack); \
+    extern integer_rack unsigned_##comparison##_keep_inputs(integer_rack, integer_rack); \
+    extern uint32_t unsigned_##comparison##_literal(integer_rack); \
+    extern uint32_t unsigned_##comparison##_literal_first(integer_rack);
 DECLARE_COMPARISON(lt) DECLARE_COMPARISON(le) DECLARE_COMPARISON(gt)
 DECLARE_COMPARISON(ge) DECLARE_COMPARISON(eq) DECLARE_COMPARISON(ne)
 extern float_rack select_float(integer_rack, integer_rack, float_rack, float_rack);
 extern integer_rack select_integer(float_rack, float_rack, integer_rack, integer_rack);
 extern integer_rack integer_gaps(integer_rack);
+extern float_rack unsigned_gap_flags(integer_rack);
+extern bool unsigned_all(integer_rack, integer_rack);
+extern bool unsigned_any(integer_rack, integer_rack);
+extern uint32_t unsigned_equal_self(integer_rack);
+extern uint32_t unsigned_less_self(integer_rack);
 extern integer_rack signed_negate(integer_rack);
 extern integer_rack signed_negate_keep_input(integer_rack);
 extern integer_rack signed_negate_selected(integer_rack, integer_rack);
+extern integer_rack signed_absolute(integer_rack);
+extern integer_rack signed_absolute_keep_input(integer_rack);
+extern integer_rack signed_absolute_incremented(integer_rack);
+extern integer_rack signed_absolute_twice(integer_rack);
+extern integer_rack signed_absolute_selected(integer_rack, integer_rack);
 extern integer_rack signed_multiply_selected(integer_rack, integer_rack);
 extern integer_rack signed_min(integer_rack, integer_rack);
 extern integer_rack signed_max(integer_rack, integer_rack);
@@ -88,6 +123,26 @@ static bool compare_signed(int comparison, uint32_t left, uint32_t right)
     }
 }
 
+static bool compare_unsigned(int comparison, uint32_t left, uint32_t right)
+{
+    switch (comparison) {
+        case 0: return left < right;
+        case 1: return left <= right;
+        case 2: return left > right;
+        case 3: return left >= right;
+        case 4: return left == right;
+        default: return left != right;
+    }
+}
+
+/* Widen before negating so INT32_MIN has a defined magnitude. Converting
+   that magnitude to lane bits independently checks the wrapping result. */
+static uint32_t signed_absolute_bits(uint32_t bits)
+{
+    const int64_t value = signed_bits(bits);
+    return (uint32_t)(value < 0 ? -value : value);
+}
+
 /* Define sign extension with unsigned bits. The oracle neither relies on a
    C implementation's signed right shift nor shifts by 32 at count zero. */
 static uint32_t shift_lane_bits(uint32_t bits, unsigned count, int operation)
@@ -114,15 +169,29 @@ static int check_bits(const char *operation, integer_rack result, const uint32_t
 
 int main(void)
 {
-    integer_rack (*const arithmetic[2][6])(integer_rack, integer_rack) = {
-        {i32s_add, i32s_sub, i32s_mul, i32s_and, i32s_or, i32s_xor},
-        {u32s_add, u32s_sub, u32s_mul, u32s_and, u32s_or, u32s_xor}
+    integer_rack (*const arithmetic[2][7])(integer_rack, integer_rack) = {
+        {i32s_add, i32s_sub, i32s_mul, i32s_and, i32s_or, i32s_xor, i32s_andnot},
+        {u32s_add, u32s_sub, u32s_mul, u32s_and, u32s_or, u32s_xor, u32s_andnot}
     };
+    integer_rack (*const andnot_keep_inputs[])(integer_rack, integer_rack) = {i32s_andnot_keep_inputs, u32s_andnot_keep_inputs};
+    integer_rack (*const andnot_keep_left[])(integer_rack, integer_rack) = {i32s_andnot_keep_left, u32s_andnot_keep_left};
+    integer_rack (*const andnot_same[])(integer_rack) = {i32s_andnot_same, u32s_andnot_same};
+    integer_rack (*const andnot_literal[])(integer_rack) = {i32s_andnot_literal, u32s_andnot_literal};
     integer_rack (*const increments[])(integer_rack) = {i32s_increment, u32s_increment};
     integer_rack (*const compositions[])(integer_rack, integer_rack) = {i32s_keep_inputs, u32s_keep_inputs};
     integer_rack (*const multiply_compositions[])(integer_rack, integer_rack) = {i32s_multiply_keep_inputs, u32s_multiply_keep_inputs};
     integer_rack (*const multiply_keep_left[])(integer_rack, integer_rack) = {i32s_multiply_keep_left, u32s_multiply_keep_left};
     integer_rack (*const squares[])(integer_rack) = {i32s_square, u32s_square};
+    integer_rack (*const single_shuffles[2][4])(integer_rack) = {
+        {i32s_shuffle_reverse, i32s_shuffle_rotate, i32s_shuffle_repeat, i32s_shuffle_identity},
+        {u32s_shuffle_reverse, u32s_shuffle_rotate, u32s_shuffle_repeat, u32s_shuffle_identity}
+    };
+    integer_rack (*const paired_shuffles[2][3])(integer_rack, integer_rack) = {
+        {i32s_shuffle_weave, i32s_shuffle_mixed, i32s_shuffle_right},
+        {u32s_shuffle_weave, u32s_shuffle_mixed, u32s_shuffle_right}
+    };
+    integer_rack (*const shuffle_compositions[])(integer_rack, integer_rack) = {i32s_shuffle_keep_inputs, u32s_shuffle_keep_inputs};
+    integer_rack (*const same_shuffles[])(integer_rack) = {i32s_shuffle_same_input, u32s_shuffle_same_input};
 #define SHIFT_FUNCTIONS(kind, count) \
     {kind##_shift_left_##count, kind##_shift_right_##count, kind##_shift_right_signed_##count},
     integer_rack (*const shifts[2][32][3])(integer_rack) = {
@@ -144,6 +213,24 @@ int main(void)
     uint32_t (*const masks[])(integer_rack, integer_rack) = {
         signed_lt_bits, signed_le_bits, signed_gt_bits, signed_ge_bits, signed_eq_bits, signed_ne_bits
     };
+    integer_rack (*const unsigned_comparisons[])(integer_rack, integer_rack) = {
+        unsigned_lt, unsigned_le, unsigned_gt, unsigned_ge, unsigned_eq, unsigned_ne
+    };
+    integer_rack (*const unsigned_compositions[])(integer_rack, integer_rack) = {
+        unsigned_lt_keep_inputs, unsigned_le_keep_inputs, unsigned_gt_keep_inputs,
+        unsigned_ge_keep_inputs, unsigned_eq_keep_inputs, unsigned_ne_keep_inputs
+    };
+    uint32_t (*const unsigned_masks[])(integer_rack, integer_rack) = {
+        unsigned_lt_bits, unsigned_le_bits, unsigned_gt_bits, unsigned_ge_bits, unsigned_eq_bits, unsigned_ne_bits
+    };
+    uint32_t (*const unsigned_literals[])(integer_rack) = {
+        unsigned_lt_literal, unsigned_le_literal, unsigned_gt_literal,
+        unsigned_ge_literal, unsigned_eq_literal, unsigned_ne_literal
+    };
+    uint32_t (*const unsigned_literal_first[])(integer_rack) = {
+        unsigned_lt_literal_first, unsigned_le_literal_first, unsigned_gt_literal_first,
+        unsigned_ge_literal_first, unsigned_eq_literal_first, unsigned_ne_literal_first
+    };
     const uint32_t patterns[] = {
         0u, 1u, 0xffffffffu, 0x7fffffffu, 0x80000000u, 0x80000001u,
         0x7ffffffeu, 0x55555555u, 0xaaaaaaaau, 0x12345678u, 0xfedcba98u,
@@ -160,6 +247,33 @@ int main(void)
         memcpy(&a, left, sizeof a);
         memcpy(&b, right, sizeof b);
         for (int kind = 0; kind < 2; ++kind) {
+            for (int pattern = 0; pattern < 4; ++pattern) {
+                for (int lane = 0; lane < LANES; ++lane) {
+                    const int selected = pattern == 0 ? LANES - 1 - lane
+                        : pattern == 1 ? (lane + 1) % LANES
+                        : pattern == 2 ? LANES - 1 : lane;
+                    expected[lane] = left[selected];
+                }
+                if (check_bits("single integer shuffle", single_shuffles[kind][pattern](a), expected)) return 1;
+            }
+            for (int pattern = 0; pattern < 3; ++pattern) {
+                for (int lane = 0; lane < LANES; ++lane) {
+                    const int selected = pattern == 0 ? lane / 2 + (lane % 2) * LANES
+                        : pattern == 1 ? (7 * lane + 3) % (2 * LANES)
+                        : 2 * LANES - 1 - lane;
+                    expected[lane] = selected < LANES ? left[selected] : right[selected - LANES];
+                }
+                if (check_bits("paired integer shuffle", paired_shuffles[kind][pattern](a, b), expected)) return 1;
+            }
+            for (int lane = 0; lane < LANES; ++lane) {
+                const int selected = (7 * lane + 3) % (2 * LANES);
+                const uint32_t picked = selected < LANES ? left[selected] : right[selected - LANES];
+                expected[lane] = (picked ^ left[lane]) + right[lane];
+            }
+            if (check_bits("live integer shuffle inputs", shuffle_compositions[kind](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = left[(7 * lane + 3) % LANES];
+            if (check_bits("aliased integer shuffle inputs", same_shuffles[kind](a), expected)) return 1;
             for (unsigned count = 0; count < 32; ++count) {
                 for (int operation = 0; operation < 3; ++operation) {
                     for (int lane = 0; lane < LANES; ++lane)
@@ -170,7 +284,7 @@ int main(void)
             for (int lane = 0; lane < LANES; ++lane)
                 expected[lane] = shift_lane_bits(left[lane] + 1u, 7, 2) + left[lane];
             if (check_bits("live shift input", shift_keep_input[kind](a), expected)) return 1;
-            for (int operation = 0; operation < 6; ++operation) {
+            for (int operation = 0; operation < 7; ++operation) {
                 for (int lane = 0; lane < LANES; ++lane) {
                     const uint32_t x = left[lane], y = right[lane];
                     switch (operation) {
@@ -179,11 +293,22 @@ int main(void)
                         case 2: expected[lane] = x * y; break;
                         case 3: expected[lane] = x & y; break;
                         case 4: expected[lane] = x | y; break;
-                        default: expected[lane] = x ^ y; break;
+                        case 5: expected[lane] = x ^ y; break;
+                        default: expected[lane] = x & ~y; break;
                     }
                 }
                 if (check_bits("integer arithmetic", arithmetic[kind][operation](a, b), expected)) return 1;
             }
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = ((left[lane] & ~right[lane]) ^ left[lane]) + right[lane];
+            if (check_bits("live and-not inputs", andnot_keep_inputs[kind](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = (left[lane] & ~right[lane]) + left[lane];
+            if (check_bits("destructive and-not right input", andnot_keep_left[kind](a, b), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = 0u;
+            if (check_bits("aliased and-not inputs", andnot_same[kind](a), expected)) return 1;
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] = 0x55555555u & ~left[lane];
+            if (check_bits("literal-first and-not", andnot_literal[kind](a), expected)) return 1;
             for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] + 1u;
             if (check_bits("integer literal", increments[kind](a), expected)) return 1;
             for (int lane = 0; lane < LANES; ++lane) expected[lane] = ((left[lane] - right[lane]) ^ left[lane]) + right[lane];
@@ -195,6 +320,12 @@ int main(void)
             for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] * left[lane];
             if (check_bits("aliased multiplication inputs", squares[kind](a), expected)) return 1;
         }
+        for (int lane = 0; lane < LANES; ++lane)
+            expected[lane] = compare_signed(0, left[lane], right[lane])
+                ? left[lane] & ~right[lane] : right[lane] & ~left[lane];
+        if (check_bits("masked and-not", signed_andnot_selected(a, b), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = ~left[lane];
+        if (check_bits("maximum unsigned mask", unsigned_andnot_all(a), expected)) return 1;
         for (int lane = 0; lane < LANES; ++lane)
             expected[lane] = compare_signed(0, left[lane], right[lane])
                 ? shift_lane_bits(left[lane], 31, 0) : shift_lane_bits(right[lane], 31, 2);
@@ -245,6 +376,16 @@ int main(void)
         for (int lane = 0; lane < LANES; ++lane)
             expected[lane] = 0u - (compare_signed(0, left[lane], right[lane]) ? left[lane] : right[lane]);
         if (check_bits("masked signed negation", signed_negate_selected(a, b), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = signed_absolute_bits(left[lane]);
+        if (check_bits("signed wrapping absolute value", signed_absolute(a), expected)) return 1;
+        if (check_bits("idempotent absolute value", signed_absolute_twice(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] ^= left[lane];
+        if (check_bits("live absolute-value input", signed_absolute_keep_input(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = signed_absolute_bits(left[lane] + 1u);
+        if (check_bits("absolute value of reused intermediate", signed_absolute_incremented(a), expected)) return 1;
+        for (int lane = 0; lane < LANES; ++lane)
+            expected[lane] = signed_absolute_bits(compare_signed(0, left[lane], right[lane]) ? left[lane] : right[lane]);
+        if (check_bits("masked signed absolute value", signed_absolute_selected(a, b), expected)) return 1;
         for (int comparison = 0; comparison < 6; ++comparison) {
             uint32_t expected_mask = 0;
             for (int lane = 0; lane < LANES; ++lane) {
@@ -259,7 +400,34 @@ int main(void)
             }
             for (int lane = 0; lane < LANES; ++lane) expected[lane] += left[lane] - right[lane];
             if (check_bits("live comparison inputs", compare_compositions[comparison](a, b), expected)) return 1;
+            uint32_t unsigned_mask = 0, literal_mask = 0, literal_first_mask = 0;
+            for (int lane = 0; lane < LANES; ++lane) {
+                const bool chosen = compare_unsigned(comparison, left[lane], right[lane]);
+                expected[lane] = chosen ? left[lane] : right[lane];
+                if (chosen) unsigned_mask |= 1u << lane;
+                if (compare_unsigned(comparison, left[lane], 0x80000000u)) literal_mask |= 1u << lane;
+                if (compare_unsigned(comparison, 0x80000000u, left[lane])) literal_first_mask |= 1u << lane;
+            }
+            if (check_bits("unsigned comparison", unsigned_comparisons[comparison](a, b), expected)) return 1;
+            if (unsigned_masks[comparison](a, b) != unsigned_mask
+                || unsigned_literals[comparison](a) != literal_mask
+                || unsigned_literal_first[comparison](a) != literal_first_mask) {
+                fprintf(stderr, "unsigned predicate %d disagrees with C ordering\n", comparison);
+                return 1;
+            }
+            for (int lane = 0; lane < LANES; ++lane) expected[lane] += left[lane] - right[lane];
+            if (check_bits("live unsigned comparison inputs", unsigned_compositions[comparison](a, b), expected)) return 1;
         }
+        uint32_t less_mask = 0;
+        for (int lane = 0; lane < LANES; ++lane)
+            if (left[lane] < right[lane]) less_mask |= 1u << lane;
+        if (unsigned_all(a, b) != (less_mask == ((1u << LANES) - 1u))
+            || unsigned_any(a, b) != (less_mask != 0)
+            || unsigned_equal_self(a) != ((1u << LANES) - 1u)
+            || unsigned_less_self(a) != 0u) return 1;
+        const float_rack unsigned_flags = unsigned_gap_flags(a);
+        for (int lane = 0; lane < LANES; ++lane)
+            if (unsigned_flags[lane] != (left[lane] >= 0x80000000u ? 1.0f : 2.0f)) return 1;
         for (int lane = 0; lane < LANES; ++lane)
             expected[lane] = signed_bits(left[lane]) < 0 ? left[lane] - 1u : left[lane] + 1u;
         if (check_bits("integer tines and gaps", integer_gaps(a), expected)) return 1;

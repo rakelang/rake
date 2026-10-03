@@ -42,8 +42,8 @@ exception Selection_error of string
 let reject format = Printf.ksprintf (fun message -> raise (Selection_error message)) format
 
 let class_of_type = function
-  | N.Rack (N.U8 | N.I16 | N.I32 | N.I64 | N.F32) | N.Mask -> V128
-  | N.Scalar (N.I32 | N.I16 | N.U8 | N.I1) -> I32
+  | N.Rack (N.U8 | N.I16 | N.I32 | N.U32 | N.I64 | N.F32) | N.Mask -> V128
+  | N.Scalar (N.I32 | N.U32 | N.I16 | N.U8 | N.I1) -> I32
   | N.Scalar N.I64 -> I64
   | N.Scalar N.F32 -> F32
   | typ -> reject "values of type %s have no wasm-simd128 representation" (N.string_of_typ typ)
@@ -52,14 +52,14 @@ let class_of_type = function
 let lane_bytes = function
   | N.U8 -> 1
   | N.I16 -> 2
-  | N.I32 | N.F32 -> 4
+  | N.I32 | N.U32 | N.F32 -> 4
   | N.I64 -> 8
   | element -> reject "racks of %s are not part of the wasm-simd128 slice" (N.string_of_element element)
 
 let shape = function
   | N.U8 -> "i8x16"
   | N.I16 -> "i16x8"
-  | N.I32 -> "i32x4"
+  | N.I32 | N.U32 -> "i32x4"
   | N.I64 -> "i64x2"
   | N.F32 -> "f32x4"
   | element -> reject "racks of %s are not part of the wasm-simd128 slice" (N.string_of_element element)
@@ -84,13 +84,15 @@ let comparison_instruction element comparison =
   | N.U8, N.Le -> "i8x16.le_u"
   | N.U8, N.Gt -> "i8x16.gt_u"
   | N.U8, N.Ge -> "i8x16.ge_u"
+  | N.U32, _ -> "i32x4" ^ (match comparison with
+      | N.Eq -> ".eq" | N.Ne -> ".ne" | N.Lt -> ".lt_u" | N.Le -> ".le_u" | N.Gt -> ".gt_u" | N.Ge -> ".ge_u")
   | N.F32, N.Eq -> "f32x4.eq"
   | N.F32, N.Lt -> "f32x4.lt"
   | N.F32, N.Le -> "f32x4.le"
   | N.F32, N.Gt -> "f32x4.gt"
   | N.F32, N.Ge -> "f32x4.ge"
   | (N.I16 | N.I32 | N.I64), _ ->
-      let prefix = match element with N.I16 -> "i16x8" | N.I32 -> "i32x4" | _ -> "i64x2" in
+      let prefix = match element with N.I16 -> "i16x8" | N.I32 | N.U32 -> "i32x4" | _ -> "i64x2" in
       prefix ^ (match comparison with
                 | N.Eq -> ".eq" | N.Ne -> ".ne" | N.Lt -> ".lt_s" | N.Le -> ".le_s" | N.Gt -> ".gt_s" | N.Ge -> ".ge_s")
   | N.F32, N.Ne ->
@@ -189,15 +191,19 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
   and compute value =
     let op, typ = IntMap.find value definitions in
     match (op, typ) with
-    | N.Const (N.Int32 value), N.Scalar N.I32 -> [ I32_const value ]
+    | N.Const (N.Int32 value), N.Scalar N.I32
+    | N.Const (N.Uint32 value), N.Scalar N.U32 -> [ I32_const value ]
     | N.Rack_splat (N.Uint8 byte), _ -> [ I32_const (Int32.of_int byte); Operation "i8x16.splat" ]
     | N.Rack_splat (N.Float32_bits bits), _ ->
         [ I32_const bits; Operation "f32.reinterpret_i32"; Operation "f32x4.splat" ]
     | N.Rack_splat (N.Int16 value), _ -> [ I32_const (Int32.of_int value); Operation "i16x8.splat" ]
-    | N.Rack_splat (N.Int32 value), N.Rack N.I32 -> [ I32_const value; Operation "i32x4.splat" ]
+    | N.Rack_splat (N.Int32 value), N.Rack N.I32
+    | N.Rack_splat (N.Uint32 value), N.Rack N.U32 -> [ I32_const value; Operation "i32x4.splat" ]
     | N.Mask_const set, _ -> [ I32_const (if set then -1l else 0l); Operation "i32x4.splat" ]
     | N.Broadcast scalar, N.Rack N.F32 -> emit scalar @ [ Operation "f32x4.splat" ]
-    | N.Broadcast scalar, N.Rack N.I32 -> emit scalar @ [ Operation "i32x4.splat" ]
+    | N.Broadcast scalar, N.Rack (N.I32 | N.U32) -> emit scalar @ [ Operation "i32x4.splat" ]
+    | N.Binary (((N.Add | N.Sub) as operation), left, right), N.Rack N.U32 ->
+        emit_in_order [ left; right ] @ [ Operation (if operation = N.Add then "i32x4.add" else "i32x4.sub") ]
     | N.Binary (((N.Add | N.Sub | N.Min | N.Max) as operation), left, right), N.Rack ((N.I16 | N.I32) as element) ->
         let shape = if element = N.I16 then "i16x8" else "i32x4" in
         let name =
@@ -205,7 +211,7 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
           | N.Add -> "add" | N.Sub -> "sub" | N.Min -> "min_s" | _ -> "max_s"
         in
         emit_in_order [ left; right ] @ [ Operation (shape ^ "." ^ name) ]
-    | N.Binary (((N.And | N.Or | N.Xor | N.Andnot) as operation), left, right), N.Rack (N.U8 | N.I16 | N.I32 | N.I64) ->
+    | N.Binary (((N.And | N.Or | N.Xor | N.Andnot) as operation), left, right), N.Rack (N.U8 | N.I16 | N.I32 | N.U32 | N.I64) ->
         let name =
           match operation with
           | N.And -> "v128.and" | N.Or -> "v128.or" | N.Xor -> "v128.xor" | _ -> "v128.andnot"
@@ -214,7 +220,7 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     | N.Shift { operand; count; shift }, N.Rack element ->
         let shape =
           match element with
-          | N.U8 -> "i8x16" | N.I16 -> "i16x8" | N.I32 -> "i32x4" | N.I64 -> "i64x2"
+          | N.U8 -> "i8x16" | N.I16 -> "i16x8" | N.I32 | N.U32 -> "i32x4" | N.I64 -> "i64x2"
           | _ -> reject "shifts of %s racks are not part of the wasm-simd128 slice" (N.string_of_element element)
         in
         let name = match shift with N.Shift_left -> "shl" | N.Shift_right -> "shr_u" | N.Shift_right_signed -> "shr_s" in
@@ -282,7 +288,7 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
         in
         operands
         @ [ Operation ("i8x16.shuffle " ^ String.concat ", " (List.map string_of_int byte_indices)) ]
-    | N.Reduce (N.Reduce_bitmask, mask), N.Scalar N.I32 -> (
+    | N.Reduce (N.Reduce_bitmask, mask), N.Scalar N.U32 -> (
         match mask_element mask with
         | Some element -> emit mask @ [ Operation (mask_shape element ^ ".bitmask") ]
         | None -> reject "bitmask needs a mask whose lane width is known from a comparison")
@@ -296,7 +302,7 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
     | N.Const (N.Float32_bits bits), N.Scalar N.F32 -> [ I32_const bits; Operation "f32.reinterpret_i32" ]
     | N.Binary (((N.Add | N.Sub) as operation), left, right), N.Rack ((N.U8 | N.I64) as element) ->
         emit_in_order [ left; right ] @ [ Operation (shape element ^ (if operation = N.Add then ".add" else ".sub")) ]
-    | N.Binary (N.Mul, left, right), N.Rack ((N.I16 | N.I32 | N.I64) as element) ->
+    | N.Binary (N.Mul, left, right), N.Rack ((N.I16 | N.I32 | N.U32 | N.I64) as element) ->
         emit_in_order [ left; right ] @ [ Operation (shape element ^ ".mul") ]
     | N.Binary (((N.Min | N.Max) as operation), left, right), N.Rack N.U8 ->
         emit_in_order [ left; right ] @ [ Operation (if operation = N.Min then "i8x16.min_u" else "i8x16.max_u") ]
@@ -323,6 +329,10 @@ let select_function ?(mask_parameter = fun _ _ -> None) (func : N.func) =
           match (comparison, prefix) with
           | N.Eq, _ -> "eq" | N.Ne, _ -> "ne"
           | N.Lt, "f32." -> "lt" | N.Le, "f32." -> "le" | N.Gt, "f32." -> "gt" | N.Ge, "f32." -> "ge"
+          | N.Lt, _ when type_of left = N.Scalar N.U32 -> "lt_u"
+          | N.Le, _ when type_of left = N.Scalar N.U32 -> "le_u"
+          | N.Gt, _ when type_of left = N.Scalar N.U32 -> "gt_u"
+          | N.Ge, _ when type_of left = N.Scalar N.U32 -> "ge_u"
           | N.Lt, _ -> "lt_s" | N.Le, _ -> "le_s" | N.Gt, _ -> "gt_s" | N.Ge, _ -> "ge_s"
         in
         emit_in_order [ left; right ] @ [ Operation (prefix ^ name) ]

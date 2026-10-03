@@ -29,8 +29,9 @@ type operation =
   | Min_i32 of { dst : vector_register; left : vector_register; right : vector_register }
   | Max_i32 of { dst : vector_register; left : vector_register; right : vector_register }
   | Neg_i32 of { dst : vector_register; source : vector_register }
+  | Abs_i32 of { dst : vector_register; source : vector_register }
   | Shift_i32 of { dst : vector_register; source : vector_register; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift }
-  | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; left : vector_register; right : vector_register }
+  | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; unsigned : bool; left : vector_register; right : vector_register }
   | Fmul of { dst : vector_register; left : vector_register; right : vector_register }
   | Fdiv of { dst : vector_register; left : vector_register; right : vector_register }
   | Fmin of { dst : vector_register; left : vector_register; right : vector_register }
@@ -49,6 +50,7 @@ type operation =
       right : vector_register;
     }
   | And of { dst : vector_register; left : vector_register; right : vector_register }
+  | Bic of { dst : vector_register; left : vector_register; right : vector_register }
   | Orr of { dst : vector_register; left : vector_register; right : vector_register }
   | Eor of { dst : vector_register; left : vector_register; right : vector_register }
   | Mvn of { dst : vector_register; source : vector_register }
@@ -290,10 +292,11 @@ let allocate_function ?parameter_assignment func =
               | M.Min_i32 { left; right; _ } -> emit loc provenance (Min_i32 { dst; left = p left; right = p right })
               | M.Max_i32 { left; right; _ } -> emit loc provenance (Max_i32 { dst; left = p left; right = p right })
               | M.Neg_i32 { source; _ } -> emit loc provenance (Neg_i32 { dst; source = p source })
+              | M.Abs_i32 { source; _ } -> emit loc provenance (Abs_i32 { dst; source = p source })
               | M.Shift_i32 { source; count; shift; _ } ->
                   emit loc provenance (Shift_i32 { dst; source = p source; count; shift })
-              | M.Compare_i32 { predicate; left; right; _ } ->
-                  emit loc provenance (Compare_i32 { dst; predicate; left = p left; right = p right })
+              | M.Compare_i32 { predicate; unsigned; left; right; _ } ->
+                  emit loc provenance (Compare_i32 { dst; predicate; unsigned; left = p left; right = p right })
               | M.Fmul { left; right; _ } -> emit loc provenance (Fmul { dst; left = p left; right = p right })
               | M.Fdiv { left; right; _ } -> emit loc provenance (Fdiv { dst; left = p left; right = p right })
               | M.Fmin { left; right; _ } -> emit loc provenance (Fmin { dst; left = p left; right = p right })
@@ -310,6 +313,7 @@ let allocate_function ?parameter_assignment func =
                   emit loc provenance
                     (Compare { dst; predicate; left = p left; right = p right })
               | M.And { left; right; _ } -> emit loc provenance (And { dst; left = p left; right = p right })
+              | M.Bic { left; right; _ } -> emit loc provenance (Bic { dst; left = p left; right = p right })
               | M.Orr { left; right; _ } -> emit loc provenance (Orr { dst; left = p left; right = p right })
               | M.Eor { left; right; _ } -> emit loc provenance (Eor { dst; left = p left; right = p right })
               | M.Mvn { source; _ } -> emit loc provenance (Mvn { dst; source = p source })

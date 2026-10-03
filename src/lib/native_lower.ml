@@ -41,7 +41,7 @@ type state = {
 }
 
 let element_bytes = function
-  | Ir.U8 -> 1 | Ir.I16 -> 2 | Ir.I32 | Ir.F32 -> 4 | Ir.I64 | Ir.F64 -> 8 | Ir.I1 -> 16
+  | Ir.U8 -> 1 | Ir.I16 -> 2 | Ir.I32 | Ir.U32 | Ir.F32 -> 4 | Ir.I64 | Ir.F64 -> 8 | Ir.I1 -> 16
 
 let ir_typ_of_annotation typ =
   match typ.v with
@@ -49,9 +49,10 @@ let ir_typ_of_annotation typ =
   | TScalar PFloat -> Ok (Ir.Scalar Ir.F32)
   | TRack PUint8 -> Ok (Ir.Rack Ir.U8)
   | TRack PInt16 -> Ok (Ir.Rack Ir.I16)
-  | TRack (PInt | PUint) -> Ok (Ir.Rack Ir.I32)
+  | TRack PInt -> Ok (Ir.Rack Ir.I32)
+  | TRack PUint -> Ok (Ir.Rack Ir.U32)
   | TRack (PInt64 | PUint64) -> Ok (Ir.Rack Ir.I64)
-  | TScalar PUint -> Ok (Ir.Scalar Ir.I32)
+  | TScalar PUint -> Ok (Ir.Scalar Ir.U32)
   | TScalar PInt -> Ok (Ir.Scalar Ir.I32)
   | TScalar PInt16 -> Ok (Ir.Scalar Ir.I16)
   | TScalar PUint8 -> Ok (Ir.Scalar Ir.U8)
@@ -63,7 +64,7 @@ let ir_typ_of_annotation typ =
         "only f32, u8, i16, i32, u32, i64 and u64 rack, f32 and u32 scalar, and mask annotations are supported by native scratch lowering"
 
 (** Racks a native scratch takes and returns. *)
-let native_racks = [ Ir.Rack Ir.F32; Ir.Rack Ir.U8; Ir.Rack Ir.I16; Ir.Rack Ir.I32; Ir.Rack Ir.I64 ]
+let native_racks = [ Ir.Rack Ir.F32; Ir.Rack Ir.U8; Ir.Rack Ir.I16; Ir.Rack Ir.I32; Ir.Rack Ir.U32; Ir.Rack Ir.I64 ]
 
 let is_integer_rack = function Ir.Rack (Ir.I16 | Ir.I32) -> true | _ -> false
 
@@ -71,15 +72,16 @@ let is_integer_rack = function Ir.Rack (Ir.I16 | Ir.I32) -> true | _ -> false
 let lane_bits = function
   | Ir.Rack Ir.U8 -> Some 8
   | Ir.Rack Ir.I16 -> Some 16
-  | Ir.Rack Ir.I32 -> Some 32
+  | Ir.Rack (Ir.I32 | Ir.U32) -> Some 32
   | Ir.Rack Ir.I64 -> Some 64
   | _ -> None
 
-(** A splat of an integer literal, in the element of the integer rack it meets. *)
+(** A splat preserves the integer rack's signedness and checks its lane range. *)
 let integer_splat loc typ value =
   match typ with
   | Ir.Rack Ir.I16 when value >= -32768L && value <= 32767L -> Ok (Ir.Rack_splat (Ir.Int16 (Int64.to_int value)))
   | Ir.Rack Ir.I32 when value >= -2147483648L && value <= 2147483647L -> Ok (Ir.Rack_splat (Ir.Int32 (Int64.to_int32 value)))
+  | Ir.Rack Ir.U32 when value >= 0L && value <= 4294967295L -> Ok (Ir.Rack_splat (Ir.Uint32 (Int64.to_int32 value)))
   | _ -> errorf loc "integer literal %Ld does not fit a lane of %s" value (Ir.string_of_typ typ)
 
 (** An integer literal, written bare or as a uniform <n>. *)
@@ -193,7 +195,7 @@ let ir_scan = function
   | Ast.RAnd | Ast.ROr -> None
 
 (** Integer elements of racks that integer arithmetic and comparison take. *)
-let is_integer_element = function Ir.U8 | Ir.I16 | Ir.I32 | Ir.I64 -> true | _ -> false
+let is_integer_element = function Ir.U8 | Ir.I16 | Ir.I32 | Ir.U32 | Ir.I64 -> true | _ -> false
 
 (** A literal typed by the rack it meets: an integer splat in the rack's
     element, or an f32 constant for an f32 rack. *)
@@ -203,7 +205,7 @@ let typed_literal state loc provenance typ value =
   | Ir.Rack Ir.U8 when value >= 0L && value <= 255L ->
       Ok (emit state loc provenance typ (Ir.Rack_splat (Ir.Uint8 (Int64.to_int value))))
   | Ir.Rack Ir.I64 -> Ok (emit state loc provenance typ (Ir.Rack_splat (Ir.Int64 value)))
-  | Ir.Rack (Ir.I16 | Ir.I32) -> (
+  | Ir.Rack (Ir.I16 | Ir.I32 | Ir.U32) -> (
       match integer_splat loc typ value with
       | Ok splat -> Ok (emit state loc provenance typ splat)
       | Error _ as failure -> failure)
@@ -508,7 +510,7 @@ let rec lower_expr state provenance (expr : expr) =
       else
         let* operand = lower_expr state provenance operand in
         let* () = expect_type expr.loc "bitmask" Ir.Mask operand in
-        Ok (emit state expr.loc provenance (Ir.Scalar Ir.I32) (Ir.Reduce (Ir.Reduce_bitmask, fst operand)))
+        Ok (emit state expr.loc provenance (Ir.Scalar Ir.U32) (Ir.Reduce (Ir.Reduce_bitmask, fst operand)))
   | ECall (("min" | "max") as name, [ a; b ]) ->
       (* i16, i32 and f32 racks; an integer literal becomes a splat of the integer rack beside it. *)
       let literal_first = integer_literal a <> None in
@@ -577,7 +579,9 @@ let rec lower_expr state provenance (expr : expr) =
                      Ok (fst count)
                | None, (EScalarVar scalar | EBroadcast { v = EScalarVar scalar; _ }) ->
                    let* found = find_binding state count.loc scalar in
-                   let* () = expect_type count.loc name (Ir.Scalar Ir.I32) found in
+                   let* () = match snd found with
+                     | Ir.Scalar (Ir.I32 | Ir.U32) -> Ok ()
+                     | _ -> error count.loc "a shift count requires an i32 or u32 uniform" in
                    Ok (fst found)
                | None, _ -> errorf count.loc "%s takes its count as an integer literal or a uniform u32" name
              in
@@ -704,6 +708,7 @@ and lower_scalar state (expr : expr) typ =
         | Ir.U8 -> Ir.Uint8 (Int64.to_int value)
         | Ir.I16 -> Ir.Int16 (Int64.to_int value)
         | Ir.I64 -> Ir.Int64 value
+        | Ir.U32 -> Ir.Uint32 (Int64.to_int32 value)
         | _ -> Ir.Int32 (Int64.to_int32 value)
       in
       Ok (emit state expr.loc Ir.source typ (Ir.Const literal))
@@ -929,7 +934,7 @@ let add_parameter state function_loc index = function
         | None -> Ok (Ir.Scalar Ir.F32)
         | Some typ ->
             let* typ = ir_typ_of_annotation typ in
-            if List.mem typ Ir.[ Scalar F32; Scalar I32; Scalar I16; Scalar U8; Scalar I64; Scalar I1 ] then Ok typ
+            if List.mem typ Ir.[ Scalar F32; Scalar I32; Scalar U32; Scalar I16; Scalar U8; Scalar I64; Scalar I1 ] then Ok typ
             else error function_loc "native scalar scratch parameters must be f32 or u32"
       in
       let parameter = { Ir.id = index; typ; name = Some name } in
@@ -969,7 +974,7 @@ let lower_scratch ~profile definition_loc name parameters result body =
     | None -> Ok ()
     | Some annotation ->
         let* typ = ir_typ_of_annotation annotation in
-        if List.mem typ (native_racks @ Ir.[ Scalar F32; Scalar I32; Mask; Scalar I1; Scalar I16; Scalar U8; Scalar I64 ]) then Ok ()
+        if List.mem typ (native_racks @ Ir.[ Scalar F32; Scalar I32; Scalar U32; Mask; Scalar I1; Scalar I16; Scalar U8; Scalar I64 ]) then Ok ()
         else error annotation.loc "native scratch results must be an f32, u8, i16 or i32 rack, or an f32 or u32 scalar"
   in
   let rec lower_body active_fused = function

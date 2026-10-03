@@ -62,6 +62,7 @@ test/program/slow_tier.rk	program	wasm-simd128	4	program	differential	-
 test/program/const_pointers.rk	program	wasm-simd128	4	program	differential	-
 test/program/trap/addr_bounds.rk	trap	wasm-simd128	4	program	trap	-
 test/program/vector_tier.rk	program	wasm-simd128	4	program	differential	-
+test/program/unsigned_comparisons.rk	program	wasm-simd128	4	program	differential	-
 test/program/frames.rk	program	wasm-simd128	4	program	differential	-
 test/abi/interop.rk	abi	wasm-simd128	4	program	c-interop	-
 test/abi/native_slow.rk	abi	x86-sse2	4	program	native-c-interop	-

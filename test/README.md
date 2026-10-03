@@ -123,24 +123,41 @@ operands, an extracted scalar, untaken roots and division, and conditions
 nested inside a through mask check the composed participation contract.
 
 `test/native_integer_rack_test.sh` compares 32-bit wrapping add/subtract/multiply,
-signed negation and extrema, literal bit shifts, bitwise AND/OR/XOR and all six signed comparisons with
-independent scalar C on the four physical profiles. The oracle uses unsigned
+signed negation, absolute value and extrema, literal bit shifts, bitwise
+AND/OR/XOR/AND-NOT and all six signed and unsigned comparisons with independent scalar C
+on the four physical profiles. The oracle uses unsigned
 arithmetic for exact overflow bits and reinterprets signed predicates
 separately. It checks literal
 broadcasts, mask bitsets, integer/float selection through the vector C ABI,
 through/gaps coverage and still-live inputs in fused expressions. Negation
 checks include the minimum signed value, retained input racks and both arms
-of a lane-masked conditional. Multiplication checks all lanes against unsigned
+of a lane-masked conditional. Absolute value uses widened 64-bit C arithmetic
+before converting back to lane bits, including the wrapping minimum value,
+still-live input racks, reused intermediates, nested calls and lane masks.
+Unsigned comparison checks cover the boundary at bit 31, literals on either
+side, equal operands, all/any reductions, global tines and gap inversion.
+Hand-specified interpreter masks cover all six predicates at each CPU width.
+`test/program/unsigned_comparisons.rk` checks unsigned rack selection and
+uniform broadcasts against explicit values in both the interpreter and
+compiled WebAssembly.
+AND-NOT checks operand order, equal inputs, full-width unsigned literals
+and destructive register reuse. Multiplication checks all lanes against unsigned
 C products, including overflow, shared operands and still-live inputs that
 force destructive register reuse on SSE2. Signed extrema checks cover boundary
 values, aliased operands, nested clamps, lane masks and retained inputs.
 Bit-shift checks cover every literal count from 0 to 31 on signed and unsigned
 racks. Unsigned scalar bit operations independently compute sign extension,
 and composition checks preserve live inputs across shifts and lane masks.
+Static integer shuffles compare every output lane with independent C index
+arithmetic for reverse, rotation, repeated, identity, interleaved and mixed
+selections. Both signed and unsigned racks cross the vector C ABI. Fused
+expressions preserve both input racks, and aliased arguments check destructive
+register reuse. Hand-specified interpreter cases cover signed boundary bits
+and cross-register subdivisions at four, eight and sixteen lanes.
 Independently assembled machine objects check
 rejection of narrowed integer vectors, scalar arithmetic
 and memory work inside a register kernel. SSE2 also rejects direct SSE4.1
-extrema instructions. Shift fixtures reject runtime counts and out-of-range
+extrema and SSSE3 absolute-value instructions. Shift fixtures reject runtime counts and out-of-range
 immediates as well as narrowed and scalar instructions.
 
 The shared absolute-value oracle supplies explicit binary32 input and output

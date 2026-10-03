@@ -66,6 +66,8 @@ let trace_of_interpreter (trace : Tier_interp.trace) =
         ("i16", Array.to_list (Array.map string_of_int values))
     | I32_rack values ->
         ("i32", Array.to_list (Array.map string_of_int values))
+    | U32_rack values ->
+        ("u32", Array.to_list (Array.map Int64.to_string values))
     | I64_rack values ->
         ("i64", Array.to_list (Array.map Int64.to_string values))
     | F32_scalar value -> ("f32", [ float_text value ])

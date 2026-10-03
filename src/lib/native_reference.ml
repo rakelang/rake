@@ -14,11 +14,12 @@ type value =
   | U32_scalar of int      (** 0 to 2^32 - 1, e.g. a bitmask result *)
   | I16_rack of int array  (** lanes -32768 to 32767; two per f32 lane *)
   | I32_rack of int array  (** lanes -2^31 to 2^31 - 1; one per f32 lane *)
+  | U32_rack of int64 array  (** lanes 0 to 2^32 - 1, independent of the host int width *)
   | I64_rack of int64 array  (** 64-bit two's complement lanes; one per two f32 lanes *)
   | Int_scalar of Types.scalar * int64  (** a uniform integer or bool, normalised to its type *)
 
 type value_kind =
-  | Scalar | Rack | Mask_kind | U8_rack_kind | U32_scalar_kind | I16_rack_kind | I32_rack_kind | I64_rack_kind
+  | Scalar | Rack | Mask_kind | U8_rack_kind | U32_scalar_kind | I16_rack_kind | I32_rack_kind | U32_rack_kind | I64_rack_kind
   | Int_scalar_kind
 
 type error_kind =
@@ -53,6 +54,7 @@ let value_kind = function
   | U32_scalar _ -> U32_scalar_kind
   | I16_rack _ -> I16_rack_kind
   | I32_rack _ -> I32_rack_kind
+  | U32_rack _ -> U32_rack_kind
   | I64_rack _ -> I64_rack_kind
   | Int_scalar _ -> Int_scalar_kind
 
@@ -64,6 +66,7 @@ let string_of_value_kind = function
   | U32_scalar_kind -> "u32 scalar"
   | I16_rack_kind -> "i16 rack"
   | I32_rack_kind -> "i32 rack"
+  | U32_rack_kind -> "u32 rack"
   | I64_rack_kind -> "i64 rack"
   | Int_scalar_kind -> "uniform integer"
 
@@ -131,6 +134,10 @@ let validate_width loc lanes = function
       let actual = Array.length xs in
       if actual = lanes then Ok value
       else error loc (Lane_count_mismatch { expected = lanes; actual })
+  | U32_rack xs as value ->
+      let actual = Array.length xs in
+      if actual = lanes then Ok value
+      else error loc (Lane_count_mismatch { expected = lanes; actual })
   | I64_rack xs as value ->
       let actual = Array.length xs in
       if 2 * actual = lanes then Ok value
@@ -139,6 +146,7 @@ let validate_width loc lanes = function
 (** Two's-complement wrapping to 16 and 32 bits. *)
 let wrap16 x = ((x + 0x8000) land 0xffff) - 0x8000
 let wrap32 x = Int32.to_int (Int32.of_int x)
+let wrap_u32 x = Int64.logand x 0xffffffffL
 let saturate low high x = if x < low then low else if x > high then high else x
 
 (** Rounds a binary32 value to the nearest integer, ties to even, saturated to
@@ -165,6 +173,7 @@ let normalize_value = function
   | U32_scalar x -> U32_scalar (Int64.to_int (Int64.logand (Int64.of_int x) 0xffffffffL))
   | I16_rack xs -> I16_rack (Array.map wrap16 xs)
   | I32_rack xs -> I32_rack (Array.map wrap32 xs)
+  | U32_rack xs -> U32_rack (Array.map wrap_u32 xs)
   | I64_rack xs -> I64_rack (Array.copy xs)
   | Int_scalar (s, v) -> Int_scalar (s, v)
 
@@ -180,7 +189,7 @@ let as_rack loc lanes operation = function
   | F32_rack xs ->
       let* value = validate_width loc lanes (F32_rack xs) in
       (match value with F32_rack ys -> Ok ys | _ -> assert false)
-  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _ | Int_scalar _) as value ->
+  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | U32_rack _ | I64_rack _ | Int_scalar _) as value ->
       error loc
         (Operand_kind_mismatch {
            operation;
@@ -194,7 +203,7 @@ let unary_f32 loc lanes operation f value =
   | F32_rack xs ->
       let* xs = as_rack loc lanes operation (F32_rack xs) in
       Ok (F32_rack (Array.map (fun x -> f32 (f x)) xs))
-  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _ | Int_scalar _) as value ->
+  | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | U32_rack _ | I64_rack _ | Int_scalar _) as value ->
       error loc
         (Operand_kind_mismatch {
            operation;
@@ -375,6 +384,8 @@ let compare_u8 loc operation predicate left right =
 let shuffle_racks loc racks indices =
   let concatenated_f32 = List.filter_map (function F32_rack xs -> Some xs | _ -> None) racks in
   let concatenated_u8 = List.filter_map (function U8_rack xs -> Some xs | _ -> None) racks in
+  let concatenated_i32 = List.filter_map (function I32_rack xs -> Some xs | _ -> None) racks in
+  let concatenated_u32 = List.filter_map (function U32_rack xs -> Some xs | _ -> None) racks in
   let pick source lanes make =
     if List.length indices <> lanes then
       error loc (Lane_count_mismatch { expected = lanes; actual = List.length indices })
@@ -390,6 +401,12 @@ let shuffle_racks loc racks indices =
   | first :: _ when List.length concatenated_u8 = List.length racks ->
       let lanes = match first with U8_rack xs -> Array.length xs | _ -> 0 in
       pick (Array.concat concatenated_u8) lanes (fun xs -> U8_rack xs)
+  | first :: _ when List.length concatenated_i32 = List.length racks ->
+      let lanes = match first with I32_rack xs -> Array.length xs | _ -> 0 in
+      pick (Array.concat concatenated_i32) lanes (fun xs -> I32_rack xs)
+  | first :: _ when List.length concatenated_u32 = List.length racks ->
+      let lanes = match first with U32_rack xs -> Array.length xs | _ -> 0 in
+      pick (Array.concat concatenated_u32) lanes (fun xs -> U32_rack xs)
   | first :: _ ->
       error loc
         (Operand_kind_mismatch { operation = "shuffle"; left = value_kind first; right = None })
@@ -409,6 +426,7 @@ let int_lanes = function
   | U8_rack xs -> Some (Types.SUint8, Array.map Int64.of_int xs)
   | I16_rack xs -> Some (Types.SInt16, Array.map Int64.of_int xs)
   | I32_rack xs -> Some (Types.SInt, Array.map Int64.of_int xs)
+  | U32_rack xs -> Some (Types.SUint, Array.map wrap_u32 xs)
   | I64_rack xs -> Some (Types.SInt64, Array.copy xs)
   | _ -> None
 
@@ -416,13 +434,15 @@ let int_rack element xs =
   match element with
   | Types.SUint8 | SInt8 -> U8_rack (Array.map (fun x -> Int64.to_int x land 0xff) xs)
   | SInt16 | SUint16 -> I16_rack (Array.map (fun x -> wrap16 (Int64.to_int (Int64.logand x 0xffffL))) xs)
-  | SInt | SUint -> I32_rack (Array.map (fun x -> wrap32 (Int64.to_int (Int64.logand x 0xffffffffL))) xs)
+  | SUint -> U32_rack (Array.map wrap_u32 xs)
+  | SInt -> I32_rack (Array.map (fun x -> wrap32 (Int64.to_int (Int64.logand x 0xffffffffL))) xs)
   | _ -> I64_rack xs
 
 let element_lanes = function
   | Types.SUint8 | SInt8 -> 16 | SInt16 | SUint16 -> 8 | SInt64 | SUint64 | SDouble -> 2 | _ -> 4
 
-let splat_int element value = int_rack element (Array.make (element_lanes element) value)
+let splat_int ?(lanes = 4) element value =
+  int_rack element (Array.make (lanes * element_lanes element / 4) value)
 
 (** A normalised uniform integer of type [s]. *)
 let int_scalar s value =
@@ -479,13 +499,13 @@ let typed_literal_value other value =
   | F32_rack xs -> Some (F32_rack (Array.make (Array.length xs) (f32 (Int64.to_float value))))
   | F32_scalar _ -> Some (F32_scalar (f32 (Int64.to_float value)))
   | Int_scalar (s, _) -> Some (int_scalar s value)
-  | other -> (match int_lanes other with Some (element, _) -> Some (splat_int element value) | None -> None)
+  | other -> (match int_lanes other with Some (element, xs) -> Some (int_rack element (Array.make (Array.length xs) value)) | None -> None)
 
 (** A uniform integer broadcast to the integer rack beside it. *)
 let broadcast_to other value =
   match (value, int_lanes other) with
-  | Int_scalar (_, v), Some (element, _) -> splat_int element v
-  | U32_scalar v, Some (element, _) -> splat_int element (Int64.of_int v)
+  | Int_scalar (_, v), Some (element, xs) -> int_rack element (Array.make (Array.length xs) v)
+  | U32_scalar v, Some (element, xs) -> int_rack element (Array.make (Array.length xs) (Int64.of_int v))
   | _ -> value
 
 let round_half_even x =
@@ -504,7 +524,7 @@ let rec eval_expr ~lanes env (expr : expr) =
   if lanes <= 0 then error expr.loc (Invalid_lane_count lanes)
   else
     match expr.v with
-    | EInt value | EBroadcast { v = EInt value; _ } -> Ok (splat_int Types.SInt value)
+    | EInt value | EBroadcast { v = EInt value; _ } -> Ok (int_rack Types.SInt (Array.make lanes value))
     | EScalarVar name when (match List.assoc_opt name env with Some (Int_scalar _ | U32_scalar _) -> true | _ -> false) ->
         Ok (List.assoc name env)
     | EBroadcast { v = EScalarVar name; _ } when (match List.assoc_opt name env with Some (Int_scalar _ | U32_scalar _) -> true | _ -> false) ->
@@ -648,8 +668,8 @@ let rec eval_expr ~lanes env (expr : expr) =
             (fun parameter value ->
               match (parameter, value) with
               | PRack (_, Some { v = TRack p; _ }), F32_scalar x when Types.of_prim p = Types.SFloat -> F32_rack (Array.make lanes x)
-              | PRack (_, Some { v = TRack p; _ }), Int_scalar (_, x) -> splat_int (Types.of_prim p) x
-              | PRack (_, Some { v = TRack p; _ }), U32_scalar x -> splat_int (Types.of_prim p) (Int64.of_int x)
+              | PRack (_, Some { v = TRack p; _ }), Int_scalar (_, x) -> splat_int ~lanes (Types.of_prim p) x
+              | PRack (_, Some { v = TRack p; _ }), U32_scalar x -> splat_int ~lanes (Types.of_prim p) (Int64.of_int x)
               (* A marked uniform evaluates as a splat here; a scalar parameter takes one lane. *)
               | PScalar _, F32_rack xs when Array.length xs > 0 -> F32_scalar xs.(0)
               | PScalar _, value when (match int_lanes value with Some (_, xs) -> Array.length xs > 0 | None -> false) ->
@@ -665,7 +685,7 @@ let rec eval_expr ~lanes env (expr : expr) =
     | EVar name ->
         let* value = lookup expr.loc lanes env name in
         (match value with
-         | F32_rack _ | Mask _ | U8_rack _ | I16_rack _ | I32_rack _ | I64_rack _ -> Ok value
+         | F32_rack _ | Mask _ | U8_rack _ | I16_rack _ | I32_rack _ | U32_rack _ | I64_rack _ -> Ok value
          | U32_scalar _ | Int_scalar _ ->
              error expr.loc
                (Expected_variable_kind {
@@ -696,7 +716,7 @@ let rec eval_expr ~lanes env (expr : expr) =
         (match value with
          | F32_scalar value -> Ok (splat lanes value)
          | F32_rack _ as value -> Ok value
-         | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | I64_rack _ | Int_scalar _) as value ->
+         | (Mask _ | U8_rack _ | U32_scalar _ | I16_rack _ | I32_rack _ | U32_rack _ | I64_rack _ | Int_scalar _) as value ->
              error expr.loc
                (Operand_kind_mismatch {
                   operation = "broadcast";
@@ -777,6 +797,7 @@ let rec eval_expr ~lanes env (expr : expr) =
          | U8_rack xs, U8_rack ys when same xs ys -> Ok (U8_rack (Array.map2 (fun x y -> f x y land 0xff) xs ys))
          | I16_rack xs, I16_rack ys when same xs ys -> Ok (I16_rack (Array.map2 (fun x y -> wrap16 (f x y)) xs ys))
          | I32_rack xs, I32_rack ys when same xs ys -> Ok (I32_rack (Array.map2 (fun x y -> wrap32 (f x y)) xs ys))
+         | U32_rack xs, U32_rack ys when same xs ys -> Ok (U32_rack (Array.map2 (fun x y -> wrap_u32 (f64 x y)) xs ys))
          | I64_rack xs, I64_rack ys when same xs ys -> Ok (I64_rack (Array.map2 f64 xs ys))
          | _ -> error expr.loc (Operand_kind_mismatch { operation = name; left = value_kind a; right = Some (value_kind b) }))
     | ECall (("shift_bits_left" | "shift_bits_right" | "shift_bits_right_signed") as name, [ x; count ]) ->
@@ -816,7 +837,16 @@ let rec eval_expr ~lanes env (expr : expr) =
                | "shift_bits_right" -> Int32.shift_right_logical
                | _ -> Int32.shift_right
              in
-             Ok (I32_rack (Array.map (fun x -> Int32.to_int (operation (Int32.of_int x) (count land 31))) xs))
+             let shifted = Array.map (fun x -> Int32.to_int (operation (Int32.of_int x) (count land 31))) xs in
+             Ok (I32_rack shifted)
+         | U32_rack xs ->
+             let operation = match name with
+               | "shift_bits_left" -> Int32.shift_left
+               | "shift_bits_right" -> Int32.shift_right_logical
+               | _ -> Int32.shift_right in
+             Ok (U32_rack (Array.map (fun value ->
+               operation (Int64.to_int32 value) (count land 31)
+               |> Int64.of_int32 |> wrap_u32) xs))
          | I64_rack xs ->
              let c = count land 63 in
              Ok (I64_rack (Array.map (fun x ->
@@ -1004,7 +1034,7 @@ and is_integer_operation ~lanes env left_expr right_expr =
 let bind_parameter ~lanes env parameter argument loc =
   let* argument = validate_width loc lanes (normalize_value argument) in
   match (parameter, argument) with
-  | PRack (name, _), (F32_rack _ | Mask _ | U8_rack _ | I16_rack _ | I32_rack _ | I64_rack _) -> Ok ((name, argument) :: env)
+  | PRack (name, _), (F32_rack _ | Mask _ | U8_rack _ | I16_rack _ | I32_rack _ | U32_rack _ | I64_rack _) -> Ok ((name, argument) :: env)
   | PRack (name, _), (U32_scalar _ | Int_scalar _) ->
       error loc
         (Expected_variable_kind {
@@ -1122,6 +1152,7 @@ let project_value lane = function
   | U8_rack values -> U8_rack [| values.(lane) |]
   | I16_rack values -> I16_rack [| values.(lane) |]
   | I32_rack values -> I32_rack [| values.(lane) |]
+  | U32_rack values -> U32_rack [| values.(lane) |]
   | I64_rack values -> I64_rack [| values.(lane / 2) |]
 
 let project_env lane env =

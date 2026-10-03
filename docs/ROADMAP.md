@@ -129,8 +129,8 @@ conditions remain work in progress on the physical profiles.
 
 We will bring the physical profiles up to the language's published operation
 set. The development compiler now supports 32-bit integer wrapping add/subtract/multiply
-and bitwise AND/OR/XOR on all four physical profiles, along with signed
-negation and lane-wise `min` and `max`. Signed `i32s` comparisons produce
+and bitwise AND/OR/XOR/AND-NOT on all four physical profiles, along with signed
+negation, absolute value and lane-wise `min` and `max`. Both `i32s` and `u32s` comparisons produce
 masks for integer or float selection and mask reductions.
 Independent C checks exact overflow bits, signed boundary values and still-live
 inputs across the vector ABI, including masked negation of the minimum signed
@@ -142,10 +142,28 @@ inputs. SSE2 uses packed comparison and selection, while the other physical
 profiles use direct vector extrema instructions. Literal bit shifts also
 compile on all four profiles. Independent C checks every count from 0 to 31,
 including sign extension, masked branches and retained input racks.
+AND-NOT uses a direct packed instruction on each profile. The independent
+bit oracle checks operand order, equal operands, literal masks and reuse of
+still-live inputs, including masked selection.
+Signed absolute value uses a packed sign/XOR/subtract sequence on SSE2,
+with one allocated temporary register, and direct full-width instructions
+on AVX2, AVX-512F and NEON. The independent C oracle widens to 64 bits
+before negating, then checks the wrapping lane bits, including −2³¹,
+retained inputs, nested calls and masked selection.
+Static `i32s` and `u32s` shuffles now reuse the float shuffle's bit-preserving
+lane transfers on all four physical profiles. Independent C checks single-
+and two-rack permutations across the whole register, including repeated
+lanes, equal input racks and fused expressions that retain both inputs.
+The interpreter checks the same 32-bit lane selection at each CPU width.
+Unsigned 32-bit comparisons now compile on all four physical profiles and
+WebAssembly. The unsigned IR and interpreter preserve ordering across bit 31.
+Independent C checks all six predicates, literal order, mask reductions,
+global tines and gaps, and still-live inputs. WebAssembly also checks unsigned
+uniform broadcasts against hand-specified boundary values.
 Runtime shift counts, other integer operations and native integer streams
 remain work in progress.
 
-The next work covers substantial maths, the remaining integer operations, integer shuffles,
+The next work covers substantial maths, the remaining integer operations, other integer shuffle widths,
 integer extraction and insertion, the remaining uniform conditionals and
 gather. A CPU profile
 will gain an operation only when its compiled result matches the interpreter
@@ -155,7 +173,7 @@ and its object verifier proves the selected vector sequence.
 
 We will fill the gaps shared by every profile. These include lane movement,
 transcendental functions, float remainder, `f64s`, the remaining integer and
-boolean rack types, unsigned comparisons and extrema, integer reductions,
+boolean rack types, other unsigned comparison widths and extrema, integer reductions,
 widening conversions, scalar arithmetic over rack results, scatter,
 compression and expansion.
 

@@ -773,7 +773,8 @@ let rec initializer_ ?(raw_array_field = false) u (e : expr) =
 
 let ir_element = function
   | Types.SFloat -> Native_ir.F32
-  | SInt | SUint -> Native_ir.I32
+  | SInt -> Native_ir.I32
+  | SUint -> Native_ir.U32
   | SInt16 | SUint16 -> Native_ir.I16
   | SInt8 | SUint8 -> Native_ir.U8
   | SInt64 | SUint64 -> Native_ir.I64

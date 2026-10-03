@@ -18,7 +18,7 @@ type operation =
       lane : M.f32_lane;
       broadcast : vector_register;
     }
-  | Shuffle_f32 of {
+  | Shuffle_word of {
       dst : vector_register;
       racks : vector_register list;
       indices : int list;
@@ -53,6 +53,7 @@ type operation =
       scratch : vector_register list;
     }
   | Neg_i32 of { dst : vector_register; source : vector_register }
+  | Abs_i32 of { dst : vector_register; source : vector_register; sign : vector_register option }
   | Shift_i32 of { dst : vector_register; source : vector_register; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift }
   | Extreme_i32 of {
       dst : vector_register;
@@ -61,7 +62,7 @@ type operation =
       operation : M.extremum;
       scratch : vector_register list;
     }
-  | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; left : vector_register; right : vector_register }
+  | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; unsigned : bool; left : vector_register; right : vector_register; scratch : vector_register list }
   | Mulps of { dst : vector_register; left : vector_register; right : vector_register }
   | Divps of { dst : vector_register; left : vector_register; right : vector_register }
   | Extreme_f32 of {
@@ -91,6 +92,7 @@ type operation =
     }
   | Blendvps of { dst : vector_register; mask : vector_register; if_true : vector_register; if_false : vector_register }
   | Mask_andps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Mask_andnotps of { dst : vector_register; left : vector_register; right : vector_register }
   | Mask_orps of { dst : vector_register; left : vector_register; right : vector_register }
   | Mask_xorps of { dst : vector_register; left : vector_register; right : vector_register }
   | Mask_notps of { dst : vector_register; source : vector_register }
@@ -296,8 +298,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
             | M.Broadcastss { source; _ } -> [ source ]
             | M.Insert_f32 { previous; _ } -> [ previous ]
             (* Two permutations still need both original racks. *)
-            | M.Shuffle_f32 { racks = [ source ]; _ } -> [ source ]
-            | M.Shuffle_f32 _ -> []
+            | M.Shuffle_word { racks = [ source ]; _ } -> [ source ]
+            | M.Shuffle_word _ -> []
             | M.Reduce_f32 _ | M.Scan_f32 _ -> []
             (* SSE2's final merge still needs the original input. *)
             | M.Round_f32 _ when profile = Target.X86_sse2 -> []
@@ -316,11 +318,14 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               let p = physical in
               let scratch_count =
                 match instruction with
+                | M.Compare_i32 { unsigned = true; predicate = (Native_ir.Lt | Native_ir.Le | Native_ir.Gt | Native_ir.Ge); _ }
+                    when profile <> Target.X86_avx512 -> 2
                 | M.Insert_f32 _ -> 1
                 | M.Reduce_mask _ -> 1
                 | M.Mul_i32 _ when profile = Target.X86_sse2 -> 2
                 | M.Extreme_i32 _ when profile = Target.X86_sse2 -> 1
-                | M.Shuffle_f32 { racks; _ } ->
+                | M.Abs_i32 _ when profile = Target.X86_sse2 -> 1
+                | M.Shuffle_word { racks; _ } ->
                     (if profile = Target.X86_sse2 then 0 else 1)
                     + (if List.length racks = 2 then 1 else 0)
                 | M.Cmpps { predicate = M.Ole; _ } when profile = Target.X86_sse2 -> 1
@@ -364,8 +369,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                   emit loc provenance (Extract_f32 { dst; source = p source; lane })
               | M.Insert_f32 { previous; inserted; lane; _ } ->
                   emit loc provenance (Insert_f32 { dst; previous = p previous; inserted = p inserted; lane; broadcast = List.hd scratch })
-              | M.Shuffle_f32 { racks; indices; _ } ->
-                  emit loc provenance (Shuffle_f32 { dst; racks = List.map p racks; indices; scratch })
+              | M.Shuffle_word { racks; indices; _ } ->
+                  emit loc provenance (Shuffle_word { dst; racks = List.map p racks; indices; scratch })
               | M.Reduce_mask { source; operation; _ } ->
                   emit loc provenance (Reduce_mask { dst; source = p source; operation; scratch = List.hd scratch })
               | M.Reduce_f32 { source; operation; _ } ->
@@ -382,10 +387,12 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               | M.Extreme_i32 { left; right; operation; _ } ->
                   emit loc provenance (Extreme_i32 { dst; left = p left; right = p right; operation; scratch })
               | M.Neg_i32 { source; _ } -> emit loc provenance (Neg_i32 { dst; source = p source })
+              | M.Abs_i32 { source; _ } ->
+                  emit loc provenance (Abs_i32 { dst; source = p source; sign = List.nth_opt scratch 0 })
               | M.Shift_i32 { source; count; shift; _ } ->
                   emit loc provenance (Shift_i32 { dst; source = p source; count; shift })
-              | M.Compare_i32 { predicate; left; right; _ } ->
-                  emit loc provenance (Compare_i32 { dst; predicate; left = p left; right = p right })
+              | M.Compare_i32 { predicate; unsigned; left; right; _ } ->
+                  emit loc provenance (Compare_i32 { dst; predicate; unsigned; left = p left; right = p right; scratch })
               | M.Mulps { left; right; _ } -> emit loc provenance (Mulps { dst; left = p left; right = p right })
               | M.Divps { left; right; _ } -> emit loc provenance (Divps { dst; left = p left; right = p right })
               | M.Extreme_f32 { left; right; operation; _ } ->
@@ -404,6 +411,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                     (Blendvps { dst; mask = p mask; if_true = p if_true; if_false = p if_false })
               | M.Mask_andps { left; right; _ } ->
                   emit loc provenance (Mask_andps { dst; left = p left; right = p right })
+              | M.Mask_andnotps { left; right; _ } ->
+                  emit loc provenance (Mask_andnotps { dst; left = p left; right = p right })
               | M.Mask_orps { left; right; _ } ->
                   emit loc provenance (Mask_orps { dst; left = p left; right = p right })
               | M.Mask_xorps { left; right; _ } ->

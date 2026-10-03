@@ -150,6 +150,8 @@ let intrinsic text =
       | "i16x8.lt_s" -> call 2 "wasm_i16x8_lt" | "i16x8.le_s" -> call 2 "wasm_i16x8_le"
       | "i16x8.gt_s" -> call 2 "wasm_i16x8_gt" | "i16x8.ge_s" -> call 2 "wasm_i16x8_ge"
       | "i32x4.eq" -> call 2 "wasm_i32x4_eq" | "i32x4.ne" -> call 2 "wasm_i32x4_ne"
+      | "i32x4.lt_u" -> call 2 "wasm_u32x4_lt" | "i32x4.le_u" -> call 2 "wasm_u32x4_le"
+      | "i32x4.gt_u" -> call 2 "wasm_u32x4_gt" | "i32x4.ge_u" -> call 2 "wasm_u32x4_ge"
       | "i32x4.lt_s" -> call 2 "wasm_i32x4_lt" | "i32x4.le_s" -> call 2 "wasm_i32x4_le"
       | "i32x4.gt_s" -> call 2 "wasm_i32x4_gt" | "i32x4.ge_s" -> call 2 "wasm_i32x4_ge"
       | "i64x2.eq" -> call 2 "wasm_i64x2_eq" | "i64x2.ne" -> call 2 "wasm_i64x2_ne"
@@ -162,6 +164,9 @@ let intrinsic text =
       | "v128.any_true" -> call 1 "wasm_v128_any_true"
       | "select" -> (3, fun args -> Printf.sprintf "(%s ? %s : %s)" (List.nth args 2) (List.nth args 0) (List.nth args 1))
       | "i32.or" -> (2, fun args -> Printf.sprintf "(%s | %s)" (List.nth args 0) (List.nth args 1))
+      | ("i32.lt_u" | "i32.le_u" | "i32.gt_u" | "i32.ge_u") as op ->
+          let operator = match op with "i32.lt_u" -> "<" | "i32.le_u" -> "<=" | "i32.gt_u" -> ">" | _ -> ">=" in
+          (2, fun args -> Printf.sprintf "((uint32_t)%s %s (uint32_t)%s)" (List.nth args 0) operator (List.nth args 1))
       | ("i32.eq" | "i32.ne" | "i32.lt_s" | "i32.le_s" | "i32.gt_s" | "i32.ge_s"
         | "i64.eq" | "i64.ne" | "i64.lt_s" | "i64.le_s" | "i64.gt_s" | "i64.ge_s"
         | "f32.eq" | "f32.ne" | "f32.lt" | "f32.le" | "f32.gt" | "f32.ge") as op ->

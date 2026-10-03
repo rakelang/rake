@@ -203,6 +203,61 @@ let expect_i32 expected = function
   | I32_rack actual when expected = Array.to_list actual -> ()
   | value -> failwith ("unexpected i32 rack, got " ^ string_of_value_kind (value_kind value))
 
+let test_signed_integer_absolute_value () =
+  let inputs = [| -2147483648; -2147483647; -1; 0 |] in
+  let expected = [| -2147483648; 2147483647; 1; 0 |] in
+  List.iter (fun lanes ->
+    let env = [ "x", I32_rack (Array.init lanes (fun lane -> inputs.(lane mod 4))) ] in
+    eval_expr ~lanes env (expression (ECall ("abs", [ var "x" ])))
+    |> get |> expect_i32 (List.init lanes (fun lane -> expected.(lane mod 4))))
+    [ 4; 8; 16 ]
+
+let test_integer_shuffles () =
+  (* Hand-specified boundary bits and lane selections, including transfers
+     across AVX's 128-bit subdivisions and between both input racks. *)
+  let inputs = [| -2147483648; 2147483647; -1; 0; 4; 5; 6; 7;
+                 8; 9; 10; 11; 12; 13; 14; 15 |] in
+  let cases = [
+    4, [3; 2; 1; 0], [0; -1; 2147483647; -2147483648],
+      [4; 3; 6; 1], [101; 0; 103; 2147483647];
+    8, [7; 6; 5; 4; 3; 2; 1; 0], [7; 6; 5; 4; 0; -1; 2147483647; -2147483648],
+      [8; 7; 10; 5; 12; 3; 14; 1], [101; 7; 103; 5; 105; 0; 107; 2147483647];
+    16, [15; 14; 13; 12; 11; 10; 9; 8; 7; 6; 5; 4; 3; 2; 1; 0],
+      [15; 14; 13; 12; 11; 10; 9; 8; 7; 6; 5; 4; 0; -1; 2147483647; -2147483648],
+      [16; 15; 18; 13; 20; 11; 22; 9; 24; 7; 26; 5; 28; 3; 30; 1],
+      [101; 15; 103; 13; 105; 11; 107; 9; 109; 7; 111; 5; 113; 0; 115; 2147483647]
+  ] in
+  List.iter (fun (lanes, reversed, expected_reverse, paired, expected_pair) ->
+    let env = ["a", I32_rack (Array.sub inputs 0 lanes);
+               "b", I32_rack (Array.init lanes (fun lane -> 101 + lane))] in
+    eval_expr ~lanes env (expression (EShuffle (var "a", reversed)))
+    |> get |> expect_i32 expected_reverse;
+    eval_expr ~lanes env (expression (EShuffle (expression (ETuple [var "a"; var "b"]), paired)))
+    |> get |> expect_i32 expected_pair) cases
+
+let test_unsigned_comparisons () =
+  (* Hand-specified order across the signed boundary, repeated at every
+     physical rack width. These values distinguish unsigned from signed. *)
+  List.iter (fun lanes ->
+    let repeated xs = Array.init lanes (fun lane -> xs.(lane mod 4)) in
+    let env = ["a", U32_rack (repeated [| 0L; 2147483647L; 2147483648L; 4294967295L |]);
+               "b", U32_rack (repeated [| 4294967295L; 2147483648L; 2147483647L; 4294967295L |])] in
+    List.iter (fun (op, expected) ->
+      eval_expr ~lanes env (binop (var "a") op (var "b"))
+      |> get |> expect_mask (List.init lanes (fun lane -> expected.(lane mod 4))))
+      [Lt, [|true; true; false; false|]; Le, [|true; true; false; true|];
+       Gt, [|false; false; true; false|]; Ge, [|false; false; true; true|];
+       Eq, [|false; false; false; true|]; Ne, [|true; true; true; false|]];
+    let boundary = expression (EBroadcast (expression (EInt 2147483648L))) in
+    eval_expr ~lanes env (binop (var "a") Ge boundary)
+    |> get |> expect_mask (List.init lanes (fun lane -> lane mod 4 >= 2));
+    eval_expr ~lanes env (binop boundary Gt (var "a"))
+    |> get |> expect_mask (List.init lanes (fun lane -> lane mod 4 < 2));
+    let result = eval_expr ~lanes env (expression (EIf (binop (var "a") Lt (var "b"), var "a", var "b"))) |> get in
+    match result with
+    | U32_rack values when values = repeated [|0L; 2147483647L; 2147483647L; 4294967295L|] -> ()
+    | _ -> failwith "unsigned mask selected incorrect lane bits") [4; 8; 16]
+
 (* The wasm-simd128 integer racks: eight i16 or four i32 lanes where f32 has four. *)
 let test_integer_racks () =
   let call name args = expression (ECall (name, args)) in
@@ -263,6 +318,9 @@ let test_integer_bits () =
   |> get |> expect_i32 [ -4; 0; 0; 2 ]
 
 let () =
+  test_unsigned_comparisons ();
+  test_integer_shuffles ();
+  test_signed_integer_absolute_value ();
   test_integer_bits ();
   test_integer_racks ();
   test_round_after_each_operation ();

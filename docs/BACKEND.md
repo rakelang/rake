@@ -62,7 +62,7 @@ in one register and reject a function that would need more registers than the
 profile has, or arguments on the stack. `--emit-asm` prints the assembly, or
 the C on wasm, and the system assembler or clang only encodes it.
 
-In the development compiler, `abs` clears each lane's sign bit. SSE2 and AVX2
+In the development compiler, `abs` on `f32s` clears each lane's sign bit. SSE2 and AVX2
 use `andps` and `vandps` with a literal magnitude mask. AVX-512F uses `vpandd`,
 and NEON uses a literal rack and `and`. These are full-width bitwise operations,
 so they introduce no floating-point exception, even for a signalling NaN.
@@ -115,14 +115,16 @@ reuses only a dying input rack for the destination. NEON uses `ins` from
 the scalar argument's low lane, copying the input rack when it remains live.
 The insertion sequence is shared with scan accumulation on each architecture.
 
-Static float shuffles select a complete output rack from one or two input
-racks. SSE2 uses immediate `shufps`: two inputs need two permutations and a
+Static 32-bit shuffles select a complete output rack from one or two input
+racks of the same type: `f32s`, `i32s` or `u32s`. SSE2 uses immediate
+`shufps`: two inputs need two permutations and a
 bitwise mask merge. AVX2 and AVX-512F use full-width `vpermps` with a literal
 index vector. Two inputs need two permutations and a vector blend. NEON
 uses four `dup` broadcasts and three `ins` transfers. These sequences
 preserve lane bits across register subdivisions, without scalar arithmetic
 or memory temporaries. The allocator counts every scratch register and
-keeps both inputs intact while a two-rack shuffle reads them.
+keeps both inputs intact while a two-rack shuffle reads them. The same
+selection handles float and integer lane bits without numerical conversion.
 
 Mask reductions combine full-width lane groups with permutations and
 bitwise AND or OR. `all` and `any` finish with a vector mask that normalises
@@ -145,10 +147,26 @@ Native 32-bit integer racks share the float racks' register widths and C
 vector argument slots. Add and subtract select packed `paddd` and `psubd`
 on SSE2, their full-width VEX/EVEX forms on AVX2 and AVX-512F, or NEON
 `add` and `sub` with four 32-bit lanes. Bitwise operations use the existing
-register-only logical instructions. Signed integer negation subtracts each
+register-only logical instructions. `bit_andnot(left, right)` keeps
+`left & ~right`: SSE2 uses `andnps`, AVX2 uses `vandnps`, AVX-512F uses
+`vpandnd`, and NEON uses `bic .16b`. The x86 emitter reverses the instruction
+sources because x86 complements the first source. Its SSE2 two-address
+helper saves a dying input before overwriting it, using the reserved vector
+register. The verifier admits only full-width register operands for these
+instructions.
+Signed integer negation subtracts each
 lane from zero. The x86 profiles clear a separate destination register before
 packed subtraction, preserving the source until it's consumed. NEON selects
 one full-width `neg vD.4s, vS.4s` instruction.
+
+Signed integer absolute value preserves the wrapping minimum value too.
+SSE2 copies the input into one allocated sign register, shifts it right by
+31 with `psrad`, then computes `(input xor sign) - sign` using full-width
+logical and subtraction instructions. Capturing the sign first allows the
+destination to reuse a dying input. AVX2 and AVX-512F select `vpabsd`, and
+NEON selects `abs .4s`. The final-object verifier rejects narrower operands
+and memory work, and keeps SSSE3's `pabsd` outside the SSE2 profile.
+
 Multiplication keeps the low 32 bits for signed and unsigned racks. AVX2 and
 AVX-512F select full-width `vpmulld`, and NEON selects `mul .4s`. SSE2
 multiplies the even lanes with `pmuludq`, then multiplies the odd lanes in two
@@ -176,6 +194,14 @@ other predicates. AVX-512F uses `vpcmpd` and expands its `k1` result into a
 full rack without requiring AVX-512DQ. NEON uses `cmeq`, `cmgt` and `cmge`,
 with mask inversion for inequality. The final-object verifier rejects
 narrow integer vectors, scalar arithmetic and integer memory operands.
+Unsigned 32-bit racks retain a distinct IR element through selection.
+SSE2 and AVX2 XOR the sign bit into two allocated copies before a signed
+comparison, preserving both live input racks. AVX-512F selects `vpcmpud`
+with `k1`, and NEON selects `cmhi` or `cmhs` for unsigned ordering.
+Equality and inequality compare the unmodified bits. WebAssembly selects
+`i32x4.*_u` for ordered unsigned predicates and retains unsigned uniform
+comparisons and broadcasts. The interpreter stores unsigned lane values in
+the range 0 to 2³²−1, so its ordering stays independent of signed predicates.
 Integer masks and float masks share the same lane representation, so either
 can select float or integer racks. Native integer streams and uniform integer
 arguments remain work in progress.

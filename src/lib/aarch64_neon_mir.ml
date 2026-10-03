@@ -25,8 +25,9 @@ type instruction =
   | Min_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Max_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Neg_i32 of { dst : vreg; source : vreg; provenance : provenance }
+  | Abs_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Shift_i32 of { dst : vreg; source : vreg; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift; provenance : provenance }
-  | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; left : vreg; right : vreg; provenance : provenance }
+  | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; unsigned : bool; left : vreg; right : vreg; provenance : provenance }
   | Fmul of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fdiv of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fmin of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -55,6 +56,7 @@ type instruction =
       provenance : provenance;
     }
   | And of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Bic of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Orr of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Eor of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Mvn of { dst : vreg; source : vreg; provenance : provenance }
@@ -87,6 +89,7 @@ let def = function
   | Min_i32 { dst; _ }
   | Max_i32 { dst; _ }
   | Neg_i32 { dst; _ }
+  | Abs_i32 { dst; _ }
   | Shift_i32 { dst; _ }
   | Compare_i32 { dst; _ }
   | Fmul { dst; _ }
@@ -99,6 +102,7 @@ let def = function
   | Compare { dst; _ }
   | Select { dst; _ }
   | And { dst; _ }
+  | Bic { dst; _ }
   | Orr { dst; _ }
   | Eor { dst; _ }
   | Mvn { dst; _ } -> dst
@@ -123,9 +127,10 @@ let operands = function
   | Fmax { left; right; _ }
   | Compare { left; right; _ }
   | And { left; right; _ }
+  | Bic { left; right; _ }
   | Orr { left; right; _ }
   | Eor { left; right; _ } -> [ left; right ]
-  | Neg_i32 { source; _ } | Fsqrt { source; _ } | Round_f32 { source; _ } | Mvn { source; _ } -> [ source ]
+  | Neg_i32 { source; _ } | Abs_i32 { source; _ } | Fsqrt { source; _ } | Round_f32 { source; _ } | Mvn { source; _ } -> [ source ]
   | Fma { multiplicand; multiplier; addend; _ } ->
       [ multiplicand; multiplier; addend ]
   | Select { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
@@ -144,6 +149,7 @@ let provenance = function
   | Min_i32 { provenance; _ }
   | Max_i32 { provenance; _ }
   | Neg_i32 { provenance; _ }
+  | Abs_i32 { provenance; _ }
   | Shift_i32 { provenance; _ }
   | Compare_i32 { provenance; _ }
   | Fmul { provenance; _ }
@@ -156,6 +162,7 @@ let provenance = function
   | Compare { provenance; _ }
   | Select { provenance; _ }
   | And { provenance; _ }
+  | Bic { provenance; _ }
   | Orr { provenance; _ }
   | Eor { provenance; _ }
   | Mvn { provenance; _ } -> provenance
@@ -177,8 +184,9 @@ let instruction_name = function
   | Min_i32 _ -> "smin.4s"
   | Max_i32 _ -> "smax.4s"
   | Neg_i32 _ -> "neg.4s"
+  | Abs_i32 _ -> "abs.4s"
   | Shift_i32 _ -> "shift.bits.4s"
-  | Compare_i32 _ -> "compare.i32"
+  | Compare_i32 { unsigned; _ } -> if unsigned then "compare.u32" else "compare.i32"
   | Fmul _ -> "fmul"
   | Fdiv _ -> "fdiv"
   | Fmin _ -> "fmin"
@@ -189,6 +197,7 @@ let instruction_name = function
   | Compare _ -> "fcmp"
   | Select _ -> "select"
   | And _ -> "and"
+  | Bic _ -> "bic"
   | Orr _ -> "orr"
   | Eor _ -> "eor"
   | Mvn _ -> "mvn"

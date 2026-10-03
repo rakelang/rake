@@ -50,9 +50,10 @@ let registers = function
   | A.Fmax { dst; left; right }
   | A.Compare { dst; left; right; _ }
   | A.And { dst; left; right }
+  | A.Bic { dst; left; right }
   | A.Orr { dst; left; right }
   | A.Eor { dst; left; right } -> [ dst; left; right ]
-  | A.Neg_i32 { dst; source } | A.Shift_i32 { dst; source; _ } | A.Fsqrt { dst; source } | A.Round_f32 { dst; source; _ } | A.Mvn { dst; source } | A.Move { dst; source } ->
+  | A.Neg_i32 { dst; source } | A.Abs_i32 { dst; source } | A.Shift_i32 { dst; source; _ } | A.Fsqrt { dst; source } | A.Round_f32 { dst; source; _ } | A.Mvn { dst; source } | A.Move { dst; source } ->
       [ dst; source ]
   | A.Fmla { dst; multiplicand; multiplier } -> [ dst; multiplicand; multiplier ]
   | A.Bsl { dst_mask; if_true; if_false } -> [ dst_mask; if_true; if_false ]
@@ -153,6 +154,8 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "smax %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Neg_i32 { dst; source } ->
       emit "neg %s, %s" (lanes_f32 dst) (lanes_f32 source)
+  | A.Abs_i32 { dst; source } ->
+      emit "abs %s, %s" (lanes_f32 dst) (lanes_f32 source)
   | A.Shift_i32 { dst; source; count; shift } ->
       let count = Native_ir.I32_shift_count.to_int count in
       if count = 0 then (
@@ -163,13 +166,15 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
           | Native_ir.Shift_right -> "ushr"
           | Native_ir.Shift_right_signed -> "sshr" in
         emit "%s %s, %s, #%d" mnemonic (lanes_f32 dst) (lanes_f32 source) count
-  | A.Compare_i32 { dst; predicate; left; right } ->
+  | A.Compare_i32 { dst; predicate; unsigned; left; right } ->
+      let greater = if unsigned then "cmhi" else "cmgt" in
+      let greater_equal = if unsigned then "cmhs" else "cmge" in
       let mnemonic, left, right = match predicate with
         | Native_ir.Eq | Native_ir.Ne -> "cmeq", left, right
-        | Native_ir.Lt -> "cmgt", right, left
-        | Native_ir.Le -> "cmge", right, left
-        | Native_ir.Gt -> "cmgt", left, right
-        | Native_ir.Ge -> "cmge", left, right in
+        | Native_ir.Lt -> greater, right, left
+        | Native_ir.Le -> greater_equal, right, left
+        | Native_ir.Gt -> greater, left, right
+        | Native_ir.Ge -> greater_equal, left, right in
       emit "%s %s, %s, %s" mnemonic (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right);
       if predicate = Native_ir.Ne then emit "mvn %s, %s" (lanes_bits dst) (lanes_bits dst)
   | A.Fmul { dst; left; right } ->
@@ -196,6 +201,8 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
         (lanes_f32 right)
   | A.And { dst; left; right } ->
       emit "and %s, %s, %s" (lanes_bits dst) (lanes_bits left) (lanes_bits right)
+  | A.Bic { dst; left; right } ->
+      emit "bic %s, %s, %s" (lanes_bits dst) (lanes_bits left) (lanes_bits right)
   | A.Orr { dst; left; right } ->
       emit "orr %s, %s, %s" (lanes_bits dst) (lanes_bits left) (lanes_bits right)
   | A.Eor { dst; left; right } ->
@@ -220,7 +227,7 @@ let emit_function pool buffer (func : A.func) =
     func.name func.name func.name func.name;
   List.iter (emit_instruction pool buffer) func.instructions;
   (match func.result_type with
-  | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32)) -> Buffer.add_string buffer "    umov w0, v0.s[0]\n"
+  | Some (Native_ir.Scalar (Native_ir.I1 | Native_ir.I32 | Native_ir.U32)) -> Buffer.add_string buffer "    umov w0, v0.s[0]\n"
   | _ -> ());
   Buffer.add_string buffer "    ret\n";
   Printf.bprintf buffer ".size %s, .-%s\n\n" func.name func.name

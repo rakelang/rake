@@ -11,7 +11,7 @@ let unknown_location = { file = "<unknown>"; line = 0; col = 0; offset = 0 }
 
 let format_source_location loc = Printf.sprintf "%s:%d:%d" loc.file loc.line loc.col
 
-type element = I1 | U8 | I16 | I32 | I64 | F32 | F64
+type element = I1 | U8 | I16 | I32 | U32 | I64 | F32 | F64
 
 type typ = Scalar of element | Rack of element | Mask | Pointer
 
@@ -20,6 +20,7 @@ type literal =
   | Uint8 of int
   | Int16 of int
   | Int32 of int32
+  | Uint32 of int32
   | Int64 of int64
   | Float32_bits of int32
   | Float64_bits of int64
@@ -149,6 +150,7 @@ let string_of_element = function
   | U8 -> "u8"
   | I16 -> "i16"
   | I32 -> "i32"
+  | U32 -> "u32"
   | I64 -> "i64"
   | F32 -> "f32"
   | F64 -> "f64"
@@ -172,7 +174,8 @@ let constant_i32_definitions (func : func) =
   List.fold_left
     (fun constants (instruction : instruction) ->
       match instruction.result, instruction.op with
-      | Some (id, Scalar I32), Const (Int32 value) -> IntMap.add id value constants
+      | Some (id, Scalar I32), Const (Int32 value)
+      | Some (id, Scalar U32), Const (Uint32 value) -> IntMap.add id value constants
       | _ -> constants)
     IntMap.empty func.body.instructions
 
@@ -188,12 +191,13 @@ let literal_element = function
   | Uint8 _ -> U8
   | Int16 _ -> I16
   | Int32 _ -> I32
+  | Uint32 _ -> U32
   | Int64 _ -> I64
   | Float32_bits _ -> F32
   | Float64_bits _ -> F64
 
-let is_integer = function Scalar I32 | Scalar I64 -> true | _ -> false
-let is_numeric_element = function U8 | I16 | I32 | I64 | F32 | F64 -> true | I1 -> false
+let is_integer = function Scalar I32 | Scalar U32 | Scalar I64 -> true | _ -> false
+let is_numeric_element = function U8 | I16 | I32 | U32 | I64 | F32 | F64 -> true | I1 -> false
 let is_numeric = function Scalar element | Rack element -> is_numeric_element element | Mask | Pointer -> false
 let is_float_rack = function Rack F32 | Rack F64 -> true | _ -> false
 
@@ -392,12 +396,14 @@ let rec verify_instruction verifier context environment (instruction : instructi
       let types = List.filter_map lookup [ left; right ] in
       require_same verifier context "bitwise" types;
       (match types with
-      | (Rack (U8 | I16 | I32 | I64) as typ) :: _ -> check_result verifier context instruction (Some typ)
+      | (Rack (U8 | I16 | I32 | U32 | I64) as typ) :: _ -> check_result verifier context instruction (Some typ)
       | _ -> complain verifier context "bitwise operations require equal integer racks")
   | Shift { operand; count; _ } ->
-      require_type verifier context environment count (Scalar I32);
+      (match lookup count with
+      | Some (Scalar (I32 | U32)) -> ()
+      | _ -> complain verifier context "shift count requires an i32 or u32 scalar");
       (match lookup operand with
-      | Some (Rack (U8 | I16 | I32 | I64) as typ) -> check_result verifier context instruction (Some typ)
+      | Some (Rack (U8 | I16 | I32 | U32 | I64) as typ) -> check_result verifier context instruction (Some typ)
       | _ -> complain verifier context "shifts require an integer rack")
   | Binary (_, left, right) ->
       let types = List.filter_map lookup [ left; right ] in
@@ -483,7 +489,7 @@ let rec verify_instruction verifier context environment (instruction : instructi
       check_result verifier context instruction (Some (Scalar I1))
   | Reduce (Reduce_bitmask, mask) ->
       require_type verifier context environment mask Mask;
-      check_result verifier context instruction (Some (Scalar I32))
+      check_result verifier context instruction (Some (Scalar U32))
   | Scan (_, rack) ->
       require_type verifier context environment rack (Rack F32);
       check_result verifier context instruction (Some (Rack F32))
@@ -691,6 +697,7 @@ let string_of_literal = function
   | Uint8 value -> "u8:" ^ string_of_int value
   | Int16 value -> "i16:" ^ string_of_int value
   | Int32 value -> Int32.to_string value
+  | Uint32 value -> "u32:" ^ Int64.to_string (Int64.logand (Int64.of_int32 value) 0xffffffffL)
   | Int64 value -> Int64.to_string value
   | Float32_bits bits -> Printf.sprintf "f32:0x%08lx" bits
   | Float64_bits bits -> Printf.sprintf "f64:0x%016Lx" bits

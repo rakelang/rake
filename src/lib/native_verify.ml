@@ -240,11 +240,11 @@ let allowed_avx2 = function
   | "vcmpeq_oqps" | "vcmpneq_oqps" | "vcmplt_oqps" | "vcmple_oqps"
   | "vcmpeqps" | "vcmpneqps" | "vcmpltps" | "vcmpleps"
   | "vcmpunordps"
-  | "vblendvps" | "vandps" | "vorps" | "vmovaps" | "ret" | "retq" ->
+  | "vblendvps" | "vandps" | "vandnps" | "vorps" | "vmovaps" | "ret" | "retq" ->
       true
   | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" | "vroundps" -> true
   | "vpxor" | "vpcmpeqd" | "vpcmpgtd" | "vpaddd" | "vpsubd" | "vpmulld"
-  | "vpminsd" | "vpmaxsd" | "vpslld" | "vpsrld" | "vpsrad" -> true
+  | "vpminsd" | "vpmaxsd" | "vpabsd" | "vpslld" | "vpsrld" | "vpsrad" -> true
   | _ -> false
 
 let is_fma profile =
@@ -295,6 +295,24 @@ let full_integer_shift_operands profile operands =
       full_register dst && full_register source && valid_count count
   | _ -> false
 
+let full_integer_unary_operands profile operands =
+  let register = match profile with
+    | Target.X86_avx2 -> "ymm"
+    | Target.X86_avx512 -> "zmm"
+    | _ -> invalid_arg "direct integer absolute value requires AVX2 or AVX-512F" in
+  Str.string_match (Str.regexp ("^" ^ register ^ "[0-9]+,[ \\t]*" ^ register ^ "[0-9]+$")) operands 0
+
+let full_unsigned_compare_operands operands =
+  let full_register text = Str.string_match (Str.regexp "^zmm[0-9]+$") text 0 in
+  match List.map String.trim (String.split_on_char ',' operands) with
+  | [ "k1"; left; right ] -> full_register left && full_register right
+  | [ "k1"; left; right; predicate ] ->
+      full_register left && full_register right
+      && (match Int32.of_string_opt predicate with
+          | Some (0l | 1l | 2l | 4l | 5l | 6l) -> true
+          | _ -> false)
+  | _ -> false
+
 let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
   let mnemonic = decoded.mnemonic in
   let operands = decoded.operands in
@@ -326,6 +344,12 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if mnemonic = "vpmulld" && not (full_integer_rack_operands Target.X86_avx2 operands) then
     error ~source ~function_name ~obligation:"full-width integer multiply"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
+  else if mnemonic = "vandnps" && not (full_integer_rack_operands Target.X86_avx2 operands) then
+    error ~source ~function_name ~obligation:"full-width integer and-not"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
+  else if mnemonic = "vpabsd" && not (full_integer_unary_operands Target.X86_avx2 operands) then
+    error ~source ~function_name ~obligation:"full-width integer absolute value"
+      (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if List.mem mnemonic [ "vpminsd"; "vpmaxsd" ]
       && not (full_integer_rack_operands Target.X86_avx2 operands) then
     error ~source ~function_name ~obligation:"full-width signed integer extrema"
@@ -356,7 +380,7 @@ let regexp_contains pattern text =
   with Not_found -> false
 
 let allowed_sse2 = function
-  | "movaps" | "xorps" | "andps" | "orps" | "pxor" | "pcmpeqd"
+  | "movaps" | "xorps" | "andps" | "andnps" | "orps" | "pxor" | "pcmpeqd"
   | "paddd" | "psubd" | "pcmpgtd" | "pmuludq"
   | "pslld" | "psrld" | "psrad"
   | "addps" | "subps" | "mulps" | "divps" | "sqrtps" | "shufps"
@@ -366,9 +390,11 @@ let allowed_sse2 = function
   | _ -> false
 
 let allowed_avx512f = function
-  | "vbroadcastss" | "vpxord" | "vpandd" | "vpord" | "vpternlogd"
-  | "vpaddd" | "vpsubd" | "vpmulld" | "vpcmpd" | "vpcmpeqd" | "vpcmpneqd"
-  | "vpminsd" | "vpmaxsd"
+  | "vbroadcastss" | "vpxord" | "vpandd" | "vpandnd" | "vpord" | "vpternlogd"
+  | "vpaddd" | "vpsubd" | "vpmulld" | "vpcmpd" | "vpcmpud"
+  | "vpcmpequd" | "vpcmpnequd" | "vpcmpltud" | "vpcmpleud" | "vpcmpnltud" | "vpcmpnleud"
+  | "vpcmpeqd" | "vpcmpneqd"
+  | "vpminsd" | "vpmaxsd" | "vpabsd"
   | "vpslld" | "vpsrld" | "vpsrad"
   | "vpcmpltd" | "vpcmpled" | "vpcmpnltd" | "vpcmpnled"
   | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
@@ -405,8 +431,14 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
   else if not sse && regexp_contains "\\bk\\(0\\|[2-7]\\)\\b" operands then fail "reserved opmask register"
   else if (mnemonic = "pmuludq" || mnemonic = "vpmulld")
       && not (full_integer_rack_operands profile operands) then fail "full-width integer multiply"
+  else if List.mem mnemonic [ "andnps"; "vpandnd" ]
+      && not (full_integer_rack_operands profile operands) then fail "full-width integer and-not"
+  else if not sse && mnemonic = "vpabsd"
+      && not (full_integer_unary_operands profile operands) then fail "full-width integer absolute value"
   else if List.mem mnemonic [ "vpminsd"; "vpmaxsd" ]
       && not (full_integer_rack_operands profile operands) then fail "full-width signed integer extrema"
+  else if List.mem mnemonic [ "vpcmpud"; "vpcmpequd"; "vpcmpnequd"; "vpcmpltud"; "vpcmpleud"; "vpcmpnltud"; "vpcmpnleud" ]
+      && not (full_unsigned_compare_operands operands) then fail "full-width unsigned integer comparison"
   else if List.mem mnemonic [ "pslld"; "psrld"; "psrad"; "vpslld"; "vpsrld"; "vpsrad" ]
       && not (full_integer_shift_operands profile operands) then fail "full-width literal integer shift"
   else if cross_lane && not allow_cross_lane then fail "source-authorized cross-lane operation"
@@ -415,9 +447,9 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
 
 let allowed_neon = function
   | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv" | "fmin" | "fmax"
-  | "add" | "sub" | "mul" | "neg" | "smin" | "smax" | "cmeq" | "cmgt" | "cmge"
+  | "add" | "sub" | "mul" | "neg" | "abs" | "smin" | "smax" | "cmeq" | "cmgt" | "cmge" | "cmhi" | "cmhs"
   | "shl" | "ushr" | "sshr"
-  | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "orr"
+  | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "bic" | "orr"
   | "frintm" | "frintp" | "frintz" | "frintn"
   | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ext" | "ret" -> true
   | _ -> false
@@ -477,11 +509,15 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if neon_general_register operands then
     error ~source ~function_name ~obligation:"no scalarized lane control"
       (Printf.sprintf "encountered general register in %s %s" mnemonic operands)
-  else if List.mem mnemonic [ "add"; "sub"; "mul"; "smin"; "smax"; "cmeq"; "cmgt"; "cmge" ]
+  else if mnemonic = "bic"
+      && not (regexp_contains "^v[0-9]+\\.16b,[ \\t]*v[0-9]+\\.16b,[ \\t]*v[0-9]+\\.16b$" operands) then
+    error ~source ~function_name ~obligation:"full-width integer and-not"
+      (Printf.sprintf "encountered unsupported bit-clear form in %s %s" mnemonic operands)
+  else if List.mem mnemonic [ "add"; "sub"; "mul"; "smin"; "smax"; "cmeq"; "cmgt"; "cmge"; "cmhi"; "cmhs" ]
       && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
     error ~source ~function_name ~obligation:"four 32-bit integer lanes"
       (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
-  else if mnemonic = "neg"
+  else if List.mem mnemonic [ "neg"; "abs" ]
       && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
     error ~source ~function_name ~obligation:"four 32-bit integer lanes"
       (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
