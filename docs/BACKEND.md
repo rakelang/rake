@@ -141,6 +141,20 @@ and stream tails further limit participation. This uses no scalar comparison
 or branch inside the register kernel. Integer and Boolean uniform conditions
 remain work in progress on physical profiles.
 
+Native 32-bit integer racks share the float racks' register widths and C
+vector argument slots. Add and subtract select packed `paddd` and `psubd`
+on SSE2, their full-width VEX/EVEX forms on AVX2 and AVX-512F, or NEON
+`add` and `sub` with four 32-bit lanes. Bitwise operations use the existing
+register-only logical instructions. Signed comparisons use `pcmpeqd` and
+`pcmpgtd` on SSE2 and AVX2, with operand reversal or mask inversion for the
+other predicates. AVX-512F uses `vpcmpd` and expands its `k1` result into a
+full rack without requiring AVX-512DQ. NEON uses `cmeq`, `cmgt` and `cmge`,
+with mask inversion for inequality. The final-object verifier rejects
+narrow integer vectors, scalar arithmetic and integer memory operands.
+Integer masks and float masks share the same lane representation, so either
+can select float or integer racks. Native integer streams and uniform integer
+arguments remain work in progress.
+
 ## Whole programs
 
 ```text

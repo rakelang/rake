@@ -44,6 +44,9 @@ type operation =
     }
   | Addps of { dst : vector_register; left : vector_register; right : vector_register }
   | Subps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Add_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Sub_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; left : vector_register; right : vector_register }
   | Mulps of { dst : vector_register; left : vector_register; right : vector_register }
   | Divps of { dst : vector_register; left : vector_register; right : vector_register }
   | Extreme_f32 of {
@@ -354,6 +357,10 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
                     (Scan_f32 { dst; source = p source; operation; scratch })
               | M.Addps { left; right; _ } -> emit loc provenance (Addps { dst; left = p left; right = p right })
               | M.Subps { left; right; _ } -> emit loc provenance (Subps { dst; left = p left; right = p right })
+              | M.Add_i32 { left; right; _ } -> emit loc provenance (Add_i32 { dst; left = p left; right = p right })
+              | M.Sub_i32 { left; right; _ } -> emit loc provenance (Sub_i32 { dst; left = p left; right = p right })
+              | M.Compare_i32 { predicate; left; right; _ } ->
+                  emit loc provenance (Compare_i32 { dst; predicate; left = p left; right = p right })
               | M.Mulps { left; right; _ } -> emit loc provenance (Mulps { dst; left = p left; right = p right })
               | M.Divps { left; right; _ } -> emit loc provenance (Divps { dst; left = p left; right = p right })
               | M.Extreme_f32 { left; right; operation; _ } ->

@@ -1253,12 +1253,19 @@ let lower_rake ~profile definition_loc name parameters result setup tines throug
           "rake result '%s' must name the total sweep binding '%s'"
           result.result_name sweep.sweep_binding
   in
-  let* () = expect_type definition_loc "rake result" (Ir.Rack Ir.F32) return_value in
+  let* () =
+    match result.result_type with
+    | None -> expect_type definition_loc "implicit rake result" (Ir.Rack Ir.F32) return_value
+    | Some annotation ->
+        if List.mem (snd return_value) native_racks then
+          check_annotation (Some annotation) (snd return_value)
+        else error annotation.loc "a rake result must be a rack"
+  in
   let func =
     {
       Ir.name;
       parameters;
-      result = Some (Ir.Rack Ir.F32);
+      result = Some (snd return_value);
       body =
         {
           instructions = List.rev state.instructions_rev;

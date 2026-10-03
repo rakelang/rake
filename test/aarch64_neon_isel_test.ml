@@ -131,7 +131,7 @@ let () =
       loc = N.unknown_location;
     }
   in
-  expect_error "exactly 4 f32 lanes"
+  expect_error "exactly 4 32-bit lanes"
     (with_body "wrong_width" [] (Some (N.Rack N.F32))
        [ instruction (Some (0, N.Rack N.F32))
            (N.Rack_const [ N.Float32_bits 0l; N.Float32_bits 0l ]) ]

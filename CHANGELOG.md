@@ -7,6 +7,14 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Native `i32s` and `u32s` support wrapping add/subtract and bitwise
+  AND/OR/XOR on SSE2, AVX2, AVX-512F and NEON. Signed `i32s` comparisons
+  produce masks for selection and mask reductions. Mixed integer/float
+  selection preserves the vector C ABI. An independent C oracle checks
+  overflow bits, signed extremes, tines/gaps and still-live inputs. Assembled
+  negative fixtures reject narrowed vectors, scalar work and integer memory
+  operations. Other integer operations and native integer streams remain WIP.
+
 - Direct uniform `f32` comparisons support whole-rack conditional expressions
   on all four physical profiles. Broadcast operands use ordered vector
   comparisons and selection, with benign operands in untaken branches.

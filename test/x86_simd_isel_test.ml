@@ -183,12 +183,12 @@ let () =
               [ N.Float32_bits 0l; N.Float32_bits 1l; N.Float32_bits 0l; N.Float32_bits 0l;
                 N.Float32_bits 0l; N.Float32_bits 0l; N.Float32_bits 0l; N.Float32_bits 0l ]) ]
        (N.Return (Some 0)));
-  expect_error "exactly 8 f32 lanes"
+  expect_error "exactly 8 32-bit lanes"
     (with_body "wrong_width" [] (Some (N.Rack N.F32))
        [ instruction (Some (0, N.Rack N.F32))
            (N.Rack_const [ N.Float32_bits 0l; N.Float32_bits 0l ]) ]
        (N.Return (Some 0)));
-  expect_error "only rack<f32>, scalar<f32>, and mask parameters"
+  expect_error "only rack<f32>, rack<i32>, scalar<f32>, and mask parameters"
     (with_body "f64" [ { N.id = 0; typ = N.Rack N.F64; name = None } ]
        (Some (N.Rack N.F64)) [] (N.Return (Some 0)));
   expect_error "call @helper is forbidden"

@@ -32,8 +32,10 @@ slow main() -> i32:
 
 A rake's body has any setup bindings, any local tines, at least one through
 block, and its final sweep, in that order. Global tines are defined outside
-the rake. Its racks are `f32s`, and rakes compile on SSE2, AVX2, AVX-512,
-NEON and WebAssembly. A scratch, rake or run can call one.
+the rake. Rakes compile on SSE2, AVX2, AVX-512, NEON and WebAssembly. The
+example uses `f32s`. The development compiler also accepts `i32s` and `u32s`
+results with [the native integer operation subset](01_primitives_operations_and_targets.md#integer-racks).
+A scratch, rake or run can call one.
 
 ## Tines
 

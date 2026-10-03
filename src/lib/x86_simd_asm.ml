@@ -48,6 +48,9 @@ let registers = function
   | A.Extreme_f32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
   | A.Addps { dst; left; right }
   | A.Subps { dst; left; right }
+  | A.Add_i32 { dst; left; right }
+  | A.Sub_i32 { dst; left; right }
+  | A.Compare_i32 { dst; left; right; _ }
   | A.Mulps { dst; left; right }
   | A.Divps { dst; left; right }
   | A.Mask_andps { dst; left; right }
@@ -376,6 +379,31 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       binary "addps" dst left right
   | A.Subps { dst; left; right } ->
       binary "subps" dst left right
+  | A.Add_i32 { dst; left; right } ->
+      binary "paddd" dst left right
+  | A.Sub_i32 { dst; left; right } ->
+      binary "psubd" dst left right
+  | A.Compare_i32 { dst; predicate; left; right } ->
+      if avx512 then (
+        let immediate = match predicate with
+          | Native_ir.Eq -> 0 | Native_ir.Lt -> 1 | Native_ir.Le -> 2
+          | Native_ir.Ne -> 4 | Native_ir.Ge -> 5 | Native_ir.Gt -> 6 in
+        emit "vpcmpd k1, %s, %s, 0x%02x" (ymm left) (ymm right) immediate;
+        logical "xorps" dst dst dst;
+        emit "vpternlogd %s{k1}, %s, %s, 0xff" (ymm dst) (ymm dst) (ymm dst))
+      else (
+        let mnemonic, left, right, invert = match predicate with
+          | Native_ir.Eq -> "pcmpeqd", left, right, false
+          | Native_ir.Ne -> "pcmpeqd", left, right, true
+          | Native_ir.Lt -> "pcmpgtd", right, left, false
+          | Native_ir.Le -> "pcmpgtd", left, right, true
+          | Native_ir.Gt -> "pcmpgtd", left, right, false
+          | Native_ir.Ge -> "pcmpgtd", right, left, true in
+        binary mnemonic dst left right;
+        if invert then (
+          let ones = intern pool (Vector_bits (List.init lanes (fun _ -> Int32.minus_one))) in
+          if sse then emit "xorps %s, XMMWORD PTR [rip + %s]" (ymm dst) ones
+          else emit "vxorps %s, %s, YMMWORD PTR [rip + %s]" (ymm dst) (ymm dst) ones))
   | A.Mulps { dst; left; right } ->
       binary "mulps" dst left right
   | A.Divps { dst; left; right } ->

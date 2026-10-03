@@ -48,10 +48,10 @@ multiply-add.
 
 | Profile | Rack | What compiles |
 | --- | --- | --- |
-| `x86-sse2` | one 128-bit XMM register, 4 `f32` lanes | `f32s` scratches and rakes, as assembly |
-| `x86-avx2` | one 256-bit YMM register, 8 `f32` lanes | `f32s` scratches and rakes, as assembly |
-| `x86-avx512` | one 512-bit ZMM register, 16 `f32` lanes | `f32s` scratches and rakes, as assembly |
-| `aarch64-neon` | one 128-bit vector register, 4 `f32` lanes | `f32s` scratches and rakes, as assembly |
+| `x86-sse2` | one 128-bit XMM register, 4 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
+| `x86-avx2` | one 256-bit YMM register, 8 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
+| `x86-avx512` | one 512-bit ZMM register, 16 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
+| `aarch64-neon` | one 128-bit vector register, 4 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
 | `wasm-simd128` | one `v128`, 4 `f32` lanes | scratches and rakes over float and integer racks, runs over memory, and whole programs with scalar `slow` code, as C |
 | `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
@@ -67,7 +67,11 @@ arguments are supported too. SSE2, AVX2, AVX-512 and NEON also support
 including a separate destination with its own record layout,
 with checked partial racks. The physical profiles also compile direct uniform
 `f32` comparisons as vector selections, including within through masks and
-stream tails. These development additions are absent from the 0.6.0-beta source tag. On
+stream tails. Native `i32s` and `u32s` support wrapping add/subtract and
+bitwise AND/OR/XOR. Signed `i32s` comparisons produce masks for selection
+and mask reductions. The [operation reference](docs/spec/01_primitives_operations_and_targets.md#integer-racks)
+lists the implemented subset and remaining work.
+These development additions are absent from the 0.6.0-beta source tag. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one
 `wasm_simd128.h` intrinsic.

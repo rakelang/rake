@@ -19,6 +19,9 @@ type instruction =
   | Reduce_mask of { dst : vreg; source : vreg; operation : Native_ir.mask_reduction; provenance : provenance }
   | Fadd of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fsub of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Add_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Sub_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; left : vreg; right : vreg; provenance : provenance }
   | Fmul of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fdiv of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fmin of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -73,6 +76,9 @@ let def = function
   | Reduce_mask { dst; _ }
   | Fadd { dst; _ }
   | Fsub { dst; _ }
+  | Add_i32 { dst; _ }
+  | Sub_i32 { dst; _ }
+  | Compare_i32 { dst; _ }
   | Fmul { dst; _ }
   | Fdiv { dst; _ }
   | Fmin { dst; _ }
@@ -94,6 +100,9 @@ let operands = function
   | Insert_f32 { previous; inserted; _ } -> [ previous; inserted ]
   | Fadd { left; right; _ }
   | Fsub { left; right; _ }
+  | Add_i32 { left; right; _ }
+  | Sub_i32 { left; right; _ }
+  | Compare_i32 { left; right; _ }
   | Fmul { left; right; _ }
   | Fdiv { left; right; _ }
   | Fmin { left; right; _ }
@@ -115,6 +124,9 @@ let provenance = function
   | Reduce_mask { provenance; _ }
   | Fadd { provenance; _ }
   | Fsub { provenance; _ }
+  | Add_i32 { provenance; _ }
+  | Sub_i32 { provenance; _ }
+  | Compare_i32 { provenance; _ }
   | Fmul { provenance; _ }
   | Fdiv { provenance; _ }
   | Fmin { provenance; _ }
@@ -140,6 +152,9 @@ let instruction_name = function
   | Reduce_mask _ -> "reduce.mask"
   | Fadd _ -> "fadd"
   | Fsub _ -> "fsub"
+  | Add_i32 _ -> "add.4s"
+  | Sub_i32 _ -> "sub.4s"
+  | Compare_i32 _ -> "compare.i32"
   | Fmul _ -> "fmul"
   | Fdiv _ -> "fdiv"
   | Fmin _ -> "fmin"

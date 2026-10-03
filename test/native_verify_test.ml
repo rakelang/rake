@@ -143,6 +143,55 @@ let check_selected_traversal ~profile ~traversal ~mutations ~kernel ~helper =
     (check (assemble ~profile ~source:"opaque-traversal" opaque))
 
 let () =
+  (* Independent machine objects check the verifier's newly admitted integer
+     forms. Narrow vectors and integer memory work stay outside rack kernels. *)
+  List.iter (fun (profile, vector_add, vector_compare, narrowed, memory, obligation) ->
+    let source = "integer-verifier-fixture" in
+    let check instruction =
+      let assembly = Printf.sprintf {|
+.intel_syntax noprefix
+.text
+.globl integer_kernel
+.type integer_kernel, @function
+integer_kernel:
+    %s
+    ret
+.size integer_kernel, .-integer_kernel
+.section .note.GNU-stack,"",@progbits
+|} instruction in
+      Rake.Native_verify.verify ~profile ~source ~functions:[ "integer_kernel" ]
+        (assemble ~profile ~source assembly) in
+    expect_ok (check vector_add);
+    expect_ok (check vector_compare);
+    expect_obligation obligation (check narrowed);
+    expect_obligation (if profile = Rake.Target.X86_avx2 then "no rack memory" else "literal rack loads only") (check memory))
+    [ Rake.Target.X86_sse2, "paddd xmm0, xmm1", "pcmpgtd xmm0, xmm1",
+      "vpaddd ymm0, ymm0, ymm1", "paddd xmm0, XMMWORD PTR [rax]", "one XMM per rack";
+      Rake.Target.X86_avx2, "vpaddd ymm0, ymm0, ymm1", "vpcmpgtd ymm0, ymm0, ymm1",
+      "vpaddd xmm0, xmm0, xmm1", "vpaddd ymm0, ymm0, YMMWORD PTR [rax]", "one YMM per rack";
+      Rake.Target.X86_avx512, "vpaddd zmm0, zmm0, zmm1", "vpcmpd k1, zmm0, zmm1, 1",
+      "vpaddd ymm0, ymm0, ymm1", "vpaddd zmm0, zmm0, ZMMWORD PTR [rax]", "one ZMM per rack" ];
+  let profile = Rake.Target.Aarch64_neon in
+  let source = "neon-integer-verifier-fixture" in
+  let check instruction =
+    let assembly = Printf.sprintf {|
+.arch armv8-a+simd
+.text
+.globl integer_kernel
+.type integer_kernel, %%function
+integer_kernel:
+    %s
+    ret
+.size integer_kernel, .-integer_kernel
+.section .note.GNU-stack,"",%%progbits
+|} instruction in
+    Rake.Native_verify.verify ~profile ~source ~functions:[ "integer_kernel" ]
+      (assemble ~profile ~source assembly) in
+  expect_ok (check "add v0.4s, v0.4s, v1.4s");
+  expect_ok (check "cmgt v0.4s, v0.4s, v1.4s");
+  expect_obligation "four 32-bit integer lanes" (check "add v0.8h, v0.8h, v1.8h");
+  expect_obligation "four 32-bit integer lanes" (check "cmeq v0.16b, v0.16b, v1.16b");
+  expect_obligation "no scalarized lane control" (check "add w0, w0, w1");
   (* A selected traversal extent includes control flow and embedded literals.
      Independent mutations must fail even if their mnemonics look harmless. *)
   let traversal = {|

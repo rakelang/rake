@@ -1081,13 +1081,13 @@ let rec check_predicate env (pred: predicate) : unit =
       if t <> Mask then
         type_errorf pred.loc "Predicate must be mask type, got %s" (show_concise t)
   | PCmp (l, cmp, r) ->
-      let lt = infer_expr env l in
-      let rt = infer_expr env r in
-      require_marked pred.loc l lt r rt;
       let op = match cmp with
         | CLt -> Lt | CLe -> Le | CGt -> Gt | CGe -> Ge | CEq -> Eq | CNe -> Ne
       in
-      ignore (infer_binop lt rt op pred.loc)
+      let comparison = { v = EBinop (l, op, r); loc = pred.loc } in
+      let result = infer_expr env comparison in
+      if result <> Mask then
+        type_errorf pred.loc "Predicate must be mask type, got %s" (show_concise result)
   | PIs (l, r) | PIsNot (l, r) ->
       let lt = infer_expr env l in
       let rt = infer_expr env r in

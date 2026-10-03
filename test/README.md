@@ -122,6 +122,15 @@ Exact selected lane bits cross the mixed vector/scalar C ABI. Literal
 operands, an extracted scalar, untaken roots and division, and conditions
 nested inside a through mask check the composed participation contract.
 
+`test/native_integer_rack_test.sh` compares 32-bit wrapping add/subtract,
+bitwise AND/OR/XOR and all six signed comparisons with independent scalar C
+on the four physical profiles. The oracle uses unsigned arithmetic for exact
+overflow bits and reinterprets signed predicates separately. It checks literal
+broadcasts, mask bitsets, integer/float selection through the vector C ABI,
+through/gaps coverage and still-live inputs in fused expressions. Independent
+machine objects check rejection of narrowed integer vectors, scalar arithmetic
+and memory work inside a register kernel.
+
 The shared absolute-value oracle supplies explicit binary32 input and output
 bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.
 Both direct and masked rack calls preserve magnitude bits without raising

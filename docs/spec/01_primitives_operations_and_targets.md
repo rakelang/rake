@@ -10,10 +10,10 @@ rules and the calling conventions of scratches and rakes.
 
 | Profile | Register | `f32` lanes | Status |
 | --- | --- | ---: | --- |
-| `x86-sse2` | one 128-bit XMM register, SSE2 | 4 | `f32s` scratches and rakes, as GNU assembly |
-| `x86-avx2` | one 256-bit YMM register, AVX2 and FMA3 | 8 | `f32s` scratches and rakes, as GNU assembly |
-| `x86-avx512` | one 512-bit ZMM register, AVX-512F | 16 | `f32s` scratches and rakes, as GNU assembly |
-| `aarch64-neon` | one 128-bit vector register, AAPCS64 | 4 | `f32s` scratches and rakes, as GNU assembly |
+| `x86-sse2` | one 128-bit XMM register, SSE2 | 4 | `f32s` and the 32-bit integer subset below, as GNU assembly |
+| `x86-avx2` | one 256-bit YMM register, AVX2 and FMA3 | 8 | `f32s` and the 32-bit integer subset below, as GNU assembly |
+| `x86-avx512` | one 512-bit ZMM register, AVX-512F | 16 | `f32s` and the 32-bit integer subset below, as GNU assembly |
+| `aarch64-neon` | one 128-bit vector register, AAPCS64 | 4 | `f32s` and the 32-bit integer subset below, as GNU assembly |
 | `wasm-simd128` | one `v128` | 4 | float and integer scratches and rakes, runs and whole programs, as C |
 | `wasm-simd128-relaxed` | one `v128` | 4 | `wasm-simd128` and the relaxed SIMD operations |
 | `scalar` | none | 1 | WIP*, without the one-register guarantee |
@@ -129,9 +129,39 @@ can't provide, so it rejects `fma` rather than computing it with two.
 
 ## Integer racks
 
-Integer racks are implemented for `wasm-simd128` only. On its 128-bit
-register a `u8s` rack has 16 lanes, `i16s` 8, `i32s` and `u32s` 4, and `i64s`
-and `u64s` 2. Integer arithmetic on racks wraps.
+Integer arithmetic on racks wraps. The development compiler adds a native
+`i32s` and `u32s` subset after the 0.6.0-beta tag. Both types have four lanes
+on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
+
+| Native operation | `i32s` | `u32s` |
+| --- | :-: | :-: |
+| wrapping `+` and `-` | yes | yes |
+| `bit_and`, `bit_or`, `bit_xor` | yes | yes |
+| six signed comparisons | yes | WIP* |
+| select an integer rack with a lane mask | yes | yes |
+| `all`, `any`, `bitmask` of a comparison | yes | WIP* |
+| integer literal broadcast | yes | yes |
+| integer uniform arguments, multiplication, negation, extrema, shifts, conversions and lane transfers | WIP* | WIP* |
+
+These operations stay in full vector registers. Integer masks can select
+float racks, and float masks can select integer racks. Native streams still
+accept float columns only.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch increment(values: u32s) -> u32s:
+  values + <1>
+
+scratch greater(a: i32s, b: i32s) -> i32s:
+  if a > b then a else b
+
+scratch negative_bits(values: i32s) -> u32:
+  bitmask(values < <0>)
+```
+
+WebAssembly supports a wider integer operation set, shown in the next table.
+On its 128-bit register a `u8s` rack has 16 lanes, `i16s` 8, `i32s` and
+`u32s` 4, and `i64s` and `u64s` 2.
 
 | Operation | `u8s` | `i16s` | `i32s` | `u32s` | `i64s` | `u64s` |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: |
@@ -316,7 +346,8 @@ scratch remains WIP*. Cross-lane reductions are forbidden in a `through`
 block. Native stream mask reductions remain WIP* until their partial-rack
 participation contract is implemented.
 
-Integer comparison masks remain available on WebAssembly only:
+The native profiles also reduce `i32s` comparison masks. Masks from other
+integer element types remain available on WebAssembly only:
 
 <!-- rake-check: verify wasm-simd128 -->
 ```rake
@@ -388,7 +419,9 @@ the stack, so a function that would need to is rejected.
 On x86, the function is a hidden global symbol following the System V
 convention. Parameters take the eight SSE-class argument registers in source
 order. A uniform `f32` occupies the low lane of an XMM register. A rack or
-mask uses XMM on SSE2, YMM on AVX2, or ZMM on AVX-512. The result uses register
+mask uses XMM on SSE2, YMM on AVX2, or ZMM on AVX-512. Native `i32s` and
+`u32s` use the same register class as `f32s`, with a 32-bit integer in each
+lane. The result uses register
 zero of the same class, or `xmm0` for a scalar `f32`.
 `all` and `any` return C `bool` in `al`, with the full `eax` set to zero or
 one. `bitmask` returns `uint32_t` in `eax`.

@@ -243,7 +243,7 @@ let allowed_avx2 = function
   | "vblendvps" | "vandps" | "vorps" | "vmovaps" | "ret" | "retq" ->
       true
   | "vperm2f128" | "vpermilps" | "vpermps" | "vblendps" | "vroundps" -> true
-  | "vpxor" | "vpcmpeqd" -> true
+  | "vpxor" | "vpcmpeqd" | "vpcmpgtd" | "vpaddd" | "vpsubd" -> true
   | _ -> false
 
 let is_fma profile =
@@ -321,6 +321,7 @@ let regexp_contains pattern text =
 
 let allowed_sse2 = function
   | "movaps" | "xorps" | "andps" | "orps" | "pxor" | "pcmpeqd"
+  | "paddd" | "psubd" | "pcmpgtd"
   | "addps" | "subps" | "mulps" | "divps" | "sqrtps" | "shufps"
   | "cvtps2dq" | "cvttps2dq" | "cvtdq2ps"
   | "cmpps" | "cmpeqps" | "cmpneqps" | "cmpltps" | "cmpleps"
@@ -329,6 +330,8 @@ let allowed_sse2 = function
 
 let allowed_avx512f = function
   | "vbroadcastss" | "vpxord" | "vpandd" | "vpord" | "vpternlogd"
+  | "vpaddd" | "vpsubd" | "vpcmpd" | "vpcmpeqd" | "vpcmpneqd"
+  | "vpcmpltd" | "vpcmpled" | "vpcmpnltd" | "vpcmpnled"
   | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
   | "vrndscaleps"
   | "vfmadd213ps" | "vfmadd231ps" | "vcmpps" | "vcmpeq_oqps"
@@ -367,6 +370,7 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
 
 let allowed_neon = function
   | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv" | "fmin" | "fmax"
+  | "add" | "sub" | "cmeq" | "cmgt" | "cmge"
   | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "orr"
   | "frintm" | "frintp" | "frintz" | "frintn"
   | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ext" | "ret" -> true
@@ -415,6 +419,10 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if neon_general_register operands then
     error ~source ~function_name ~obligation:"no scalarized lane control"
       (Printf.sprintf "encountered general register in %s %s" mnemonic operands)
+  else if List.mem mnemonic [ "add"; "sub"; "cmeq"; "cmgt"; "cmge" ]
+      && not (regexp_contains "^v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s,[ \\t]*v[0-9]+\\.4s$" operands) then
+    error ~source ~function_name ~obligation:"four 32-bit integer lanes"
+      (Printf.sprintf "encountered unsupported integer form in %s %s" mnemonic operands)
   else if mnemonic = "ext" && not (allow_cross_lane && valid_neon_mask_fold operands) then
     error ~source ~function_name ~obligation:"source-authorized mask fold"
       (Printf.sprintf "encountered %s %s" mnemonic operands)

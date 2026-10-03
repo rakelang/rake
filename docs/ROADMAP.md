@@ -128,7 +128,14 @@ checks cover stream tails and in-place output. Integer and Boolean uniform
 conditions remain work in progress on the physical profiles.
 
 We will bring the physical profiles up to the language's published operation
-set. The next work covers substantial maths, integer racks, integer shuffles,
+set. The development compiler now supports 32-bit integer wrapping add/subtract
+and bitwise AND/OR/XOR on all four physical profiles. Signed `i32s`
+comparisons produce masks for integer or float selection and mask reductions.
+Independent C checks exact overflow bits, signed boundary values and still-live
+inputs across the vector ABI. Other integer operations and native integer
+streams remain work in progress.
+
+The next work covers substantial maths, the remaining integer operations, integer shuffles,
 integer extraction and insertion, the remaining uniform conditionals and
 gather. A CPU profile
 will gain an operation only when its compiled result matches the interpreter

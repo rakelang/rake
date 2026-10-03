@@ -48,6 +48,9 @@ type instruction =
     }
   | Addps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Subps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Add_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Sub_i32 of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; left : vreg; right : vreg; provenance : provenance }
   | Mulps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Divps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Extreme_f32 of {
@@ -113,6 +116,9 @@ let def = function
   | Scan_f32 { dst; _ }
   | Addps { dst; _ }
   | Subps { dst; _ }
+  | Add_i32 { dst; _ }
+  | Sub_i32 { dst; _ }
+  | Compare_i32 { dst; _ }
   | Mulps { dst; _ }
   | Divps { dst; _ }
   | Extreme_f32 { dst; _ }
@@ -140,6 +146,9 @@ let operands = function
   | Shuffle_f32 { racks; _ } -> racks
   | Addps { left; right; _ }
   | Subps { left; right; _ }
+  | Add_i32 { left; right; _ }
+  | Sub_i32 { left; right; _ }
+  | Compare_i32 { left; right; _ }
   | Mulps { left; right; _ }
   | Divps { left; right; _ }
   | Extreme_f32 { left; right; _ }
@@ -163,6 +172,9 @@ let provenance = function
   | Scan_f32 { provenance; _ }
   | Addps { provenance; _ }
   | Subps { provenance; _ }
+  | Add_i32 { provenance; _ }
+  | Sub_i32 { provenance; _ }
+  | Compare_i32 { provenance; _ }
   | Mulps { provenance; _ }
   | Divps { provenance; _ }
   | Extreme_f32 { provenance; _ }
@@ -196,6 +208,9 @@ let instruction_name = function
   | Scan_f32 _ -> "strict.scan.f32"
   | Addps _ -> "vaddps"
   | Subps _ -> "vsubps"
+  | Add_i32 _ -> "vpaddd"
+  | Sub_i32 _ -> "vpsubd"
+  | Compare_i32 _ -> "compare.i32"
   | Mulps _ -> "vmulps"
   | Divps _ -> "vdivps"
   | Extreme_f32 { operation = Minimum; _ } -> "strict.min.f32"

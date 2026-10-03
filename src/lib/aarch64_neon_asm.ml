@@ -38,6 +38,9 @@ let registers = function
   | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
   | A.Fadd { dst; left; right }
   | A.Fsub { dst; left; right }
+  | A.Add_i32 { dst; left; right }
+  | A.Sub_i32 { dst; left; right }
+  | A.Compare_i32 { dst; left; right; _ }
   | A.Fmul { dst; left; right }
   | A.Fdiv { dst; left; right }
   | A.Fmin { dst; left; right }
@@ -135,6 +138,19 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "fadd %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fsub { dst; left; right } ->
       emit "fsub %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Add_i32 { dst; left; right } ->
+      emit "add %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Sub_i32 { dst; left; right } ->
+      emit "sub %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Compare_i32 { dst; predicate; left; right } ->
+      let mnemonic, left, right = match predicate with
+        | Native_ir.Eq | Native_ir.Ne -> "cmeq", left, right
+        | Native_ir.Lt -> "cmgt", right, left
+        | Native_ir.Le -> "cmge", right, left
+        | Native_ir.Gt -> "cmgt", left, right
+        | Native_ir.Ge -> "cmge", left, right in
+      emit "%s %s, %s, %s" mnemonic (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right);
+      if predicate = Native_ir.Ne then emit "mvn %s, %s" (lanes_bits dst) (lanes_bits dst)
   | A.Fmul { dst; left; right } ->
       emit "fmul %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fdiv { dst; left; right } ->

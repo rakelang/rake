@@ -24,21 +24,27 @@ let require_f32_rack function_name ?instruction description = function
         (Printf.sprintf "%s has type %s; x86 SIMD requires rack<f32>"
            description (N.string_of_typ typ))
 
+let require_word_rack function_name ?instruction description = function
+  | N.Rack (N.F32 | N.I32) -> ()
+  | typ -> fail function_name ?instruction
+      (Printf.sprintf "%s has type %s; x86 SIMD requires a rack of 32-bit lanes"
+         description (N.string_of_typ typ))
+
 let result function_name index (instruction : N.instruction) =
   match instruction.result with
   | Some result -> result
   | None -> fail function_name ~instruction:index "effect-only operations are not supported"
 
-let literal_f32 function_name index = function
-  | N.Float32_bits bits -> bits
+let literal_word_bits function_name index = function
+  | N.Float32_bits bits | N.Int32 bits -> bits
   | literal ->
       fail function_name ~instruction:index
         ("uniform rack constant has unsupported element type " ^ N.string_of_literal literal)
 
 let same_bits = function
   | [] -> None
-  | N.Float32_bits bits :: rest ->
-      if List.for_all (function N.Float32_bits other -> other = bits | _ -> false) rest then
+  | ((N.Float32_bits bits | N.Int32 bits) as first) :: rest ->
+      if List.for_all (( = ) first) rest then
         Some bits
       else None
   | _ -> None
@@ -65,6 +71,12 @@ let ensure_operand_f32 function_name environment index value =
   require_f32_rack function_name ~instruction:index
     (Printf.sprintf "operand %%%d" value)
     (find_type function_name environment index value)
+
+let ensure_operand_i32 function_name environment index value =
+  match find_type function_name environment index value with
+  | N.Rack N.I32 -> ()
+  | typ -> fail function_name ~instruction:index
+      (Printf.sprintf "operand %%%d has type %s; expected rack<i32>" value (N.string_of_typ typ))
 
 let ensure_mask function_name environment index value =
   match find_type function_name environment index value with
@@ -120,14 +132,14 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
     List.iter
       (fun (parameter : N.parameter) ->
         match parameter.typ with
-        | N.Rack N.F32 | N.Scalar N.F32 | N.Mask -> ()
+        | N.Rack (N.F32 | N.I32) | N.Scalar N.F32 | N.Mask -> ()
         | typ ->
             fail func.name
-              (Printf.sprintf "parameter %%%d has unsupported type %s; only rack<f32>, scalar<f32>, and mask parameters use the x86 SSE-class boundary"
+              (Printf.sprintf "parameter %%%d has unsupported type %s; only rack<f32>, rack<i32>, scalar<f32>, and mask parameters use the x86 SSE-class boundary"
                  parameter.id (N.string_of_typ typ)))
       func.parameters;
     (match func.result with
-    | None | Some (N.Rack N.F32) | Some (N.Scalar (N.F32 | N.I1 | N.I32)) | Some N.Mask -> ()
+    | None | Some (N.Rack (N.F32 | N.I32)) | Some (N.Scalar (N.F32 | N.I1 | N.I32)) | Some N.Mask -> ()
     | Some typ ->
         fail func.name
           ("unsupported result type " ^ N.string_of_typ typ
@@ -151,6 +163,11 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             fail func.name ~instruction:index
               ("operation requires a mask result, found " ^ N.string_of_typ typ)
       in
+      let word_rack_result () =
+        let dst, typ = result func.name index instruction in
+        require_word_rack func.name ~instruction:index "result" typ;
+        dst
+      in
       match instruction.op with
       | N.Const (N.Float32_bits bits) ->
           let dst, _ = result func.name index instruction in
@@ -172,14 +189,14 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           fail func.name ~instruction:index
             ("scalar constant " ^ N.string_of_literal literal ^ " cannot occupy a vector rack register")
       | N.Rack_splat literal ->
-          let dst = rack_result () in
-          Some (M.Uniform_f32 { dst; bits = literal_f32 func.name index literal; provenance })
+          let dst = word_rack_result () in
+          Some (M.Uniform_f32 { dst; bits = literal_word_bits func.name index literal; provenance })
       | N.Rack_const literals ->
-          let dst = rack_result () in
+          let dst = word_rack_result () in
           let lanes = (Target.info profile).f32_lanes in
           if List.length literals <> lanes then
             fail func.name ~instruction:index
-              (Printf.sprintf "%s rack constant has %d lanes; exactly %d f32 lanes are required"
+              (Printf.sprintf "%s rack constant has %d lanes; exactly %d 32-bit lanes are required"
                  (Target.profile_name profile) (List.length literals) lanes);
           (match same_bits literals with
           | Some bits -> Some (M.Uniform_f32 { dst; bits; provenance })
@@ -218,6 +235,12 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             | N.Trunc -> N.Toward_zero | N.Nearest -> N.Nearest_even
             | _ -> assert false in
           Some (M.Round_f32 { dst; source; mode; provenance })
+      | N.Binary (((N.Add | N.Sub) as operation), left, right)
+          when find_type func.name environment index left = N.Rack N.I32 ->
+          let dst = word_rack_result () in
+          ensure_operand_i32 func.name environment index right;
+          Some (if operation = N.Add then M.Add_i32 { dst; left; right; provenance }
+                else M.Sub_i32 { dst; left; right; provenance })
       | N.Binary (((N.Add | N.Sub | N.Mul | N.Div) as operation), left, right) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index left;
@@ -238,9 +261,15 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             operation = (if operation = N.Min then M.Minimum else M.Maximum);
             provenance;
           })
-      | N.Binary ((N.And | N.Or | N.Xor), _, _) ->
-          fail func.name ~instruction:index
-            "operation has no strict f32-rack mapping in the initial x86 SIMD contract"
+      | N.Binary (((N.And | N.Or | N.Xor) as operation), left, right) ->
+          let dst = word_rack_result () in
+          ensure_operand_i32 func.name environment index left;
+          ensure_operand_i32 func.name environment index right;
+          Some (match operation with
+            | N.And -> M.Mask_andps { dst; left; right; provenance }
+            | N.Or -> M.Mask_orps { dst; left; right; provenance }
+            | N.Xor -> M.Mask_xorps { dst; left; right; provenance }
+            | _ -> assert false)
       | N.Fma (multiplicand, multiplier, addend) ->
           if profile = Target.X86_sse2 then
             fail func.name ~instruction:index
@@ -249,6 +278,11 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           List.iter (ensure_operand_f32 func.name environment index)
             [ multiplicand; multiplier; addend ];
           Some (M.Fma_ps { dst; multiplicand; multiplier; addend; provenance })
+      | N.Compare (predicate, left, right)
+          when find_type func.name environment index left = N.Rack N.I32 ->
+          let dst = mask_result () in
+          ensure_operand_i32 func.name environment index right;
+          Some (M.Compare_i32 { dst; predicate; left; right; provenance })
       | N.Compare (comparison, left, right) ->
           let dst = mask_result () in
           ensure_operand_f32 func.name environment index left;
@@ -264,10 +298,10 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           in
           Some (M.Cmpps { dst; predicate; left; right; provenance })
       | N.Select { condition; if_true; if_false } ->
-          let dst = rack_result () in
+          let dst = word_rack_result () in
           ensure_mask func.name environment index condition;
-          ensure_operand_f32 func.name environment index if_true;
-          ensure_operand_f32 func.name environment index if_false;
+          List.iter (fun value -> require_word_rack func.name ~instruction:index "selected operand"
+              (find_type func.name environment index value)) [ if_true; if_false ];
           Some (M.Blendvps { dst; mask = condition; if_true; if_false; provenance })
       | N.Sanitize { mask; active; benign } ->
           let dst = rack_result () in
@@ -353,7 +387,7 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
       | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
-            "integer rack operations are part of the wasm-simd128 slice only"
+            "operation has no mapping in this native 32-bit rack profile"
     in
     let instructions = List.filter_map Fun.id (List.mapi select func.body.instructions) in
     let result =

@@ -22,6 +22,7 @@ run "native semantic differential runtime" bash test/native_backend_test.sh
 run "SSE2, AVX2 and AVX-512 scalar-oracle agreement" bash test/x86_profiles_test.sh
 run "AArch64 NEON semantic differential runtime" bash test/neon_backend_test.sh
 run "native lane-transfer bits, lane bounds and scalar C ABI" bash test/native_lane_transfer_test.sh
+run "native 32-bit integer semantics and vector C ABI" bash test/native_integer_rack_test.sh
 run "whole-program differential under wasmtime" bash test/program_test.sh
 run "wasm32 run boundary and C interop" bash test/abi_test.sh
 run "native program semantics and C ABI" bash test/native_program_test.sh

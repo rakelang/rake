@@ -23,6 +23,9 @@ type operation =
     }
   | Fadd of { dst : vector_register; left : vector_register; right : vector_register }
   | Fsub of { dst : vector_register; left : vector_register; right : vector_register }
+  | Add_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Sub_i32 of { dst : vector_register; left : vector_register; right : vector_register }
+  | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; left : vector_register; right : vector_register }
   | Fmul of { dst : vector_register; left : vector_register; right : vector_register }
   | Fdiv of { dst : vector_register; left : vector_register; right : vector_register }
   | Fmin of { dst : vector_register; left : vector_register; right : vector_register }
@@ -276,6 +279,10 @@ let allocate_function ?parameter_assignment func =
                   emit loc provenance (Reduce_mask { dst; source = p source; operation; scratch = List.hd scratch })
               | M.Fadd { left; right; _ } -> emit loc provenance (Fadd { dst; left = p left; right = p right })
               | M.Fsub { left; right; _ } -> emit loc provenance (Fsub { dst; left = p left; right = p right })
+              | M.Add_i32 { left; right; _ } -> emit loc provenance (Add_i32 { dst; left = p left; right = p right })
+              | M.Sub_i32 { left; right; _ } -> emit loc provenance (Sub_i32 { dst; left = p left; right = p right })
+              | M.Compare_i32 { predicate; left; right; _ } ->
+                  emit loc provenance (Compare_i32 { dst; predicate; left = p left; right = p right })
               | M.Fmul { left; right; _ } -> emit loc provenance (Fmul { dst; left = p left; right = p right })
               | M.Fdiv { left; right; _ } -> emit loc provenance (Fdiv { dst; left = p left; right = p right })
               | M.Fmin { left; right; _ } -> emit loc provenance (Fmin { dst; left = p left; right = p right })

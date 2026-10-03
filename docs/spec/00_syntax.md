@@ -141,10 +141,10 @@ calls nest at most 32 deep and recursion is rejected.
 | `Name` | a record |
 | `mut T` | a parameter the callee writes |
 
-`f32s` racks work on every production profile. The integer racks `u8s`,
-`i16s`, `i32s`, `u32s`, `i64s` and `u64s` are implemented for `wasm-simd128`
-only. The types `i8s`, `u16s`, `f64s` and `bools` parse but have no
-implementation yet.
+`f32s` racks work on every production profile. WebAssembly implements the
+integer racks `u8s`, `i16s`, `i32s`, `u32s`, `i64s` and `u64s`. The development
+compiler also supports [a native 32-bit integer subset](01_primitives_operations_and_targets.md#integer-racks).
+The types `i8s`, `u16s`, `f64s` and `bools` parse but have no implementation yet.
 
 ## Statements
 
