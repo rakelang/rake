@@ -243,4 +243,23 @@ exact_stream:
   expect_obligation "no scalar floating arithmetic"
     (Rake.Native_verify.verify ~profile:neon_profile
        ~source:"neon-scalar-fixture" ~functions:[ "neon_scalar" ] neon_scalar);
+  let neon_prefix = assemble ~profile:neon_profile ~source:"neon-prefix-fixture" {|
+.arch armv8-a+simd
+.text
+.globl neon_prefix
+.type neon_prefix, %function
+neon_prefix:
+    dup v1.4s, v0.s[1]
+    fadd v2.4s, v1.4s, v0.4s
+    ins v0.s[2], v2.s[0]
+    ret
+.size neon_prefix, .-neon_prefix
+.section .note.GNU-stack,"",%progbits
+|} in
+  expect_obligation "no lane extraction"
+    (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-prefix-fixture"
+      ~functions:[ "neon_prefix" ] neon_prefix);
+  expect_ok
+    (Rake.Native_verify.verify ~profile:neon_profile ~source:"neon-prefix-fixture"
+      ~functions:[ "neon_prefix" ] ~cross_lane_functions:[ "neon_prefix" ] neon_prefix);
   print_endline "native object-code verification test passed"

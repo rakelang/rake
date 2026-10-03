@@ -19,6 +19,8 @@ test/native/simple_scratch.rk	native	x86-avx2	8	native-object	pass	-
 test/native/select.rk	native	x86-avx2	8	native-object	pass	-
 test/native/scalar_parameter.rk	native	x86-avx2	8	native-object	pass	-
 test/native/absolute.rk	native	x86-avx2	8	native-object	pass	-
+test/native/extrema.rk	native	x86-avx2	8	native-object	pass	-
+test/native/rounding.rk	native	x86-avx2	8	native-object	pass	-
 test/native/predication.rk	native	x86-avx2	8	native-object	pass	-
 test/native/supported_float_rack.rk	native	x86-avx2	8	native-object	pass	-
 test/native/reductions_scans.rk	native	x86-avx2	8	native-object	pass	-

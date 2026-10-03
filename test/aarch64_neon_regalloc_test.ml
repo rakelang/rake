@@ -12,25 +12,6 @@ let expect_ok function_ =
   | Ok allocated -> allocated
   | Error error -> failwith (A.format_error error)
 
-let registers = function
-  | A.Uniform_f32 { dst; _ } -> [ dst ]
-  | A.Mask_const { dst; _ } -> [ dst ]
-  | A.Broadcast_f32 { dst; source } -> [ dst; source ]
-  | A.Fadd { dst; left; right }
-  | A.Fsub { dst; left; right }
-  | A.Fmul { dst; left; right }
-  | A.Fdiv { dst; left; right }
-  | A.Compare { dst; left; right; _ }
-  | A.And { dst; left; right }
-  | A.Orr { dst; left; right }
-  | A.Eor { dst; left; right } -> [ dst; left; right ]
-  | A.Fsqrt { dst; source } | A.Mvn { dst; source } | A.Move { dst; source } ->
-      [ dst; source ]
-  | A.Fmla { dst; multiplicand; multiplier } -> [ dst; multiplicand; multiplier ]
-  | A.Bsl { dst_mask; if_true; if_false } -> [ dst_mask; if_true; if_false ]
-  | A.Bit { dst_false; if_true; mask } -> [ dst_false; if_true; mask ]
-  | A.Bif { dst_true; if_false; mask } -> [ dst_true; if_false; mask ]
-
 let assert_abi_registers allocated =
   List.iter
     (fun (instruction : A.instruction) ->
@@ -38,7 +19,7 @@ let assert_abi_registers allocated =
         (fun register ->
           if register >= 8 && register <= 15 then
             failwith "allocator used partially callee-saved v8..v15")
-        (registers instruction.operation))
+        (Rake.Aarch64_neon_asm.registers instruction.operation))
     allocated.A.instructions
 
 let () =

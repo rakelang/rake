@@ -21,6 +21,9 @@ compile add
 compile select
 compile scalar_parameter
 compile absolute
+compile extrema
+compile rounding
+compile reductions_scans
 compile fused_fma
 compile contracted_fma
 compile predication
@@ -57,7 +60,7 @@ fi
   -isystem "${RAKE_AARCH64_LIBC_DEV}/include" \
   -B"${RAKE_AARCH64_LIBC}/lib" -L"${RAKE_AARCH64_LIBC_STATIC}/lib" \
   "${tmp}/add.o" "${tmp}/select.o" "${tmp}/scalar_parameter.o" \
-  "${tmp}/fused_fma.o" "${tmp}/predication.o" "${tmp}/global_tines.o" "${tmp}/absolute.o" -lm \
+  "${tmp}/fused_fma.o" "${tmp}/predication.o" "${tmp}/global_tines.o" "${tmp}/absolute.o" "${tmp}/extrema.o" "${tmp}/rounding.o" "${tmp}/reductions_scans.o" -lm \
   -o "${tmp}/neon-kernels"
 qemu-aarch64 "${tmp}/neon-kernels" "${tmp}/expected.bits"
 

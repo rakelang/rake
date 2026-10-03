@@ -8,11 +8,29 @@ type vreg = int
 type provenance = Native_ir.provenance
 
 type ordered_comparison = Oeq | One | Olt | Ole | Ounord
+type extremum = Minimum | Maximum
+type f32_lane =
+  | Lane0 | Lane1 | Lane2 | Lane3 | Lane4 | Lane5 | Lane6 | Lane7
+  | Lane8 | Lane9 | Lane10 | Lane11 | Lane12 | Lane13 | Lane14 | Lane15
+
+let f32_lane_index = function
+  | Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
+  | Lane4 -> 4 | Lane5 -> 5 | Lane6 -> 6 | Lane7 -> 7
+  | Lane8 -> 8 | Lane9 -> 9 | Lane10 -> 10 | Lane11 -> 11
+  | Lane12 -> 12 | Lane13 -> 13 | Lane14 -> 14 | Lane15 -> 15
+
+let f32_lane_of_int = function
+  | 0 -> Some Lane0 | 1 -> Some Lane1 | 2 -> Some Lane2 | 3 -> Some Lane3
+  | 4 -> Some Lane4 | 5 -> Some Lane5 | 6 -> Some Lane6 | 7 -> Some Lane7
+  | 8 -> Some Lane8 | 9 -> Some Lane9 | 10 -> Some Lane10 | 11 -> Some Lane11
+  | 12 -> Some Lane12 | 13 -> Some Lane13 | 14 -> Some Lane14 | 15 -> Some Lane15
+  | _ -> None
 
 type instruction =
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Uniform_mask of { dst : vreg; value : bool; provenance : provenance }
   | Broadcastss of { dst : vreg; source : vreg; provenance : provenance }
+  | Extract_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
   | Reduce_f32 of {
       dst : vreg;
       source : vreg;
@@ -29,9 +47,17 @@ type instruction =
   | Subps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Mulps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Divps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Extreme_f32 of {
+      dst : vreg;
+      left : vreg;
+      right : vreg;
+      operation : extremum;
+      provenance : provenance;
+    }
   | Negps of { dst : vreg; source : vreg; provenance : provenance }
   | Absps of { dst : vreg; source : vreg; provenance : provenance }
   | Sqrtps of { dst : vreg; source : vreg; provenance : provenance }
+  | Round_f32 of { dst : vreg; source : vreg; mode : Native_ir.rounding_mode; provenance : provenance }
   | Fma_ps of {
       dst : vreg;
       multiplicand : vreg;
@@ -76,15 +102,18 @@ let def = function
   | Uniform_f32 { dst; _ }
   | Uniform_mask { dst; _ }
   | Broadcastss { dst; _ }
+  | Extract_f32 { dst; _ }
   | Reduce_f32 { dst; _ }
   | Scan_f32 { dst; _ }
   | Addps { dst; _ }
   | Subps { dst; _ }
   | Mulps { dst; _ }
   | Divps { dst; _ }
+  | Extreme_f32 { dst; _ }
   | Negps { dst; _ }
   | Absps { dst; _ }
   | Sqrtps { dst; _ }
+  | Round_f32 { dst; _ }
   | Fma_ps { dst; _ }
   | Cmpps { dst; _ }
   | Blendvps { dst; _ }
@@ -96,12 +125,15 @@ let def = function
 let operands = function
   | Uniform_f32 _ | Uniform_mask _ -> []
   | Broadcastss { source; _ }
+  | Extract_f32 { source; _ }
   | Reduce_f32 { source; _ }
-  | Scan_f32 { source; _ } -> [ source ]
+  | Scan_f32 { source; _ }
+  | Round_f32 { source; _ } -> [ source ]
   | Addps { left; right; _ }
   | Subps { left; right; _ }
   | Mulps { left; right; _ }
   | Divps { left; right; _ }
+  | Extreme_f32 { left; right; _ }
   | Cmpps { left; right; _ }
   | Mask_andps { left; right; _ }
   | Mask_orps { left; right; _ }
@@ -114,15 +146,18 @@ let provenance = function
   | Uniform_f32 { provenance; _ }
   | Uniform_mask { provenance; _ }
   | Broadcastss { provenance; _ }
+  | Extract_f32 { provenance; _ }
   | Reduce_f32 { provenance; _ }
   | Scan_f32 { provenance; _ }
   | Addps { provenance; _ }
   | Subps { provenance; _ }
   | Mulps { provenance; _ }
   | Divps { provenance; _ }
+  | Extreme_f32 { provenance; _ }
   | Negps { provenance; _ }
   | Absps { provenance; _ }
   | Sqrtps { provenance; _ }
+  | Round_f32 { provenance; _ }
   | Fma_ps { provenance; _ }
   | Cmpps { provenance; _ }
   | Blendvps { provenance; _ }
@@ -141,15 +176,19 @@ let instruction_name = function
   | Uniform_f32 _ -> "vbroadcastss"
   | Uniform_mask _ -> "mask.constant"
   | Broadcastss _ -> "vbroadcastss.xmm"
+  | Extract_f32 _ -> "extract.f32"
   | Reduce_f32 _ -> "strict.reduce.f32"
   | Scan_f32 _ -> "strict.scan.f32"
   | Addps _ -> "vaddps"
   | Subps _ -> "vsubps"
   | Mulps _ -> "vmulps"
   | Divps _ -> "vdivps"
+  | Extreme_f32 { operation = Minimum; _ } -> "strict.min.f32"
+  | Extreme_f32 { operation = Maximum; _ } -> "strict.max.f32"
   | Negps _ -> "vxorps.sign"
   | Absps _ -> "vandps.magnitude"
   | Sqrtps _ -> "vsqrtps"
+  | Round_f32 _ -> "round.f32"
   | Fma_ps _ -> "vfma.ps"
   | Cmpps _ -> "vcmpps"
   | Blendvps _ -> "vblendvps"

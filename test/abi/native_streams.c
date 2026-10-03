@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include "../rounding_values.h"
 
 /* Independently authored C descriptor for AMD64 and AAPCS64, including an unread byte
    column. Each populated column ends directly before inaccessible memory. */
@@ -24,6 +25,12 @@ typedef struct {
 } rake_mut_stack_Roots_v1;
 extern void paired_roots(const rake_stack_Paired_v1 *, int32_t, float *);
 extern void absolute_rows(const rake_stack_Paired_v1 *, int32_t, float *);
+extern void minimum_rows(const rake_stack_Paired_v1 *, int64_t, float *);
+extern void maximum_rows(const rake_stack_Paired_v1 *, int64_t, float *);
+extern void floor_rows(const rake_stack_Paired_v1 *, int32_t, float *);
+extern void ceil_rows(const rake_stack_Paired_v1 *, int32_t, float *);
+extern void trunc_rows(const rake_stack_Paired_v1 *, int32_t, float *);
+extern void nearest_rows(const rake_stack_Paired_v1 *, int32_t, float *);
 extern void three_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void four_roots(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void weighted_roots(const rake_stack_Paired_v1 *, int64_t, float, float, float, float *);
@@ -89,6 +96,18 @@ int main(void)
     }
     const float inputs[] = { -4.0f, -0.0f, 0.0f, 1.0f, 2.0f,
         INFINITY, -INFINITY, NAN, 25.0f, -1.0f, 0.25f };
+    const struct { uint32_t left, right, minimum, maximum; int invalid; } extrema[] = {
+        {0x00000000u, 0x80000000u, 0x80000000u, 0x00000000u, 0},
+        {0x80000000u, 0x00000000u, 0x80000000u, 0x00000000u, 0},
+        {0x80000001u, 0x00000001u, 0x80000001u, 0x00000001u, 0},
+        {0x00000001u, 0x80000001u, 0x80000001u, 0x00000001u, 0},
+        {0xbf800000u, 0x3f800000u, 0xbf800000u, 0x3f800000u, 0},
+        {0x7f800000u, 0xff800000u, 0xff800000u, 0x7f800000u, 0},
+        {0x7fc12345u, 0x3f800000u, 0x7fc00000u, 0x7fc00000u, 0},
+        {0xbf800000u, 0xffc12345u, 0x7fc00000u, 0x7fc00000u, 0},
+        {0x7f812345u, 0xbf800000u, 0x7fc00000u, 0x7fc00000u, 1},
+        {0x3f800000u, 0xff812345u, 0x7fc00000u, 0x7fc00000u, 1}
+    };
     for (size_t count = 0; count <= 65; ++count) {
         const float scale = (float)(count % 3 + 1);
         const float bias = (float)(count % 5) - 2.0f;
@@ -96,6 +115,49 @@ int main(void)
         float *columns[5];
         for (size_t column = 0; column < 5; ++column)
             columns[column] = (float *)(storage[column] + page) - count;
+        rake_stack_Paired_v1 stack = {
+            columns[0], columns[1], columns[2], columns[3], NULL
+        };
+        void (*const round_rows[])(const rake_stack_Paired_v1 *, int32_t, float *) = {
+            floor_rows, ceil_rows, trunc_rows, nearest_rows
+        };
+        const size_t round_count = sizeof(rounding_inputs) / sizeof(rounding_inputs[0]);
+        for (int mode = ROUND_FLOOR; mode <= ROUND_NEAREST; ++mode) {
+            int round_invalid = 0;
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t input = rounding_inputs[(i + count) % round_count];
+                memcpy(&columns[0][i], &input, sizeof(float));
+                round_invalid |= rounding_signaling(input);
+            }
+            feclearexcept(FE_ALL_EXCEPT);
+            round_rows[mode](&stack, (int32_t)count, columns[4]);
+            if (!!fetestexcept(FE_INVALID) != round_invalid
+                || fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW)
+                || (count == 0 && fetestexcept(FE_ALL_EXCEPT))) abort();
+            for (size_t i = 0; i < count; ++i)
+                if (!rounding_matches(bits(columns[4][i]),
+                    rounding_expected(bits(columns[0][i]), mode))) abort();
+        }
+        int invalid = 0;
+        for (size_t i = 0; i < count; ++i) {
+            memcpy(&columns[0][i], &extrema[i % 10].left, sizeof(float));
+            memcpy(&columns[1][i], &extrema[i % 10].right, sizeof(float));
+            invalid |= extrema[i % 10].invalid;
+        }
+        for (int maximum = 0; maximum < 2; ++maximum) {
+            feclearexcept(FE_ALL_EXCEPT);
+            if (maximum) maximum_rows(&stack, (int64_t)count, columns[4]);
+            else minimum_rows(&stack, (int64_t)count, columns[4]);
+            if (!!fetestexcept(FE_INVALID) != invalid
+                || fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT)) abort();
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t expected = maximum ? extrema[i % 10].maximum : extrema[i % 10].minimum;
+                const uint32_t actual = bits(columns[4][i]);
+                if (expected == 0x7fc00000u) {
+                    if ((actual & 0x7fc00000u) != 0x7fc00000u) abort();
+                } else if (actual != expected) abort();
+            }
+        }
         float expected_pair[65], expected_three[65], expected_four[65];
         for (size_t i = 0; i < count; ++i) {
             for (size_t column = 0; column < 4; ++column)
@@ -104,9 +166,6 @@ int main(void)
             expected_three[i] = expected_pair[i] + root(columns[2][i]);
             expected_four[i] = expected_three[i] + root(columns[3][i]);
         }
-        rake_stack_Paired_v1 stack = {
-            columns[0], columns[1], columns[2], columns[3], NULL
-        };
         feclearexcept(FE_ALL_EXCEPT);
         absolute_rows(&stack, (int32_t)count, columns[4]);
         if (fetestexcept(FE_ALL_EXCEPT)) abort();
@@ -226,6 +285,18 @@ int main(void)
     paired_roots(NULL, 0, NULL);
     absolute_rows(NULL, 0, NULL);
     absolute_rows(NULL, -1, NULL);
+    minimum_rows(NULL, 0, NULL);
+    minimum_rows(NULL, -1, NULL);
+    maximum_rows(NULL, 0, NULL);
+    maximum_rows(NULL, -1, NULL);
+    floor_rows(NULL, 0, NULL);
+    floor_rows(NULL, -1, NULL);
+    ceil_rows(NULL, 0, NULL);
+    ceil_rows(NULL, -1, NULL);
+    trunc_rows(NULL, 0, NULL);
+    trunc_rows(NULL, -1, NULL);
+    nearest_rows(NULL, 0, NULL);
+    nearest_rows(NULL, -1, NULL);
     paired_roots(NULL, INT32_MIN, NULL);
     paired_roots_dirty_count(NULL, 0, NULL);
     paired_roots_dirty_count(NULL, -1, NULL);

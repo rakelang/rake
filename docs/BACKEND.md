@@ -67,6 +67,45 @@ use `andps` and `vandps` with a literal magnitude mask. AVX-512F uses `vpandd`,
 and NEON uses a literal rack and `and`. These are full-width bitwise operations,
 so they introduce no floating-point exception, even for a signalling NaN.
 
+Lane-wise `min` and `max` reuse the x86 reduction pipeline's strict
+comparison-and-selection sequence. It propagates NaNs and orders −0 below
++0, with five temporary vector registers checked by the allocator. NEON
+selects `fmin` and `fmax` on complete four-lane registers. These operations
+use the caller's [floating-point environment](spec/01_primitives_operations_and_targets.md#floating-point-values).
+Under a participation mask, native lowering sanitises both operands before
+performing the operation, including in a stream's partial rack.
+
+Integral rounding uses full-width `vroundps` on AVX2, `vrndscaleps` on
+AVX-512F, and NEON's `frintm`, `frintp`, `frintz` and `frintn`. SSE2 has no
+round-to-float instruction, so it selects vector conversions and masks.
+Only magnitudes below 2²³ need conversion because larger binary32 values
+are already integral. Directed rounding corrects the truncated value,
+and a final selection preserves large values, infinities and signed zero.
+Its five temporary registers count towards allocation pressure.
+
+The [Intel instruction reference](https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf)
+describes the conversion and rounding instructions, and the
+[Arm instruction reference](https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85)
+describes NEON's integral rounding. The SSE2 conversions may raise inexact
+for a fractional active input. The other native profiles suppress that flag
+for these operations. Results have the same non-NaN bits, while the language
+doesn't require matching inexact flags between profiles. A signalling NaN
+raises invalid on native profiles only when its lane participates.
+
+NEON reductions and scans keep a left-to-right prefix in a full register.
+They broadcast each next lane with `dup` and perform three packed steps.
+Scans insert the new prefix with `ins`, and extrema explicitly select the
+language's canonical NaN. The [reduction contract](spec/06_reductions_and_scans.md)
+specifies their order and the permitted lane transfers.
+
+Float extraction consumes its literal index during instruction selection.
+SSE2 uses a full-width `shufps`. AVX2 selects the containing 128-bit group
+with `vperm2f128`, then uses `vpermilps` within that group. AVX-512F uses
+`vshuff32x4` and `vpermilps`, and NEON uses `dup`. The selected bits occupy
+the whole destination register, with its low `f32` returned through the
+scalar ABI. No scalar arithmetic or memory temporary is introduced. Bounds
+follow the selected profile, and the allocator preserves a still-live source.
+
 ## Whole programs
 
 ```text
@@ -197,7 +236,7 @@ selection check above:
 
 - On SSE2, AVX2, AVX-512 and NEON: no calls, no stack, every rack in one
   whole register, no scalar arithmetic on rack lanes, cross-lane instructions
-  only in reductions and scans, and exactly the fused multiply-adds that the
+  only in selected reductions, scans and extractions, and exactly the fused multiply-adds that the
   compiler selected.
 - For a `wasm-simd128` scratch or rake: only locals, constants and register
   instructions, with no calls, memory or branches.

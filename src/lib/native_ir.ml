@@ -33,6 +33,8 @@ type shift = Shift_left | Shift_right | Shift_right_signed
 type unary = Neg | Sqrt
   | Abs | Floor | Ceil | Trunc | Nearest  (** lane-wise; Abs and Neg also take integer racks on wasm-simd128 *)
 
+type rounding_mode = Toward_negative | Toward_positive | Toward_zero | Nearest_even
+
 type comparison = Eq | Ne | Lt | Le | Gt | Ge
 
 type reduction =
@@ -152,6 +154,14 @@ let format_error error =
 
 module IntMap = Map.Make (Int)
 module IntSet = Set.Make (Int)
+
+let constant_i32_definitions (func : func) =
+  List.fold_left
+    (fun constants (instruction : instruction) ->
+      match instruction.result, instruction.op with
+      | Some (id, Scalar I32), Const (Int32 value) -> IntMap.add id value constants
+      | _ -> constants)
+    IntMap.empty func.body.instructions
 
 type environment = typ IntMap.t
 
@@ -589,6 +599,8 @@ and verify_block verifier context ~expected_result ~yielding environment block =
       | Some mask ->
           (match instruction.op with
           | Unary (Sqrt, operand) -> require_sanitized mask 0x3f800000l operand
+          | Unary ((Floor | Ceil | Trunc | Nearest), operand) ->
+              require_sanitized mask 0x00000000l operand
           | Binary ((Add | Sub | Min | Max), left, right)
           | Compare (_, left, right) ->
               require_sanitized mask 0x00000000l left;

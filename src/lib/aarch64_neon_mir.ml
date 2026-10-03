@@ -7,16 +7,23 @@ type vreg = int
 type provenance = Native_ir.provenance
 
 type comparison = Ceq | Cgt | Cge
+type f32_lane = Lane0 | Lane1 | Lane2 | Lane3
+
+let f32_lane_index = function Lane0 -> 0 | Lane1 -> 1 | Lane2 -> 2 | Lane3 -> 3
 
 type instruction =
   | Uniform_f32 of { dst : vreg; bits : int32; provenance : provenance }
   | Mask_const of { dst : vreg; value : bool; provenance : provenance }
-  | Broadcast_f32 of { dst : vreg; source : vreg; provenance : provenance }
+  | Broadcast_f32 of { dst : vreg; source : vreg; lane : f32_lane; provenance : provenance }
+  | Insert_f32_prefix of { dst : vreg; previous : vreg; prefix : vreg; lane : f32_lane; provenance : provenance }
   | Fadd of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fsub of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fmul of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fdiv of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Fmin of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
+  | Fmax of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Fsqrt of { dst : vreg; source : vreg; provenance : provenance }
+  | Round_f32 of { dst : vreg; source : vreg; mode : Native_ir.rounding_mode; provenance : provenance }
   | Fma of {
       dst : vreg;
       multiplicand : vreg;
@@ -60,11 +67,15 @@ let def = function
   | Uniform_f32 { dst; _ }
   | Mask_const { dst; _ }
   | Broadcast_f32 { dst; _ }
+  | Insert_f32_prefix { dst; _ }
   | Fadd { dst; _ }
   | Fsub { dst; _ }
   | Fmul { dst; _ }
   | Fdiv { dst; _ }
+  | Fmin { dst; _ }
+  | Fmax { dst; _ }
   | Fsqrt { dst; _ }
+  | Round_f32 { dst; _ }
   | Fma { dst; _ }
   | Compare { dst; _ }
   | Select { dst; _ }
@@ -76,15 +87,18 @@ let def = function
 let operands = function
   | Uniform_f32 _ | Mask_const _ -> []
   | Broadcast_f32 { source; _ } -> [ source ]
+  | Insert_f32_prefix { previous; prefix; _ } -> [ previous; prefix ]
   | Fadd { left; right; _ }
   | Fsub { left; right; _ }
   | Fmul { left; right; _ }
   | Fdiv { left; right; _ }
+  | Fmin { left; right; _ }
+  | Fmax { left; right; _ }
   | Compare { left; right; _ }
   | And { left; right; _ }
   | Orr { left; right; _ }
   | Eor { left; right; _ } -> [ left; right ]
-  | Fsqrt { source; _ } | Mvn { source; _ } -> [ source ]
+  | Fsqrt { source; _ } | Round_f32 { source; _ } | Mvn { source; _ } -> [ source ]
   | Fma { multiplicand; multiplier; addend; _ } ->
       [ multiplicand; multiplier; addend ]
   | Select { mask; if_true; if_false; _ } -> [ mask; if_true; if_false ]
@@ -93,11 +107,15 @@ let provenance = function
   | Uniform_f32 { provenance; _ }
   | Mask_const { provenance; _ }
   | Broadcast_f32 { provenance; _ }
+  | Insert_f32_prefix { provenance; _ }
   | Fadd { provenance; _ }
   | Fsub { provenance; _ }
   | Fmul { provenance; _ }
   | Fdiv { provenance; _ }
+  | Fmin { provenance; _ }
+  | Fmax { provenance; _ }
   | Fsqrt { provenance; _ }
+  | Round_f32 { provenance; _ }
   | Fma { provenance; _ }
   | Compare { provenance; _ }
   | Select { provenance; _ }
@@ -112,12 +130,16 @@ let value_location func value =
 let instruction_name = function
   | Uniform_f32 _ -> "uniform.f32"
   | Mask_const _ -> "mask.const"
-  | Broadcast_f32 _ -> "dup.scalar.f32"
+  | Broadcast_f32 _ -> "dup.lane.f32"
+  | Insert_f32_prefix _ -> "insert.prefix.f32"
   | Fadd _ -> "fadd"
   | Fsub _ -> "fsub"
   | Fmul _ -> "fmul"
   | Fdiv _ -> "fdiv"
+  | Fmin _ -> "fmin"
+  | Fmax _ -> "fmax"
   | Fsqrt _ -> "fsqrt"
+  | Round_f32 _ -> "round.f32"
   | Fma _ -> "fmla"
   | Compare _ -> "fcmp"
   | Select _ -> "select"

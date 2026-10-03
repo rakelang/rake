@@ -26,6 +26,9 @@ static void store(float *values, rack result) { memcpy(values, &result, sizeof r
 #include "global_tines_oracle.h"
 #include "quiet_comparisons_oracle.h"
 #include "absolute_oracle.h"
+#include "extrema_oracle.h"
+#include "rounding_oracle.h"
+#include "reductions_oracle.h"
 
 static float from_bits(uint32_t value) {
   float result;
@@ -49,6 +52,12 @@ int main(int argc, char **argv) {
   if (comparison_failure) return comparison_failure;
   int absolute_failure = check_absolute_values();
   if (absolute_failure) return absolute_failure;
+  int extrema_failure = check_extrema();
+  if (extrema_failure) return extrema_failure;
+  int rounding_failure = check_rounding();
+  if (rounding_failure) return rounding_failure;
+  int fold_failure = check_reductions_and_scans();
+  if (fold_failure) return fold_failure;
   if (argc != 2)
     return 100;
   FILE *file = fopen(argv[1], "r");

@@ -80,6 +80,21 @@ Intel SDE, and NEON uses AArch64 QEMU. The shared independent C numerical
 oracle checks all six comparisons, including quiet NaNs and exception flags,
 on the x86 and NEON register kernels.
 
+The shared fold oracle compares the four reductions and inclusive scans with
+a volatile scalar left fold on each physical profile. Adversarial addition
+checks rounding order, and integer binary32 ordering checks strict extrema,
+signed zero and canonical NaNs at every input position. A composed scan also
+checks that allocation preserves a still-live input rack. Independent NEON
+object fixtures check source-authorised lane transfers while scalar arithmetic
+and stack use remain rejected.
+
+`test/native_extraction_test.sh` generates literal-index fixtures for every
+lane on all four physical profiles. Independent C checks the exact binary32
+bits through scalar returns and rebroadcasts, including signalling NaNs
+without floating-point exceptions. Composed arithmetic checks that extracting
+a lane preserves a still-live source rack. A one-past-the-end source checks
+the selected profile's bounds diagnostic.
+
 The shared absolute-value oracle supplies explicit binary32 input and output
 bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.
 Both direct and masked rack calls preserve magnitude bits without raising

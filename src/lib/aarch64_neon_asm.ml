@@ -33,16 +33,19 @@ let lanes_bits register = vector register ^ ".16b"
 let registers = function
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Mask_const { dst; _ } -> [ dst ]
-  | A.Broadcast_f32 { dst; source } -> [ dst; source ]
+  | A.Broadcast_f32 { dst; source; _ } -> [ dst; source ]
+  | A.Insert_f32_prefix { dst; prefix; _ } -> [ dst; prefix ]
   | A.Fadd { dst; left; right }
   | A.Fsub { dst; left; right }
   | A.Fmul { dst; left; right }
   | A.Fdiv { dst; left; right }
+  | A.Fmin { dst; left; right }
+  | A.Fmax { dst; left; right }
   | A.Compare { dst; left; right; _ }
   | A.And { dst; left; right }
   | A.Orr { dst; left; right }
   | A.Eor { dst; left; right } -> [ dst; left; right ]
-  | A.Fsqrt { dst; source } | A.Mvn { dst; source } | A.Move { dst; source } ->
+  | A.Fsqrt { dst; source } | A.Round_f32 { dst; source; _ } | A.Mvn { dst; source } | A.Move { dst; source } ->
       [ dst; source ]
   | A.Fmla { dst; multiplicand; multiplier } -> [ dst; multiplicand; multiplier ]
   | A.Bsl { dst_mask; if_true; if_false } -> [ dst_mask; if_true; if_false ]
@@ -110,8 +113,10 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
         emit "ldr %s, %s" (q dst) label
   | A.Mask_const { dst; value } ->
       emit "movi %s, #0x%02x" (lanes_bits dst) (if value then 0xff else 0)
-  | A.Broadcast_f32 { dst; source } ->
-      emit "dup %s, %s.s[0]" (lanes_f32 dst) (vector source)
+  | A.Broadcast_f32 { dst; source; lane } ->
+      emit "dup %s, %s.s[%d]" (lanes_f32 dst) (vector source) (M.f32_lane_index lane)
+  | A.Insert_f32_prefix { dst; prefix; lane } ->
+      emit "ins %s.s[%d], %s.s[0]" (vector dst) (M.f32_lane_index lane) (vector prefix)
   | A.Fadd { dst; left; right } ->
       emit "fadd %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fsub { dst; left; right } ->
@@ -120,8 +125,17 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
       emit "fmul %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fdiv { dst; left; right } ->
       emit "fdiv %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Fmin { dst; left; right } ->
+      emit "fmin %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
+  | A.Fmax { dst; left; right } ->
+      emit "fmax %s, %s, %s" (lanes_f32 dst) (lanes_f32 left) (lanes_f32 right)
   | A.Fsqrt { dst; source } ->
       emit "fsqrt %s, %s" (lanes_f32 dst) (lanes_f32 source)
+  | A.Round_f32 { dst; source; mode } ->
+      let mnemonic = match mode with
+        | Native_ir.Toward_negative -> "frintm" | Native_ir.Toward_positive -> "frintp"
+        | Native_ir.Toward_zero -> "frintz" | Native_ir.Nearest_even -> "frintn" in
+      emit "%s %s, %s" mnemonic (lanes_f32 dst) (lanes_f32 source)
   | A.Fmla { dst; multiplicand; multiplier } ->
       emit "fmla %s, %s, %s" (lanes_f32 dst) (lanes_f32 multiplicand)
         (lanes_f32 multiplier)

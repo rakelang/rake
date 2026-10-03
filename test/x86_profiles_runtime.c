@@ -25,14 +25,6 @@ extern rack choose_positive(rack, rack);
 extern rack scale_and_add(rack, float, rack);
 extern rack guarded_roots(rack);
 extern rack ordered_difference(rack, rack);
-extern float strict_reduce_add(rack);
-extern float strict_reduce_mul(rack);
-extern float strict_reduce_min(rack);
-extern float strict_reduce_max(rack);
-extern rack strict_scan_add(rack);
-extern rack strict_scan_mul(rack);
-extern rack strict_scan_min(rack);
-extern rack strict_scan_max(rack);
 
 static uint32_t bits(float value) {
     uint32_t result;
@@ -43,18 +35,12 @@ static uint32_t bits(float value) {
 #include "global_tines_oracle.h"
 #include "quiet_comparisons_oracle.h"
 #include "absolute_oracle.h"
+#include "extrema_oracle.h"
+#include "rounding_oracle.h"
+#include "reductions_oracle.h"
 
 static int equal(float actual, float expected) {
     return (isnan(actual) && isnan(expected)) || bits(actual) == bits(expected);
-}
-
-/* The language's strict extrema propagate NaN and distinguish signed zeros. */
-static float extreme(float a, float b, int maximum) {
-    if (isnan(a) || isnan(b)) return NAN;
-    if (a == 0 && b == 0)
-        return maximum ? (signbit(a) && signbit(b) ? -0.0f : 0.0f)
-                       : (signbit(a) || signbit(b) ? -0.0f : 0.0f);
-    return maximum ? (a > b ? a : b) : (a < b ? a : b);
 }
 
 int main(void) {
@@ -63,6 +49,12 @@ int main(void) {
     failure = check_quiet_comparisons();
     if (failure) return failure;
     failure = check_absolute_values();
+    if (failure) return failure;
+    failure = check_extrema();
+    if (failure) return failure;
+    failure = check_rounding();
+    if (failure) return failure;
+    failure = check_reductions_and_scans();
     if (failure) return failure;
     const float a_seed[] = {16777216, 1, -16777216, 1, 2, 3, 4, 5};
     const float b_seed[] = {2, -1, 0, 3, -2, 0.5f, 1, -4};
@@ -89,26 +81,6 @@ int main(void) {
     for (int i = 0; i < LANES; i++)
         if (!equal(result[i], !isnan(a[i]) && !isnan(b[i]) && a[i] != b[i] ? 1 : 0)) return 6;
 
-    for (int op = 0; op < 4; op++) {
-        for (int i = 0; i < LANES; i++)
-            a[i] = op == 0 ? a_seed[i % 8] : op == 1 ? b_seed[i % 8] : i % 2 ? -0.0f : 0.0f;
-        for (int scenario = 0; scenario < (op >= 2 ? 2 : 1); scenario++) {
-            if (scenario) a[LANES - 1] = NAN;
-            rack input = load(a);
-            float reduced = op == 0 ? strict_reduce_add(input) : op == 1 ? strict_reduce_mul(input)
-                            : op == 2 ? strict_reduce_min(input) : strict_reduce_max(input);
-            rack scanned = op == 0 ? strict_scan_add(input) : op == 1 ? strict_scan_mul(input)
-                           : op == 2 ? strict_scan_min(input) : strict_scan_max(input);
-            store(result, scanned);
-            volatile float prefix = a[0];
-            for (int i = 0; i < LANES; i++) {
-                if (i) prefix = op == 0 ? prefix + a[i] : op == 1 ? prefix * a[i]
-                                : extreme(prefix, a[i], op == 3);
-                if (!equal(result[i], prefix)) return 7 + op;
-            }
-            if (!equal(reduced, prefix)) return 11 + op;
-        }
-    }
     printf("x86 runtime agreement: %d lanes\n", LANES);
     return 0;
 }

@@ -69,7 +69,7 @@ let compile_body ~profile program run traverse uniforms output ~tail =
         { Native_register_assignment.register = uniform_register profile index; persistent = true }) uniforms
     @ (if tail then [ { Native_register_assignment.register = List.length !columns; persistent = false } ] else []) in
   Native_ir.floating_point_exceptions := true;
-  let func = match Native_lower.lower_expression ~definitions:program.vector_defs
+  let func = match Native_lower.lower_expression ~profile ~definitions:program.vector_defs
     ~name:run.run_name ~parameters ?mask ~fused:false run.run_loc expression with
     | Ok f -> f | Error e -> reject run.run_loc "%s" (Native_lower.format_error e) in
   if func.result <> Some (Native_ir.Rack Native_ir.F32) then
@@ -85,8 +85,10 @@ let compile_body ~profile program run traverse uniforms output ~tail =
   in
   (* Cross-lane operations need a separately defined participation contract
      for tails. Do not accept them through expression expansion. *)
-  if Native_backend.cross_lane_function_names allocated <> [] then
-    reject run.run_loc "native stream reductions and scans are work in progress";
+  if Native_backend.cross_lane_function_names allocated <> []
+      || List.exists (fun (instruction : Native_ir.instruction) ->
+          match instruction.op with Native_ir.Extract _ -> true | _ -> false) func.body.instructions then
+    reject run.run_loc "native stream reductions, scans and extractions are work in progress";
   allocated, !columns
 
 let run_traversal (run : run) =

@@ -1,0 +1,34 @@
+scratch smaller(left: f32s, right: f32s) -> f32s:
+  min(left, right)
+
+scratch larger(left: f32s, right: f32s) -> f32s:
+  max(left, right)
+
+scratch smaller_same(values: f32s) -> f32s:
+  min(values, values)
+
+scratch larger_same(values: f32s) -> f32s:
+  max(values, values)
+
+~~ Retaining either operand exercises the destructive x86 combine boundary.
+scratch smaller_keep_left(left: f32s, right: f32s) -> f32s:
+  min(left, right) + left
+
+scratch larger_keep_right(left: f32s, right: f32s) -> f32s:
+  max(left, right) + right
+
+rake masked_smaller(selectors: f32s, left: f32s, right: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into result:
+    min(left, right)
+  sweep:
+    | #selected => result
+    | _ => < -2.0>
+
+rake masked_larger(selectors: f32s, left: f32s, right: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into result:
+    max(left, right)
+  sweep:
+    | #selected => result
+    | _ => < -2.0>

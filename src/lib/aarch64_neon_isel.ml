@@ -148,7 +148,9 @@ let select_function (func : N.func) =
          ^ "; NEON selection cannot scalarize a rack result"));
     let environment = type_environment func in
     let constants = const_definitions func in
-    validate_deferred_constants func.name constants (scalar_constant_uses func);
+    let integer_constants = N.constant_i32_definitions func in
+    let constant_uses = scalar_constant_uses func in
+    validate_deferred_constants func.name constants constant_uses;
     let next = next_virtual func in
     let internal_locations = ref [] in
     let fresh loc =
@@ -156,6 +158,39 @@ let select_function (func : N.func) =
       incr next;
       internal_locations := (value, loc) :: !internal_locations;
       value
+    in
+    let fold_rack ~scan operation ~dst ~source ~loc ~provenance =
+      (* Keep the specified left fold. Pairwise/tree instructions would change
+         binary32 rounding. Every intermediate is a complete vector register. *)
+      let initial = fresh loc in
+      let strict_extreme = operation = N.Reduce_min || operation = N.Reduce_max in
+      let canonical_nan = if strict_extreme then Some (fresh loc) else None in
+      let combine prefix lane combined =
+        match operation, canonical_nan with
+        | N.Reduce_add, _ -> [ M.Fadd { dst = combined; left = prefix; right = lane; provenance } ]
+        | N.Reduce_mul, _ -> [ M.Fmul { dst = combined; left = prefix; right = lane; provenance } ]
+        | (N.Reduce_min | N.Reduce_max), Some nan ->
+            let candidate = fresh loc and ordered = fresh loc in
+            [ (if operation = N.Reduce_min then M.Fmin { dst = candidate; left = prefix; right = lane; provenance }
+               else M.Fmax { dst = candidate; left = prefix; right = lane; provenance });
+              M.Compare { dst = ordered; predicate = M.Ceq; left = candidate; right = candidate; provenance };
+              M.Select { dst = combined; mask = ordered; if_true = candidate; if_false = nan; provenance } ]
+        | _ -> invalid_arg "NEON float fold requires an arithmetic reduction"
+      in
+      let rec steps prefix previous = function
+        | [] -> []
+        | lane_index :: rest ->
+            let lane = fresh loc in
+            let combined = if rest = [] && not scan then dst else fresh loc in
+            let accumulated = if not scan then previous else if rest = [] then dst else fresh loc in
+            [ M.Broadcast_f32 { dst = lane; source; lane = lane_index; provenance } ]
+            @ combine prefix lane combined
+            @ (if scan then [ M.Insert_f32_prefix { dst = accumulated; previous; prefix = combined; lane = lane_index; provenance } ] else [])
+            @ steps combined accumulated rest
+      in
+      [ M.Broadcast_f32 { dst = initial; source; lane = M.Lane0; provenance } ]
+      @ (match canonical_nan with None -> [] | Some dst -> [ M.Uniform_f32 { dst; bits = 0x7fc00000l; provenance } ])
+      @ steps initial source [ M.Lane1; M.Lane2; M.Lane3 ]
     in
     let select index (instruction : N.instruction) =
       let provenance = instruction.provenance in
@@ -173,6 +208,13 @@ let select_function (func : N.func) =
       in
       match instruction.op with
       | N.Const (N.Float32_bits _) -> []
+      | N.Const (N.Int32 _) ->
+          let id, _ = result func.name index instruction in
+          (match N.IntMap.find_opt id constant_uses with
+          | Some operations when operations <> []
+              && List.for_all (function N.Extract { lane; _ } -> lane = id | _ -> false) operations -> []
+          | _ -> fail func.name ~instruction:index
+              "an i32 constant is only legal as a static extraction index in this vector selector")
       | N.Const literal ->
           fail func.name ~instruction:index
             ("scalar constant " ^ N.string_of_literal literal
@@ -201,7 +243,7 @@ let select_function (func : N.func) =
           | None -> (
               match find_type func.name environment index scalar with
               | N.Scalar N.F32 ->
-                  [ M.Broadcast_f32 { dst; source = scalar; provenance } ]
+                  [ M.Broadcast_f32 { dst; source = scalar; lane = M.Lane0; provenance } ]
               | typ ->
                   fail func.name ~instruction:index
                     (Printf.sprintf "rack.broadcast requires scalar<f32>, got %s"
@@ -222,6 +264,14 @@ let select_function (func : N.func) =
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
           [ M.Fsqrt { dst; source; provenance } ]
+      | N.Unary (((N.Floor | N.Ceil | N.Trunc | N.Nearest) as operation), source) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index source;
+          let mode = match operation with
+            | N.Floor -> N.Toward_negative | N.Ceil -> N.Toward_positive
+            | N.Trunc -> N.Toward_zero | N.Nearest -> N.Nearest_even
+            | _ -> assert false in
+          [ M.Round_f32 { dst; source; mode; provenance } ]
       | N.Binary (((N.Add | N.Sub | N.Mul | N.Div) as operation), left, right) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index left;
@@ -232,7 +282,13 @@ let select_function (func : N.func) =
             | N.Mul -> M.Fmul { dst; left; right; provenance }
             | N.Div -> M.Fdiv { dst; left; right; provenance }
             | _ -> assert false) ]
-      | N.Binary ((N.Min | N.Max | N.And | N.Or | N.Xor), _, _) ->
+      | N.Binary (((N.Min | N.Max) as operation), left, right) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index left;
+          ensure_operand_f32 func.name environment index right;
+          [ (if operation = N.Min then M.Fmin { dst; left; right; provenance }
+             else M.Fmax { dst; left; right; provenance }) ]
+      | N.Binary ((N.And | N.Or | N.Xor), _, _) ->
           fail func.name ~instruction:index
             "operation has no strict f32-rack mapping in the initial NEON contract"
       | N.Fma (multiplicand, multiplier, addend) ->
@@ -300,6 +356,17 @@ let select_function (func : N.func) =
           let dst = mask_result () in
           ensure_mask func.name environment index source;
           [ M.Mvn { dst; source; provenance } ]
+      | N.Reduce (((N.Reduce_add | N.Reduce_mul | N.Reduce_min | N.Reduce_max) as operation), source) ->
+          let dst, _ = result func.name index instruction in
+          ensure_operand_f32 func.name environment index source;
+          fold_rack ~scan:false operation ~dst ~source ~loc:instruction.loc ~provenance
+      | N.Scan (operation, source) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index source;
+          let operation = match operation with
+            | N.Scan_add -> N.Reduce_add | N.Scan_mul -> N.Reduce_mul
+            | N.Scan_min -> N.Reduce_min | N.Scan_max -> N.Reduce_max in
+          fold_rack ~scan:true operation ~dst ~source ~loc:instruction.loc ~provenance
       | N.Call { callee = "sqrt"; _ } ->
           fail func.name ~instruction:index
             "sqrt reached NEON selection as a call; native lowering must use Unary(Sqrt, value)"
@@ -312,10 +379,21 @@ let select_function (func : N.func) =
       | N.Loop _ ->
           fail func.name ~instruction:index
             "loops are not part of this isolated NEON register-selection slice"
-      | N.Shuffle _ | N.Reduce _ | N.Scan _ | N.Extract _ | N.Insert _ ->
+      | N.Extract { rack; lane } ->
+          let dst, typ = result func.name index instruction in
+          if typ <> N.Scalar N.F32 then
+            fail func.name ~instruction:index "f32 extraction must produce scalar<f32>";
+          ensure_operand_f32 func.name environment index rack;
+          let lane = match N.IntMap.find_opt lane integer_constants with
+            | Some 0l -> M.Lane0 | Some 1l -> M.Lane1
+            | Some 2l -> M.Lane2 | Some 3l -> M.Lane3
+            | _ -> fail func.name ~instruction:index
+                "extract requires a literal lane within the four-lane NEON rack" in
+          [ M.Broadcast_f32 { dst; source = rack; lane; provenance } ]
+      | N.Shuffle _ | N.Reduce _ | N.Insert _ ->
           fail func.name ~instruction:index
             "cross-lane operation is unavailable in the initial NEON selection contract"
-      | N.Unary ((N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
+      | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
             "integer rack operations are part of the wasm-simd128 slice only"

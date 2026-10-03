@@ -7,6 +7,34 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Literal-index `f32s` extraction compiles on SSE2, AVX2, AVX-512F and NEON.
+  The index bounds follow the selected profile's four, eight or sixteen lanes.
+  Full-width vector transfers preserve the selected bits and return through
+  the scalar C ABI. Independent C checks every lane, signalling NaNs,
+  rebroadcasts and preservation of a still-live rack.
+
+- NEON compiles the four float reductions and inclusive scans as three
+  ordered steps. Intermediate values stay in complete vector registers,
+  and strict extrema canonicalise NaNs. The object verifier permits lane
+  broadcasts and prefix insertion only for selected cross-lane functions.
+  The shared scalar oracle checks order, signed zeros and NaNs at every
+  position on all physical profiles.
+
+- Native `f32s` `floor`, `ceil`, `trunc` and ties-to-even `nearest` compile
+  on SSE2, AVX2, AVX-512F and NEON. SSE2 uses vector conversions and masks,
+  with five temporary registers checked by the no-spill allocator. Other
+  profiles use integral-rounding instructions. Independent binary32 checks
+  cover result bits, active signalling NaNs, inactive lanes and guarded tails.
+  The interpreter's `nearest` now preserves negative zero.
+
+- Native `f32s` `min` and `max` preserve NaNs and signed zero on SSE2, AVX2,
+  AVX-512F and NEON. The x86 lowering reuses the strict reduction sequence,
+  with five temporary vector registers included in allocation pressure.
+  NEON uses full-width `fmin` and `fmax`. An independent bit-ordering oracle
+  checks values, signalling-NaN exceptions and masked gaps, and guard pages
+  check every stream tail. Native floating-point control settings are now
+  explicit caller obligations.
+
 - Native `f32s` absolute values compile on SSE2, AVX2, AVX-512F and NEON as
   full-rack bitwise operations. An independent IEEE-754 bit oracle checks
   signed zeros, subnormals, infinities and NaNs, including signalling NaNs

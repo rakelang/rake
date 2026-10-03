@@ -10,6 +10,7 @@ type operation =
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Uniform_mask of { dst : vector_register; value : bool }
   | Broadcastss of { dst : vector_register; source : vector_register }
+  | Extract_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
   | Reduce_f32 of {
       dst : vector_register;
       source : vector_register;
@@ -26,9 +27,22 @@ type operation =
   | Subps of { dst : vector_register; left : vector_register; right : vector_register }
   | Mulps of { dst : vector_register; left : vector_register; right : vector_register }
   | Divps of { dst : vector_register; left : vector_register; right : vector_register }
+  | Extreme_f32 of {
+      dst : vector_register;
+      left : vector_register;
+      right : vector_register;
+      operation : M.extremum;
+      scratch : vector_register list;
+    }
   | Sqrtps of { dst : vector_register; source : vector_register }
   | Negps of { dst : vector_register; source : vector_register }
   | Absps of { dst : vector_register; source : vector_register }
+  | Round_f32 of {
+      dst : vector_register;
+      source : vector_register;
+      mode : Native_ir.rounding_mode;
+      scratch : vector_register list;
+    }
   | Fma213ps of { dst : vector_register; multiplier : vector_register; addend : vector_register }
   | Fma231ps of { dst : vector_register; multiplicand : vector_register; multiplier : vector_register }
   | Cmpps of {
@@ -242,6 +256,11 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
             | M.Uniform_f32 _ | M.Uniform_mask _ -> []
             | M.Broadcastss { source; _ } -> [ source ]
             | M.Reduce_f32 _ | M.Scan_f32 _ -> []
+            (* SSE2's final merge still needs the original input. *)
+            | M.Round_f32 _ when profile = Target.X86_sse2 -> []
+            (* The strict combine starts by copying left, retaining right
+               until its final blend. Only left may alias the destination. *)
+            | M.Extreme_f32 { left; _ } -> [ left ]
             | M.Fma_ps { addend; multiplicand; multiplier; _ } ->
                 [ addend; multiplicand; multiplier ]
             | M.Blendvps { if_false; if_true; _ } -> [ if_false; if_true ]
@@ -255,6 +274,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               let scratch_count =
                 match instruction with
                 | M.Cmpps { predicate = M.Ole; _ } when profile = Target.X86_sse2 -> 1
+                | M.Extreme_f32 _ -> 5
+                | M.Round_f32 _ when profile = Target.X86_sse2 -> 5
                 | M.Reduce_f32 { operation = (Native_ir.Reduce_add | Native_ir.Reduce_mul); _ } -> 1
                 | M.Scan_f32 { operation = (Native_ir.Scan_add | Native_ir.Scan_mul); _ } -> 2
                 | M.Reduce_f32 _ -> 6
@@ -289,6 +310,8 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               | M.Uniform_mask { value; _ } -> emit loc provenance (Uniform_mask { dst; value })
               | M.Broadcastss { source; _ } ->
                   emit loc provenance (Broadcastss { dst; source = p source })
+              | M.Extract_f32 { source; lane; _ } ->
+                  emit loc provenance (Extract_f32 { dst; source = p source; lane })
               | M.Reduce_f32 { source; operation; _ } ->
                   emit loc provenance
                     (Reduce_f32 { dst; source = p source; operation; scratch })
@@ -299,9 +322,14 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
               | M.Subps { left; right; _ } -> emit loc provenance (Subps { dst; left = p left; right = p right })
               | M.Mulps { left; right; _ } -> emit loc provenance (Mulps { dst; left = p left; right = p right })
               | M.Divps { left; right; _ } -> emit loc provenance (Divps { dst; left = p left; right = p right })
+              | M.Extreme_f32 { left; right; operation; _ } ->
+                  emit loc provenance
+                    (Extreme_f32 { dst; left = p left; right = p right; operation; scratch })
               | M.Sqrtps { source; _ } -> emit loc provenance (Sqrtps { dst; source = p source })
               | M.Negps { source; _ } -> emit loc provenance (Negps { dst; source = p source })
               | M.Absps { source; _ } -> emit loc provenance (Absps { dst; source = p source })
+              | M.Round_f32 { source; mode; _ } ->
+                  emit loc provenance (Round_f32 { dst; source = p source; mode; scratch })
               | M.Cmpps { predicate; left; right; _ } ->
                   let ordered_mask = match scratch with [] -> None | register :: _ -> Some register in
                   emit loc provenance (Cmpps { dst; predicate; left = p left; right = p right; ordered_mask })

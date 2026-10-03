@@ -74,6 +74,20 @@ let test_sqrt () =
   eval_expr ~lanes:4 [ "x", rack [| 0.0; 1.0; 2.0; 9.0 |] ] expr
   |> get |> expect_rack [| 0.0; 1.0; f32 (Float.sqrt 2.0); 3.0 |]
 
+let test_integral_rounding () =
+  (* Independently specified nearest ties and zero signs, also checked by
+     the physical-target oracle using integer binary32 decomposition. *)
+  let values = [| -0.5; -0.25; -0.0; 0.5; 1.5; 2.5; -1.5; -2.5 |] in
+  let cases = [
+    "floor", [| -1.0; -1.0; -0.0; 0.0; 1.0; 2.0; -2.0; -3.0 |];
+    "ceil", [| -0.0; -0.0; -0.0; 1.0; 2.0; 3.0; -1.0; -2.0 |];
+    "trunc", [| -0.0; -0.0; -0.0; 0.0; 1.0; 2.0; -1.0; -2.0 |];
+    "nearest", [| -0.0; -0.0; -0.0; 0.0; 2.0; 2.0; -2.0; -2.0 |];
+  ] in
+  List.iter (fun (operation, expected) ->
+    eval_expr ~lanes:8 [ "x", rack values ] (expression (ECall (operation, [ var "x" ])))
+    |> get |> expect_rack expected) cases
+
 let test_division () =
   let expr = binop (var "x") Div (float 2.0) in
   eval_expr ~lanes:4 [ "x", rack [| 1.0; -3.0; 8.0; 0.0 |] ] expr
@@ -255,6 +269,7 @@ let () =
   test_broadcast_arithmetic ();
   test_comparison_and_select ();
   test_sqrt ();
+  test_integral_rounding ();
   test_division ();
   test_explicit_fma_is_fused ();
   test_typed_error ();

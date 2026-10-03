@@ -29,6 +29,7 @@ let ir_location (loc : Ast.loc) : Ir.source_location =
 type binding = Ir.value * Ir.typ
 
 type state = {
+  profile : Target.profile;
   mutable next_value : int;
   mutable next_fused_region : int;
   mutable instructions_rev : Ir.instruction list;
@@ -403,7 +404,10 @@ let rec lower_expr state provenance (expr : expr) =
         | "abs" -> Ir.Abs | "floor" -> Ir.Floor | "ceil" -> Ir.Ceil | "trunc" -> Ir.Trunc | _ -> Ir.Nearest
       in
       (match (snd operand, unary) with
-       | Ir.Rack Ir.F32, _ -> Ok (emit state expr.loc provenance (snd operand) (Ir.Unary (unary, fst operand)))
+       | Ir.Rack Ir.F32, _ ->
+           let operand = if unary = Ir.Abs then operand
+             else sanitize_operand state expr.loc provenance 0.0 operand in
+           Ok (emit state expr.loc provenance (snd operand) (Ir.Unary (unary, fst operand)))
        | Ir.Rack (Ir.U8 | Ir.I16 | Ir.I32 | Ir.I64), Ir.Abs ->
            Ok (emit state expr.loc provenance (snd operand) (Ir.Unary (Ir.Abs, fst operand)))
        | typ, _ -> errorf expr.loc "%s of %s is not available" name (Ir.string_of_typ typ))
@@ -445,7 +449,7 @@ let rec lower_expr state provenance (expr : expr) =
           let* rack = lower_expr state provenance rack in
           (match snd rack with
            | Ir.Rack element ->
-               let lanes = 16 / element_bytes element in
+               let lanes = (Target.info state.profile).f32_lanes * 4 / element_bytes element in
                if lane_value < 0L || lane_value >= Int64.of_int lanes then
                  errorf lane.loc "lane %Ld is outside a %d-lane rack" lane_value lanes
                else
@@ -459,7 +463,7 @@ let rec lower_expr state provenance (expr : expr) =
           let* rack = lower_expr state provenance rack in
           (match snd rack with
            | Ir.Rack element ->
-               let lanes = 16 / element_bytes element in
+               let lanes = (Target.info state.profile).f32_lanes * 4 / element_bytes element in
                if lane_value < 0L || lane_value >= Int64.of_int lanes then
                  errorf lane.loc "lane %Ld is outside a %d-lane rack" lane_value lanes
                else
@@ -921,9 +925,10 @@ let result_annotation result body =
         { statement with v = SLet { binding with bind_type = result.result_type } }
     | _ -> statement) body
 
-let lower_scratch definition_loc name parameters result body =
+let lower_scratch ~profile definition_loc name parameters result body =
   let state =
     {
+      profile;
       next_value = List.length parameters;
       next_fused_region = 0;
       instructions_rev = [];
@@ -1175,9 +1180,10 @@ let lower_sweep ?outer state definition_loc (sweep : sweep) =
   let* () = bind state definition_loc sweep.sweep_binding result in
   Ok result
 
-let lower_rake definition_loc name parameters result setup tines throughs sweep =
+let lower_rake ~profile definition_loc name parameters result setup tines throughs sweep =
   let state =
     {
+      profile;
       next_value = List.length parameters;
       next_fused_region = 0;
       instructions_rev = [];
@@ -1334,11 +1340,12 @@ let callee_table definitions =
     the same rules as a scratch body. [mask] names a parameter whose lanes are
     the only active ones: a traversal's tail, under whose predication every
     exception-capable operation is sanitised. *)
-let lower_expression ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
+let lower_expression ?(profile = Target.Wasm_simd128) ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
   callees := callee_table definitions;
   global_tines := definitions;
   let state =
     {
+      profile;
       next_value = List.length parameters;
       next_fused_region = 0;
       instructions_rev = [];
@@ -1383,33 +1390,33 @@ let lower_expression ~definitions ~name ~parameters ?mask ~fused loc (expression
   | Error errors ->
       errorf loc "generated invalid native IR: %s" (String.concat "; " (List.map Ir.format_error errors))
 
-let lower_definition (definition : def) =
+let lower_definition ?(profile = Target.Wasm_simd128) (definition : def) =
   match definition.v with
   | DScratch (name, parameters, result, body) ->
-      lower_scratch definition.loc name parameters result body
+      lower_scratch ~profile definition.loc name parameters result body
   | DPack _ -> error definition.loc "pack definitions are not supported by native lowering"
   | DSingle _ -> error definition.loc "single definitions are not supported by native lowering"
   | DType _ -> error definition.loc "type aliases are not supported by native lowering"
   | DTine _ -> error definition.loc "a global tine is instantiated in a rake, not emitted as a function"
   | DRake (name, parameters, result, setup, tines, throughs, sweep) ->
-      lower_rake definition.loc name parameters result setup tines throughs sweep
+      lower_rake ~profile definition.loc name parameters result setup tines throughs sweep
   | DRun _ -> error definition.loc "run definitions are not supported by native lowering"
   | DRecord _ | DUnion _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
       errorf definition.loc "%s is lowered by the slow tier, not native scratch lowering"
         (Capabilities.id (Capabilities.feature_of_def definition.v))
 
-let lower_module module_ =
+let lower_module ~profile module_ =
   let rec lower reversed = function
     | [] -> Ok (List.rev reversed)
     | ({ v = (DPack _ | DSingle _ | DType _ | DTine _); _ } : def) :: rest ->
         lower reversed rest
     | definition :: rest ->
-        let* func = lower_definition definition in
+        let* func = lower_definition ~profile definition in
         lower (func :: reversed) rest
   in
   lower [] module_.mod_defs
 
-let lower_program program =
+let lower_program ?(profile = Target.Wasm_simd128) program =
   let definitions = List.concat_map (fun (m : module_) -> m.mod_defs) program in
   callees := callee_table definitions;
   global_tines := definitions;
@@ -1423,7 +1430,7 @@ let lower_program program =
               ("generated invalid native module: "
               ^ String.concat "; " (List.map Ir.format_error errors)))
     | module_ :: rest ->
-        let* functions = lower_module module_ in
+        let* functions = lower_module ~profile module_ in
         lower (List.rev_append functions reversed) rest
   in
   lower [] program

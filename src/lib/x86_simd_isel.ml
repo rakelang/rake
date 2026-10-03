@@ -131,7 +131,9 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
          ^ "; x86 SIMD selection cannot scalarize a rack result"));
     let environment = type_environment func in
     let constants = const_definitions func in
-    validate_deferred_constants func.name constants (scalar_constant_uses func);
+    let integer_constants = N.constant_i32_definitions func in
+    let constant_uses = scalar_constant_uses func in
+    validate_deferred_constants func.name constants constant_uses;
     let select index (instruction : N.instruction) =
       let provenance = instruction.provenance in
       let rack_result () =
@@ -148,6 +150,13 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
       in
       match instruction.op with
       | N.Const (N.Float32_bits _) -> None
+      | N.Const (N.Int32 _) ->
+          let id, _ = result func.name index instruction in
+          (match N.IntMap.find_opt id constant_uses with
+          | Some operations when operations <> []
+              && List.for_all (function N.Extract { lane; _ } -> lane = id | _ -> false) operations -> None
+          | _ -> fail func.name ~instruction:index
+              "an i32 constant is only legal as a static extraction index in this vector selector")
       | N.Mask_const value ->
           let dst = mask_result () in
           Some (M.Uniform_mask { dst; value; provenance })
@@ -193,6 +202,14 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
           Some (M.Sqrtps { dst; source; provenance })
+      | N.Unary (((N.Floor | N.Ceil | N.Trunc | N.Nearest) as operation), source) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index source;
+          let mode = match operation with
+            | N.Floor -> N.Toward_negative | N.Ceil -> N.Toward_positive
+            | N.Trunc -> N.Toward_zero | N.Nearest -> N.Nearest_even
+            | _ -> assert false in
+          Some (M.Round_f32 { dst; source; mode; provenance })
       | N.Binary (((N.Add | N.Sub | N.Mul | N.Div) as operation), left, right) ->
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index left;
@@ -204,7 +221,16 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
             | N.Mul -> M.Mulps { dst; left; right; provenance }
             | N.Div -> M.Divps { dst; left; right; provenance }
             | _ -> assert false)
-      | N.Binary ((N.Min | N.Max | N.And | N.Or | N.Xor), _, _) ->
+      | N.Binary (((N.Min | N.Max) as operation), left, right) ->
+          let dst = rack_result () in
+          ensure_operand_f32 func.name environment index left;
+          ensure_operand_f32 func.name environment index right;
+          Some (M.Extreme_f32 {
+            dst; left; right;
+            operation = (if operation = N.Min then M.Minimum else M.Maximum);
+            provenance;
+          })
+      | N.Binary ((N.And | N.Or | N.Xor), _, _) ->
           fail func.name ~instruction:index
             "operation has no strict f32-rack mapping in the initial x86 SIMD contract"
       | N.Fma (multiplicand, multiplier, addend) ->
@@ -282,10 +308,21 @@ let select_function ?(profile = Target.X86_avx2) (func : N.func) =
           let dst = rack_result () in
           ensure_operand_f32 func.name environment index source;
           Some (M.Scan_f32 { dst; source; operation; provenance })
-      | N.Shuffle _ | N.Extract _ | N.Insert _ ->
+      | N.Extract { rack; lane } ->
+          let dst, typ = result func.name index instruction in
+          if typ <> N.Scalar N.F32 then
+            fail func.name ~instruction:index "f32 extraction must produce scalar<f32>";
+          ensure_operand_f32 func.name environment index rack;
+          (match N.IntMap.find_opt lane integer_constants with
+          | Some lane when lane >= 0l && lane < Int32.of_int (Target.info profile).f32_lanes ->
+              let lane = Option.get (M.f32_lane_of_int (Int32.to_int lane)) in
+              Some (M.Extract_f32 { dst; source = rack; lane; provenance })
+          | _ -> fail func.name ~instruction:index
+              "extract requires a literal lane within the selected profile's rack")
+      | N.Shuffle _ | N.Insert _ ->
           fail func.name ~instruction:index
             "cross-lane operation is unavailable in the initial x86 SIMD selection contract"
-      | N.Unary ((N.Floor | N.Ceil | N.Trunc | N.Nearest), _) | N.Reinterpret _ | N.Relaxed _
+      | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ | N.Shift _ | N.Binary (N.Andnot, _, _) ->
           fail func.name ~instruction:index
             "integer rack operations are part of the wasm-simd128 slice only"

@@ -26,6 +26,30 @@ run absolute_rows(input: stack Paired, <count: i32>) -> f32:
   for row in input using f32s up to <count>:
     yield abs(row.first)
 
+run minimum_rows(input: stack Paired, <count: i64>) -> f32:
+  for row in input using f32s up to <count>:
+    yield min(row.first, row.second)
+
+run maximum_rows(input: stack Paired, <count: i64>) -> f32:
+  for row in input using f32s up to <count>:
+    yield max(row.first, row.second)
+
+run floor_rows(input: stack Paired, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield floor(row.first)
+
+run ceil_rows(input: stack Paired, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield ceil(row.first)
+
+run trunc_rows(input: stack Paired, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield trunc(row.first)
+
+run nearest_rows(input: stack Paired, <count: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    yield nearest(row.first)
+
 run three_roots(input: stack Paired, <count: i64>) -> f32:
   for row in input using f32s up to <count>:
     let first = nonnegative_root(row.first)

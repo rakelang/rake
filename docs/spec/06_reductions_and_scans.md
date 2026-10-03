@@ -87,15 +87,35 @@ reduction leaves the rack, and a scan orders its lanes.
 | `x86-sse2` | yes | WIP* |
 | `x86-avx2` | yes | WIP* |
 | `x86-avx512` | yes | WIP* |
-| `aarch64-neon` | WIP* | WIP* |
+| `aarch64-neon` | yes | WIP* |
 | `wasm-simd128` | yes | yes |
 
 *WIP: work in progress. The compiler rejects these operations on these profiles.*
 
+NEON reductions and scans are available in the development compiler after
+0.6.0-beta. The tagged compiler still rejects them.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch running_total(values: f32s) -> f32s:
+  scan_sum(values)
+```
+
 On SSE2, AVX2 and AVX-512, a fold takes three, seven or fifteen ordered
 steps respectively. The steps use shuffles,
 permutations, blends and packed arithmetic, and a reduction's scalar returns
-in `xmm0`. On `wasm-simd128`, each of a reduction's three steps moves lane `i`
+in `xmm0`.
+
+NEON also takes three ordered steps. Each broadcasts the next lane into a
+complete register with `dup`, then applies full-width arithmetic to the
+running prefix. A scan inserts that prefix into the corresponding lane with
+`ins`. A reduction returns the low `f32` lane of `v0`, following AAPCS64.
+For strict extrema, `fmin` or `fmax` supplies the numerical result, followed
+by a quiet comparison and selection of `0x7fc00000` if it is NaN.
+The allocator accounts for these intermediate registers, and the object
+verifier permits their lane transfers only in selected cross-lane functions.
+
+On `wasm-simd128`, each of a reduction's three steps moves lane `i`
 to lane 0 with one `i8x16.shuffle` and combines it with the running value. A
 scan keeps the running prefix in a rack and, for lanes 1 to 3, combines the
 previous prefix with lane `i` and shuffles the result into lane `i`. A
@@ -103,5 +123,7 @@ minimum or maximum step is `f32x4.min` or `f32x4.max`, then an `f32x4.ne`
 self-comparison of each operand, a `v128.or` and a `v128.bitselect` of the
 canonical NaN, because WebAssembly leaves a NaN result's payload unspecified.
 `all` and `any` are the mask width's `all_true` and `v128.any_true`.
+The physical profiles share an independent scalar C oracle that checks
+left-fold rounding, zero signs, canonical extrema and NaNs at every position.
 `test/program/vector_tier.rk` compares the four reductions, `scan_sum`,
 `scan_maximum`, `all`, `any` and `bitmask` with the interpreter.

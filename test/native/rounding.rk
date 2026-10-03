@@ -1,0 +1,46 @@
+scratch round_floor(values: f32s) -> f32s:
+  floor(values)
+
+scratch round_ceil(values: f32s) -> f32s:
+  ceil(values)
+
+scratch round_trunc(values: f32s) -> f32s:
+  trunc(values)
+
+scratch round_nearest(values: f32s) -> f32s:
+  nearest(values)
+
+scratch nearest_keep_source(values: f32s) -> f32s:
+  nearest(values) + values
+
+rake masked_floor(selectors: f32s, values: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into result:
+    floor(values)
+  sweep:
+    | #selected => result
+    | _ => < -2.0>
+
+rake masked_ceil(selectors: f32s, values: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into result:
+    ceil(values)
+  sweep:
+    | #selected => result
+    | _ => < -2.0>
+
+rake masked_trunc(selectors: f32s, values: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into result:
+    trunc(values)
+  sweep:
+    | #selected => result
+    | _ => < -2.0>
+
+rake masked_nearest(selectors: f32s, values: f32s) -> f32s:
+  tine #selected means selectors >= <0.0>
+  through #selected into result:
+    nearest(values)
+  sweep:
+    | #selected => result
+    | _ => < -2.0>

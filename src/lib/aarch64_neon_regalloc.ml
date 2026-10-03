@@ -13,12 +13,16 @@ type vector_register = int
 type operation =
   | Uniform_f32 of { dst : vector_register; bits : int32 }
   | Mask_const of { dst : vector_register; value : bool }
-  | Broadcast_f32 of { dst : vector_register; source : vector_register }
+  | Broadcast_f32 of { dst : vector_register; source : vector_register; lane : M.f32_lane }
+  | Insert_f32_prefix of { dst : vector_register; prefix : vector_register; lane : M.f32_lane }
   | Fadd of { dst : vector_register; left : vector_register; right : vector_register }
   | Fsub of { dst : vector_register; left : vector_register; right : vector_register }
   | Fmul of { dst : vector_register; left : vector_register; right : vector_register }
   | Fdiv of { dst : vector_register; left : vector_register; right : vector_register }
+  | Fmin of { dst : vector_register; left : vector_register; right : vector_register }
+  | Fmax of { dst : vector_register; left : vector_register; right : vector_register }
   | Fsqrt of { dst : vector_register; source : vector_register }
+  | Round_f32 of { dst : vector_register; source : vector_register; mode : Native_ir.rounding_mode }
   | Fmla of {
       dst : vector_register;
       multiplicand : vector_register;
@@ -232,6 +236,7 @@ let allocate_function ?parameter_assignment func =
             match instruction with
             | M.Uniform_f32 _ | M.Mask_const _ -> []
             | M.Broadcast_f32 { source; _ } -> [ source ]
+            | M.Insert_f32_prefix { previous; _ } -> [ previous ]
             | M.Fma { addend; _ } -> [ addend ]
             | M.Select { mask; if_false; if_true; _ } -> [ mask; if_false; if_true ]
             | _ -> operands
@@ -243,13 +248,20 @@ let allocate_function ?parameter_assignment func =
               (match instruction with
               | M.Uniform_f32 { bits; _ } -> emit loc provenance (Uniform_f32 { dst; bits })
               | M.Mask_const { value; _ } -> emit loc provenance (Mask_const { dst; value })
-              | M.Broadcast_f32 { source; _ } ->
-                  emit loc provenance (Broadcast_f32 { dst; source = p source })
+              | M.Broadcast_f32 { source; lane; _ } ->
+                  emit loc provenance (Broadcast_f32 { dst; source = p source; lane })
+              | M.Insert_f32_prefix { previous; prefix; lane; _ } ->
+                  if reused <> Some previous then
+                    emit loc provenance (Move { dst; source = p previous });
+                  emit loc provenance (Insert_f32_prefix { dst; prefix = p prefix; lane })
               | M.Fadd { left; right; _ } -> emit loc provenance (Fadd { dst; left = p left; right = p right })
               | M.Fsub { left; right; _ } -> emit loc provenance (Fsub { dst; left = p left; right = p right })
               | M.Fmul { left; right; _ } -> emit loc provenance (Fmul { dst; left = p left; right = p right })
               | M.Fdiv { left; right; _ } -> emit loc provenance (Fdiv { dst; left = p left; right = p right })
+              | M.Fmin { left; right; _ } -> emit loc provenance (Fmin { dst; left = p left; right = p right })
+              | M.Fmax { left; right; _ } -> emit loc provenance (Fmax { dst; left = p left; right = p right })
               | M.Fsqrt { source; _ } -> emit loc provenance (Fsqrt { dst; source = p source })
+              | M.Round_f32 { source; mode; _ } -> emit loc provenance (Round_f32 { dst; source = p source; mode })
               | M.Fma { multiplicand; multiplier; addend; _ } ->
                   let addend_register = p addend in
                   if reused <> Some addend then

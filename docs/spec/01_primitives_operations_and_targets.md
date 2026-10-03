@@ -48,8 +48,9 @@ unavailable on every profile.
 ## Float racks
 
 The table shows operations on `f32s` racks in the development compiler.
-Physical profiles gained `abs` after the 0.6.0-beta tag, so the tagged
-compiler still rejects it on those profiles.
+Physical profiles gained `abs`, `min`, `max` and integral rounding after the 0.6.0-beta tag,
+so the tagged compiler still rejects them on those profiles. Native float
+extraction and NEON folds are also development features after that tag.
 
 | Operation | `x86-sse2` | `x86-avx2` | `x86-avx512` | `aarch64-neon` | `wasm-simd128` |
 | --- | :-: | :-: | :-: | :-: | :-: |
@@ -57,11 +58,13 @@ compiler still rejects it on those profiles.
 | comparisons, `and` `or` `not` on masks, `select`, `if` on a mask | yes | yes | yes | yes | yes |
 | `fma(a, b, c)` | ISA limit† | yes | yes | yes | ISA limit† |
 | `abs` | yes | yes | yes | yes | yes |
-| `min` `max` `floor` `ceil` `trunc` `nearest` | WIP* | WIP* | WIP* | WIP* | yes |
+| `min` `max` | yes | yes | yes | yes | yes |
+| `floor` `ceil` `trunc` `nearest` | yes | yes | yes | yes | yes |
 | `exp` `log` `log2` `tanh` | WIP* | WIP* | WIP* | WIP* | yes |
 | `if` on a uniform condition | WIP* | WIP* | WIP* | WIP* | yes |
-| `sum` `product` `minimum` `maximum`, and the scans | yes | yes | yes | WIP* | yes |
-| `all` `any` `bitmask`, `extract` `insert` `shuffle` | WIP* | WIP* | WIP* | WIP* | yes |
+| `sum` `product` `minimum` `maximum`, and the scans | yes | yes | yes | yes | yes |
+| `extract` | yes | yes | yes | yes | yes |
+| `all` `any` `bitmask`, `insert` `shuffle` | WIP* | WIP* | WIP* | WIP* | yes |
 
 *WIP: work in progress. Compilation fails for these cells.* †SSE2 and strict
 WebAssembly SIMD have no fused multiply-add instruction. Their rejection of
@@ -69,7 +72,7 @@ explicit `fma` preserves its single-rounding semantics, rather than indicating
 an unfinished lowering. Relaxed WebAssembly SIMD is a separate opt-in profile.
 
 A scratch or rake may return a rack or a mask on every profile, a scalar from
-a reduction on the x86 profiles and `wasm-simd128`, and a `bool` from `all` or
+a float reduction or extraction on every profile, and a `bool` from `all` or
 `any` on `wasm-simd128`. `%` has no float form, and `true` and `false` have
 no rack form: a mask comes from a comparison. `sin`, `cos`, `tan`, `pow` and
 `atan2` type-check but have no lowering, so the compiler rejects them on every
@@ -87,10 +90,32 @@ scratch magnitudes(values: f32s) -> f32s:
   abs(values)
 ```
 
-On `wasm-simd128`, `min(a, b)` and
-`max(a, b)` are IEEE 754 minimum and maximum: NaN if either lane is NaN, and
-−0 below +0. `floor`, `ceil`, `trunc` and `nearest` round to an integral
-value, `nearest` with ties to even. `fma(a, b, c)` is `a * b + c` with one
+`min(a, b)` and `max(a, b)` are IEEE 754 minimum and maximum on every
+implemented profile: a quiet NaN if either lane is NaN, and −0 below +0.
+The native x86 profiles use vector comparisons and selections, with five
+temporary registers included in the no-spill allocation check. NEON uses
+full-width `fmin` and `fmax`.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch clamp(values: f32s, <low: f32>, <high: f32>) -> f32s:
+  min(max(values, <low>), <high>)
+```
+
+`floor`, `ceil`, `trunc` and `nearest` round each lane to an integral float
+on every implemented profile. `floor` rounds towards negative infinity,
+`ceil` towards positive infinity, and `trunc` towards zero. `nearest` chooses
+the nearest integer with ties to even, so 1.5 becomes 2 and 2.5 also becomes 2.
+A zero result retains the input's sign, including −0.5 rounding to −0.
+Infinities stay unchanged and NaNs become quiet NaNs.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch whole_values(values: f32s) -> f32s:
+  nearest(values)
+```
+
+`fma(a, b, c)` is `a * b + c` with one
 rounding. It says the program depends on that rounding, which `wasm-simd128`
 can't provide, so it rejects `fma` rather than computing it with two.
 
@@ -166,6 +191,32 @@ scratch step_east(here: u64s, open: u64s, board: u64s, <carry: u32>) -> u64s:
   bit_or(here, bit_and(moved, board))
 ```
 
+## Lane extraction
+
+`extract(values, 3)` takes lane 3 of a rack and returns its scalar value.
+Lane indices start at zero and must be integer literals within the selected
+profile's width: 0–3 on SSE2 and NEON, 0–7 on AVX2, and 0–15 on AVX-512.
+`wasm-simd128` supports extraction from its float and integer rack types.
+The physical profiles currently support `f32s` only.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+scratch fourth(values: f32s) -> f32:
+  extract(values, 3)
+
+scratch add_fourth(values: f32s) -> f32s:
+  let <picked: f32> = extract(values, 3)
+  values + <picked>
+```
+
+The first scratch returns one scalar. The second broadcasts that scalar back
+across the rack before adding it to the original values. Native extraction
+uses full-width vector lane transfers, then returns the selected low lane
+through the scalar C ABI. It preserves the selected bits, including a
+signalling NaN, without floating-point arithmetic or exceptions.
+Native stream traversal still rejects extraction until its partial-rack
+participation contract is implemented.
+
 ## Shuffles and bitmasks
 
 `shuffle(a, [i0, i1, ...])` builds a rack from lanes of `a` chosen by static
@@ -191,12 +242,25 @@ Float arithmetic is IEEE 754 binary32, rounded to nearest with ties to even.
 Every comparison with a NaN operand is false, `!=` included, so `a != b`
 means that `a` and `b` are ordered and different.
 
+Native kernels inherit the caller's floating-point environment. The caller
+must select round-to-nearest with ties to even and disable flushing subnormals
+to zero: `FTZ` and `DAZ` are clear in x86's `MXCSR`, and `FZ` is clear in
+AArch64's `FPCR`. NEON also requires `FPCR.AH` clear on processors with
+alternative floating-point handling. That bit changes `fmin` and `fmax`'s
+NaN and signed-zero rules, as the [Arm instruction reference](https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85)
+describes. Rake doesn't change these control registers on entry or exit.
+
 Native CPU comparisons don't raise invalid-operation exceptions for quiet
 NaNs. SSE2 implements `<` and `<=` by checking for ordered operands, making
 unordered operands benign, then comparing the racks. NEON uses that approach
 for its ordered inequalities and `!=`. Their extra mask and operand registers
 are included in the allocator's pressure check. Signalling NaNs can still
 raise an invalid-operation exception.
+
+Native `min` and `max` likewise leave quiet NaNs quiet and raise invalid
+for an active signalling NaN. Their masked lowering substitutes benign
+operands in inactive lanes, so a signalling NaN in a gap cannot raise that
+exception.
 
 `wasm-simd128` contracts nothing, so the target and `rakec --interpret`
 agree on every result bit that isn't a NaN. `x86-avx2`, `x86-avx512` and `aarch64-neon`
@@ -290,12 +354,15 @@ then disassembles the object and checks register kernels:
 
 - x86 profiles: only instructions from the profile's list, no calls, no stack
   register, no memory operand except a constant load relative to `rip`, every
-  rack in a whole XMM, YMM or ZMM register, cross-lane instructions only in reductions and
-  scans, and exactly the fused multiply-adds the compiler selected.
+  rack in a whole XMM, YMM or ZMM register, cross-lane instructions only in
+  selected reductions, scans and extractions, and exactly the fused
+  multiply-adds the compiler selected.
 - `aarch64-neon`: only listed instructions, no calls, no stack, no `v8` to
   `v15`, no general or scalar float registers, loads only of literal
-  constants, every rack in a whole 128-bit register, no lane extraction except
-  the `dup` of a uniform, and exactly the selected fused multiply-adds.
+  constants, every rack in a whole 128-bit register, lane broadcasts and
+  prefix insertion only in selected cross-lane functions (reductions, scans
+  and extractions, plus uniform broadcasts), and exactly the selected fused
+  multiply-adds.
 - `wasm-simd128`: a scratch or rake contains only locals, constants, and SIMD
   and scalar register instructions, with no calls, memory or branches.
 

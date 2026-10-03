@@ -21,3 +21,6 @@ scratch strict_scan_min(values: f32s) -> f32s:
 
 scratch strict_scan_max(values: f32s) -> f32s:
   scan_maximum(values)
+
+scratch scan_keep_source(values: f32s) -> f32s:
+  scan_sum(values) + values

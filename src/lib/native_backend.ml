@@ -53,7 +53,7 @@ let lower ~config program =
   Native_ir.floating_point_exceptions := not (Target.is_wasm config.Target.profile);
   Wasm_simd128_c.relaxed := !Native_lower.relaxed;
   Wasm_simd128_toolchain.relaxed := !Native_lower.relaxed;
-  match Native_lower.lower_program program with
+  match Native_lower.lower_program ~profile:config.profile program with
   | Ok native_ir -> (
       match Native_optimize.optimize ~profile:config.profile native_ir with
       | Ok optimized -> Ok optimized
@@ -201,13 +201,22 @@ let cross_lane_function_names = function
               (fun (instruction : X86_simd_regalloc.instruction) ->
                 match instruction.operation with
                 | X86_simd_regalloc.Reduce_f32 _
-                | X86_simd_regalloc.Scan_f32 _ -> true
+                | X86_simd_regalloc.Scan_f32 _
+                | X86_simd_regalloc.Extract_f32 _ -> true
                 | _ -> false)
               func.instructions
           then Some func.name
           else None)
         allocated
-  | Neon _ | Wasm _ -> []
+  | Neon allocated ->
+      List.filter_map (fun (func : Aarch64_neon_regalloc.func) ->
+        if List.exists (fun (instruction : Aarch64_neon_regalloc.instruction) ->
+          match instruction.operation with
+          | Aarch64_neon_regalloc.Broadcast_f32 { lane; _ } -> lane <> Aarch64_neon_mir.Lane0
+          | Aarch64_neon_regalloc.Insert_f32_prefix _ -> true
+          | _ -> false) func.instructions
+        then Some func.name else None) allocated
+  | Wasm _ -> []
 
 let verify_allocated_object ~source ~(config : Target.config) allocated object_bytes =
   let functions = function_names allocated in

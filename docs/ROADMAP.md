@@ -85,13 +85,29 @@ profile for a sufficiently documented ISA. All are designs today.
 The development compiler now lowers `f32s` absolute values to vector bitwise
 operations on SSE2, AVX2, AVX-512F and NEON. Independent bit-pattern checks
 cover signed zeros, subnormals, infinities and NaNs, including masked use.
+Lane-wise `min` and `max` also compile on all four physical profiles,
+preserving NaNs and signed zero. The independent numerical oracle checks
+floating-point exceptions as well as results, and guarded stream checks
+cover every partial rack.
+
+`floor`, `ceil`, `trunc` and ties-to-even `nearest` now compile on all four
+physical profiles too. SSE2 uses vector conversions and selections without
+requiring SSE4.1. An independent binary32 oracle checks ties, signed zeros,
+subnormals and nonfinite values, and guarded stream checks cover masked tails.
+
+Float reductions and scans now compile on NEON too. All four physical profiles
+preserve the specified left-to-right fold, including each binary32 rounding.
+The shared scalar oracle checks NaNs at every position and signed-zero extrema.
+
+Literal-index float extraction now compiles on all four physical profiles.
+Its lane bounds follow each profile's rack width. Independent C checks every
+lane's bits, scalar return values and reuse of the original rack.
 
 We will bring the physical profiles up to the language's published operation
-set. The next work covers substantial maths, integer racks, shuffles, lane
-extraction and insertion, reductions and scans, uniform conditionals and
-gather. A CPU profile will gain an operation only when its compiled result
-matches the interpreter and their object verifier proves the selected vector
-sequence.
+set. The next work covers substantial maths, integer racks, shuffles, integer
+extraction and lane insertion, uniform conditionals and gather. A CPU profile
+will gain an operation only when its compiled result matches the interpreter
+and its object verifier proves the selected vector sequence.
 
 ### Complete cross-profile operation coverage
 

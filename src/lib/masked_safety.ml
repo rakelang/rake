@@ -11,7 +11,7 @@ type builtin = Sanitized | Unsupported
 
 let classify_builtin = function
   | "sqrt" | "sin" | "cos" | "tan" | "exp" | "log" | "abs"
-  | "floor" | "ceil" | "min" | "max" | "pow" | "atan2" | "select" ->
+  | "floor" | "ceil" | "trunc" | "nearest" | "min" | "max" | "pow" | "atan2" | "select" ->
       Sanitized
   | _ -> Unsupported
 

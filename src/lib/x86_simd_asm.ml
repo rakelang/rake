@@ -38,8 +38,11 @@ let registers = function
   | A.Uniform_f32 { dst; _ } -> [ dst ]
   | A.Uniform_mask { dst; _ } -> [ dst ]
   | A.Broadcastss { dst; source } -> [ dst; source ]
+  | A.Extract_f32 { dst; source; _ } -> [ dst; source ]
   | A.Reduce_f32 { dst; source; scratch; _ }
   | A.Scan_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
+  | A.Round_f32 { dst; source; scratch; _ } -> dst :: source :: scratch
+  | A.Extreme_f32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
   | A.Addps { dst; left; right }
   | A.Subps { dst; left; right }
   | A.Mulps { dst; left; right }
@@ -88,7 +91,10 @@ let validate_function profile (func : A.func) =
         let rec check = function
           | [] -> Ok ()
           | ({ A.operation; loc; _ } : A.instruction) :: rest -> (
-              match List.find_opt (fun register -> register < 0 || register >= Target.x86_register_count profile) (registers operation) with
+              match operation with
+              | A.Extract_f32 { lane; _ } when M.f32_lane_index lane >= (Target.info profile).f32_lanes ->
+                  Error { function_name = func.name; loc; message = "extraction lane is outside the selected profile's rack" }
+              | _ -> match List.find_opt (fun register -> register < 0 || register >= Target.x86_register_count profile) (registers operation) with
               | None -> check rest
               | Some register ->
                   Error
@@ -242,6 +248,7 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
   | A.Broadcastss { dst; source } ->
       if sse then (move dst source; emit "shufps %s, %s, 0x00" (ymm dst) (ymm dst))
       else emit "vbroadcastss %s, xmm%d" (ymm dst) source
+  | A.Extract_f32 { dst; source; lane } -> splat_lane dst source (M.f32_lane_index lane)
   | A.Reduce_f32 { dst; source; operation; scratch } ->
       splat_lane dst source 0;
       let lane_register, strict_temporaries =
@@ -295,6 +302,10 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       binary "mulps" dst left right
   | A.Divps { dst; left; right } ->
       binary "divps" dst left right
+  | A.Extreme_f32 { dst; left; right; operation; scratch } ->
+      move dst left;
+      strict_combine (match operation with M.Minimum -> `Min | M.Maximum -> `Max)
+        dst right scratch
   | A.Sqrtps { dst; source } -> emit "%ssqrtps %s, %s" (if sse then "" else "v") (ymm dst) (ymm source)
   | A.Negps { dst; source } ->
       let sign = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.min_int))) in
@@ -304,6 +315,47 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
       let magnitude = intern pool (Vector_f32 (List.init lanes (fun _ -> Int32.max_int))) in
       if sse then (move dst source; emit "andps %s, XMMWORD PTR [rip + %s]" (ymm dst) magnitude)
       else emit "%s %s, %s, %s PTR [rip + %s]" (if avx512 then "vpandd" else "vandps") (ymm dst) (ymm source) memory magnitude
+  | A.Round_f32 { dst; source; mode; scratch } ->
+      let immediate = match mode with
+        | Native_ir.Nearest_even -> 0 | Native_ir.Toward_negative -> 1
+        | Native_ir.Toward_positive -> 2 | Native_ir.Toward_zero -> 3 in
+      if not sse then
+        (* Bit 3 suppresses inexact, not invalid from a signaling NaN. *)
+        emit "%s %s, %s, 0x%02x" (if avx512 then "vrndscaleps" else "vroundps")
+          (ymm dst) (ymm source) (immediate lor 8)
+      else (match scratch with
+        | [ small; safe; rounded; mask; constant ] ->
+            (* Every finite binary32 value at or above 2^23 is integral.
+               Convert only smaller magnitudes, avoiding integer overflow
+               and preserving infinities. This is SSE2, not SSE4.1 ROUNDPS. *)
+            load_splat constant 0x7fffffffl;
+            logical "andps" safe source constant;
+            load_splat constant 0x4b000000l;
+            compare M.Olt small safe constant;
+            logical "andps" safe source small;
+            emit "%s %s, %s"
+              (if mode = Native_ir.Nearest_even then "cvtps2dq" else "cvttps2dq")
+              (ymm rounded) (ymm safe);
+            emit "cvtdq2ps %s, %s" (ymm rounded) (ymm rounded);
+            load_splat constant 0x80000000l;
+            logical "andps" mask source constant;
+            logical "orps" rounded rounded mask;
+            (match mode with
+            | Native_ir.Toward_negative | Native_ir.Toward_positive ->
+                if mode = Native_ir.Toward_negative then compare M.Olt mask safe rounded
+                else compare M.Olt mask rounded safe;
+                load_splat constant (if mode = Native_ir.Toward_negative then 0xbf800000l else 0x3f800000l);
+                logical "andps" constant constant mask;
+                binary "addps" safe rounded constant;
+                (* Selecting only corrected lanes preserves an unchanged -0. *)
+                blend rounded mask safe rounded
+            | Native_ir.Toward_zero | Native_ir.Nearest_even -> ());
+            compare M.Ounord mask source source;
+            load_splat constant 0x00400000l;
+            logical "andps" constant constant mask;
+            logical "orps" dst source constant;
+            blend dst small rounded dst
+        | _ -> invalid_arg "SSE2 rounding requires five temporary registers")
   | A.Fma213ps { dst; multiplier; addend } ->
       emit "vfmadd213ps %s, %s, %s" (ymm dst) (ymm multiplier) (ymm addend)
   | A.Fma231ps { dst; multiplicand; multiplier } ->

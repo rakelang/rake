@@ -242,7 +242,7 @@ let allowed_avx2 = function
   | "vcmpunordps"
   | "vblendvps" | "vandps" | "vorps" | "vmovaps" | "ret" | "retq" ->
       true
-  | "vperm2f128" | "vpermilps" | "vblendps" -> true
+  | "vperm2f128" | "vpermilps" | "vblendps" | "vroundps" -> true
   | "vpxor" | "vpcmpeqd" -> true
   | _ -> false
 
@@ -298,7 +298,7 @@ let verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded =
       (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if cross_lane_mnemonic mnemonic && not allow_cross_lane then
     error ~source ~function_name ~obligation:"source-authorized cross-lane operation"
-      (Printf.sprintf "encountered %s outside a reduction or scan" mnemonic)
+      (Printf.sprintf "encountered %s outside a source-authorized reduction, scan or extraction" mnemonic)
   else if not (allowed_avx2 mnemonic) then
     let obligation =
       if String.starts_with ~prefix:"f" mnemonic
@@ -320,6 +320,7 @@ let regexp_contains pattern text =
 let allowed_sse2 = function
   | "movaps" | "xorps" | "andps" | "orps" | "pxor" | "pcmpeqd"
   | "addps" | "subps" | "mulps" | "divps" | "sqrtps" | "shufps"
+  | "cvtps2dq" | "cvttps2dq" | "cvtdq2ps"
   | "cmpps" | "cmpeqps" | "cmpneqps" | "cmpltps" | "cmpleps"
   | "cmpunordps" | "cmpordps" | "ret" | "retq" -> true
   | _ -> false
@@ -327,6 +328,7 @@ let allowed_sse2 = function
 let allowed_avx512f = function
   | "vbroadcastss" | "vpxord" | "vpandd" | "vpord" | "vpternlogd"
   | "vaddps" | "vsubps" | "vmulps" | "vdivps" | "vsqrtps"
+  | "vrndscaleps"
   | "vfmadd213ps" | "vfmadd231ps" | "vcmpps" | "vcmpeq_oqps"
   | "vcmpneq_oqps" | "vcmplt_oqps" | "vcmple_oqps" | "vcmpeqps"
   | "vcmpunordps" | "vptestmd" | "vblendmps" | "vmovaps"
@@ -361,8 +363,9 @@ let verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function
   else Ok ()
 
 let allowed_neon = function
-  | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv"
+  | "movi" | "ldr" | "dup" | "fadd" | "fsub" | "fmul" | "fdiv" | "fmin" | "fmax"
   | "fsqrt" | "fmla" | "fcmeq" | "fcmgt" | "fcmge" | "and" | "orr"
+  | "frintm" | "frintp" | "frintz" | "frintn"
   | "eor" | "mvn" | "bsl" | "bit" | "bif" | "mov" | "ret" -> true
   | _ -> false
 
@@ -376,15 +379,19 @@ let neon_scalar_register operands =
 let neon_general_register operands =
   regexp_contains "\\(^\\|[, \\t]+\\)[xw][0-9]+\\b" operands
 
-let valid_neon_dup operands =
+let valid_neon_dup ~allow_cross_lane operands =
   regexp_contains
-    "^v\\([0-9]+\\)\\.4s,[ \\t]*v\\([0-9]+\\)\\.s\\[0\\]$"
+    ("^v\\([0-9]+\\)\\.4s,[ \\t]*v\\([0-9]+\\)\\.s\\["
+     ^ (if allow_cross_lane then "[0-3]" else "0") ^ "\\]$")
     operands
+
+let valid_neon_prefix_insert operands =
+  regexp_contains "^v[0-9]+\\.s\\[[1-3]\\],[ \\t]*v[0-9]+\\.s\\[0\\]$" operands
 
 let valid_neon_literal_load operands =
   regexp_contains "^q[0-9]+,[ \\t]*[0-9a-f]+[ \\t]*<[^>]+>$" operands
 
-let verify_neon_instruction ~source ~function_name decoded =
+let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   let mnemonic = decoded.mnemonic in
   let operands = decoded.operands in
   if mnemonic = "bl" || mnemonic = "blr" then
@@ -407,7 +414,9 @@ let verify_neon_instruction ~source ~function_name decoded =
     error ~source ~function_name ~obligation:"full-register operations"
       (Printf.sprintf "q-register form is only permitted for literal loads: %s %s"
          mnemonic operands)
-  else if contains operands ".s[" && not (mnemonic = "dup" && valid_neon_dup operands) then
+  else if contains operands ".s[" && not (
+    (mnemonic = "dup" && valid_neon_dup ~allow_cross_lane operands)
+    || (mnemonic = "mov" && allow_cross_lane && valid_neon_prefix_insert operands)) then
     error ~source ~function_name ~obligation:"no lane extraction"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if neon_scalar_register operands then
@@ -431,7 +440,7 @@ let verify_instruction ~profile ~allow_cross_lane ~source ~function_name decoded
       verify_avx2_instruction ~allow_cross_lane ~source ~function_name decoded
   | (Target.X86_sse2 | Target.X86_avx512) as profile ->
       verify_extended_x86_instruction ~profile ~allow_cross_lane ~source ~function_name decoded
-  | Target.Aarch64_neon -> verify_neon_instruction ~source ~function_name decoded
+  | Target.Aarch64_neon -> verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded
   | profile ->
       error ~source ~function_name ~obligation:"target profile"
         (Printf.sprintf "profile '%s' has no object verifier"

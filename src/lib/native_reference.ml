@@ -493,10 +493,12 @@ let round_half_even x =
   else
     let floor = Float.floor x in
     let diff = x -. floor in
-    if diff > 0.5 then floor +. 1.0
-    else if diff < 0.5 then floor
-    else if Float.rem floor 2.0 = 0.0 then floor
-    else floor +. 1.0
+    let rounded =
+      if diff > 0.5 then floor +. 1.0
+      else if diff < 0.5 then floor
+      else if Float.rem floor 2.0 = 0.0 then floor
+      else floor +. 1.0 in
+    if rounded = 0.0 then Float.copy_sign rounded x else rounded
 
 let rec eval_expr ~lanes env (expr : expr) =
   if lanes <= 0 then error expr.loc (Invalid_lane_count lanes)
