@@ -21,11 +21,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Allow opam's sandbox namespaces on Ubuntu
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo install -m 644 .github/opam.apparmor /etc/apparmor.d/rake-opam-ci
+          sudo apparmor_parser --replace /etc/apparmor.d/rake-opam-ci
       - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3
         with:
           ocaml-compiler: ${{ matrix.ocaml }}
           opam-disable-sandboxing: false
-          cache-prefix: v3-070-sandbox
+          cache-prefix: v3-070-userns
       - name: Check the package sandbox configuration
         if: runner.os != 'Windows'
         shell: bash
@@ -33,6 +39,7 @@ jobs:
           for action in build install remove; do
             opam option --global "wrap-$action-commands" | grep -F sandbox
           done
+          opam exec -- bash "$OPAMROOT/opam-init/hooks/sandbox.sh" build true
       - run: opam install . --deps-only --with-test --with-doc
       - run: opam lint rake.opam
       - name: Install with the package's declared tests and documentation
@@ -68,6 +75,10 @@ jobs:
       RAKE_WASM_OBJDUMP: /nonexistent-rake-disassembler
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Allow opam's sandbox namespaces on Ubuntu
+        run: |
+          sudo install -m 644 .github/opam.apparmor /etc/apparmor.d/rake-opam-ci
+          sudo apparmor_parser --replace /etc/apparmor.d/rake-opam-ci
       - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3
         with:
           ocaml-compiler: ${{ matrix.ocaml }}
@@ -78,6 +89,7 @@ jobs:
           for action in build install remove; do
             opam option --global "wrap-$action-commands" | grep -F sandbox
           done
+          opam exec -- bash "$OPAMROOT/opam-init/hooks/sandbox.sh" build true
       - name: Install the oldest compatible dependency solution
         run: opam install . --solver=builtin-0install --with-test --with-doc
       - run: opam list --installed
@@ -89,9 +101,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Allow opam's sandbox namespaces on Ubuntu
+        run: |
+          sudo install -m 644 .github/opam.apparmor /etc/apparmor.d/rake-opam-ci
+          sudo apparmor_parser --replace /etc/apparmor.d/rake-opam-ci
       - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3
         with:
           ocaml-compiler: "5.4"
+          opam-disable-sandboxing: false
+          cache-prefix: v3-070-userns
+      - name: Check the package sandbox configuration
+        run: |
+          for action in build install remove; do
+            opam option --global "wrap-$action-commands" | grep -F sandbox
+          done
+          opam exec -- bash "$OPAMROOT/opam-init/hooks/sandbox.sh" build true
       - run: sudo apt-get update && sudo apt-get install -y binutils binutils-aarch64-linux-gnu clang llvm
       - run: opam install . --deps-only --with-test
       - run: opam exec -- dune build @runtest-native @runtest-wasm
@@ -142,9 +166,21 @@ jobs:
           repository: rakelang/tree-sitter-rake
           ref: 4c3c350e2a65171090d5d0ff32e9b86144646a9d # 0.7.0 grammar
           path: .grammar
+      - name: Allow opam's sandbox namespaces on Ubuntu
+        run: |
+          sudo install -m 644 .github/opam.apparmor /etc/apparmor.d/rake-opam-ci
+          sudo apparmor_parser --replace /etc/apparmor.d/rake-opam-ci
       - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7
         with:
           ocaml-compiler: "5.4"
+          opam-disable-sandboxing: false
+          cache-prefix: v3-070-userns
+      - name: Check the package sandbox configuration
+        run: |
+          for action in build install remove; do
+            opam option --global "wrap-$action-commands" | grep -F sandbox
+          done
+          opam exec -- bash "$OPAMROOT/opam-init/hooks/sandbox.sh" build true
       - uses: actions/setup-node@v6
         with:
           node-version: "24"

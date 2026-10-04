@@ -1,0 +1,8 @@
+# Match setup-ocaml's signed opam binary in the GitHub-hosted tool cache.
+# Adapted from ocaml/opam's shell/install.sh AppArmor profile.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile rake-opam-ci /opt/hostedtoolcache/opam/**/opam flags=(unconfined) {
+  userns,
+}
