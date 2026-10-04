@@ -20,8 +20,8 @@ in three ways:
 Indices count elements, never bytes, and there is no pointer arithmetic. An
 access is checked: it traps, before touching memory, unless every element it
 reads or writes is in bounds. `view[unchecked <i>]` and
-`view[unchecked indices]` drop the check, and the program then promises that
-the access is in bounds. An unchecked access out of bounds is outside Rake's
+`view[unchecked indices]` drop the check. The caller is responsible for
+keeping the access in bounds. An unchecked access out of bounds is outside Rake's
 semantics. Slow code uses the same `[unchecked i]` spelling for its elements.
 
 Inside a mask, only the active lanes take part. The mask of a memory access is
@@ -97,8 +97,8 @@ view, and produce no value. The checked scatter would check, before its first
 store, that every active index is in bounds and that no two active lanes have
 the same index, and trap otherwise, leaving memory unchanged. The unchecked
 scatter would require both. Two active lanes with one destination have no
-first-wins or last-wins meaning: excluding them lets a native scatter
-instruction run without an order the machine doesn't promise. A scatter would
+first-wins or last-wins meaning: unique destinations let a native scatter
+instruction store its lanes in any order. A scatter would
 be excluded from fused regions, and allowed under a mask only where the
 backend can suppress every inactive store.
 

@@ -1,0 +1,7 @@
+scratch bounded_sine(values: f32s) -> f32s:
+  let square = values * values
+  let fifth = <0.0000027557319223985893> * square - <0.0001984126984126984>
+  let fourth = fifth * square + <0.008333333333333333>
+  let third = fourth * square - <0.16666666666666666>
+  let second = third * square + <1.0>
+  values * second

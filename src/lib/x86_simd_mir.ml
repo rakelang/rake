@@ -58,6 +58,7 @@ type instruction =
   | Neg_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Abs_i32 of { dst : vreg; source : vreg; provenance : provenance }
   | Shift_i32 of { dst : vreg; source : vreg; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift; provenance : provenance }
+  | Shift_uniform_i32 of { dst : vreg; source : vreg; count : vreg; shift : Native_ir.shift; provenance : provenance }
   | Compare_i32 of { dst : vreg; predicate : Native_ir.comparison; unsigned : bool; left : vreg; right : vreg; provenance : provenance }
   | Mulps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
   | Divps of { dst : vreg; left : vreg; right : vreg; provenance : provenance }
@@ -135,6 +136,7 @@ let def = function
   | Neg_i32 { dst; _ }
   | Abs_i32 { dst; _ }
   | Shift_i32 { dst; _ }
+  | Shift_uniform_i32 { dst; _ }
   | Compare_i32 { dst; _ }
   | Mulps { dst; _ }
   | Divps { dst; _ }
@@ -164,6 +166,7 @@ let operands = function
   | Scan_f32 { source; _ }
   | Round_f32 { source; _ } -> [ source ]
   | Shift_i32 { source; _ } -> [ source ]
+  | Shift_uniform_i32 { source; count; _ } -> [ source; count ]
   | Insert_word32 { previous; inserted; _ } -> [ previous; inserted ]
   | Shuffle_word { racks; _ } -> racks
   | Addps { left; right; _ }
@@ -207,6 +210,7 @@ let provenance = function
   | Neg_i32 { provenance; _ }
   | Abs_i32 { provenance; _ }
   | Shift_i32 { provenance; _ }
+  | Shift_uniform_i32 { provenance; _ }
   | Compare_i32 { provenance; _ }
   | Mulps { provenance; _ }
   | Divps { provenance; _ }
@@ -256,6 +260,7 @@ let instruction_name = function
   | Neg_i32 _ -> "zero.sub.i32"
   | Abs_i32 _ -> "abs.i32"
   | Shift_i32 _ -> "shift.bits.i32"
+  | Shift_uniform_i32 _ -> "shift.bits.uniform.i32"
   | Compare_i32 { unsigned; _ } -> if unsigned then "compare.u32" else "compare.i32"
   | Mulps _ -> "vmulps"
   | Divps _ -> "vdivps"

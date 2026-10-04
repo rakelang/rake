@@ -713,23 +713,25 @@ let rec infer_expr env (expr: Ast.expr) : t =
       let operand_t = infer_expr env operand in
       (match operation, operand_t with
       | (RAdd | RMul | RMin | RMax), Rack SFloat -> Scalar SFloat
+      | (RAdd | RMul | RMin | RMax), Rack ((SInt | SUint) as element) -> Scalar element
       | (RAnd | ROr), Mask -> Scalar SBool
       | (RAnd | ROr), actual ->
           type_errorf expr.loc "all and any reduce a mask, got %s" (show_concise actual)
       | (RAdd | RMul | RMin | RMax), actual ->
           type_errorf expr.loc
-            "Floating-point reduction requires float rack, got %s"
+            "Arithmetic reduction requires f32s, i32s or u32s, got %s"
             (show_concise actual))
 
   | EScan (operation, operand) ->
       let operand_t = infer_expr env operand in
       (match operation, operand_t with
       | (RAdd | RMul | RMin | RMax), Rack SFloat -> Rack SFloat
+      | (RAdd | RMul | RMin | RMax), Rack ((SInt | SUint) as element) -> Rack element
       | (RAnd | ROr), _ ->
           type_errorf expr.loc "Logical prefix scans are not defined"
       | (RAdd | RMul | RMin | RMax), actual ->
           type_errorf expr.loc
-            "Floating-point prefix scan requires float rack, got %s"
+            "Arithmetic prefix scan requires f32s, i32s or u32s, got %s"
             (show_concise actual))
 
   | EShuffle (operand, indices) ->
@@ -864,9 +866,10 @@ and infer_binop t1 t2 op loc =
         type_errorf loc "Unsupported comparison operands: %s and %s"
           (show_concise t1) (show_concise t2)
   | And | Or ->
-      if t1 = Mask && t2 = Mask then Mask
+      if t1 = Scalar SBool && t2 = Scalar SBool then Scalar SBool
+      else if (t1 = Mask || t1 = Scalar SBool) && (t2 = Mask || t2 = Scalar SBool) then Mask
       else
-        type_errorf loc "Logical operators require mask operands, got %s and %s"
+        type_errorf loc "Logical operators require Boolean or mask operands, got %s and %s"
           (show_concise t1) (show_concise t2)
   | Pipe ->
       let _ = loc in unavailable_invariant Capabilities.Expr_pipeline_operator
@@ -884,8 +887,8 @@ and infer_unop t op loc =
         | Rack (SInt8 | SInt16 | SInt | SInt64) | Scalar (SInt8 | SInt16 | SInt | SInt64) -> t
         | _ -> type_errorf loc "Unary minus requires a float or signed integer rack/scalar, got %s" (show_concise t))
   | Not ->
-      if t = Mask then Mask
-      else type_errorf loc "Logical not requires mask operand, got %s" (show_concise t)
+      if t = Mask || t = Scalar SBool then t
+      else type_errorf loc "Logical not requires a Boolean or mask, got %s" (show_concise t)
 
 (** Built-ins whose implementation is compiler-known and has no observable
     side effects. Fused bindings may contain calls only from this set; Rake

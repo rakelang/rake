@@ -72,6 +72,25 @@ run shifted_words(input: stack Words, <count: i32>) -> i32:
   for row in input using i32s up to <count>:
     yield shift_bits_right_signed(row.first, 31)
 
+run runtime_shifted_words(input: stack Words, <count: i32>, <amount: u32>) -> i32:
+  for row in input using i32s up to <count>:
+    let first = row.first
+    yield shift_bits_right_signed(first, <amount>) + first
+
+run runtime_unsigned_words(input: stack Words, <count: i64>, <amount: u32>) -> u32:
+  for row in input using u32s up to <count>:
+    let bits = row.bits
+    let moved = shift_bits_left(bits, <amount>)
+    yield shift_bits_right(moved, <amount>) + bits
+
+run runtime_update_words(input: mut stack Words, <count: i32>, <amount: u32>):
+  for row in input using i32s up to <count>:
+    input.second <- shift_bits_right_signed(row.first, <amount>)
+
+run runtime_write_words(input: stack Words, <count: i64>, result: mut stack WordResults, <amount: u32>):
+  for row in input using u32s up to <count>:
+    result.unsigned_value <- shift_bits_left(row.bits, <amount>)
+
 run reinterpreted_words(input: stack Words, <count: i32>) -> i32:
   for row in input using i32s up to <count>:
     let bits = row.bits
@@ -112,6 +131,58 @@ run paired_roots(input: stack Paired, <count: i32>) -> f32:
     let first = nonnegative_root(row.first)
     let second = nonnegative_root(row.second)
     yield first + second
+
+run repeated_roots(input: stack Paired, <count: i64>, <limit: i32>) -> f32:
+  for row in input using f32s up to <count>:
+    let first = nonnegative_root(row.first)
+    total := first
+    let initial = total
+    repeat <i: i32> from <-1> up to <2>:
+      let <take: bool> = <i> < <limit>
+      let before = total
+      inner := before
+      repeat <j: i32> from <0> up to <2>:
+        inner <- inner + first
+      total <- if <take> then inner else before + initial
+    repeat <empty: i32> from <2> up to <2>:
+      total <- total / <0.0>
+    yield total + initial
+
+run repeated_words(input: stack Words, <count: i32>) -> i32:
+  for row in input using i32s up to <count>:
+    total := row.first
+    repeat <i: i32> from <0> up to <10>:
+      let before = total
+      total <- total + total
+      total <- total + before
+    yield total
+
+run repeated_destination(input: stack Words, <count: i64>, result: mut stack WordResults):
+  for row in input using u32s up to <count>:
+    values: [2]u32s := row.bits
+    repeat <i: i32> from <0> up to <2>:
+      let before = values[<i>]
+      values[<i>] <- before + <1>
+    result.unsigned_value <- values[<0>] * values[<1>]
+
+run compound_roots(input: stack Paired, <count: i64>, <enabled: bool>, <left: f32>, <right: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    let <gate: bool> = <enabled>
+    let <ordered: bool> = <gate> and <left> <= <right>
+    let <take: bool> = not <ordered> or <left> = <right>
+    yield if <take> then sqrt(row.first) else -sqrt(-row.first)
+
+run compound_update(input: mut stack Paired, <count: i32>, <enabled: bool>, <value: f32>):
+  for row in input using f32s up to <count>:
+    let <gate: bool> = not <enabled>
+    let <take: bool> = <gate> or <value> > <0.0>
+    input.second <- if <take> then sqrt(row.first) else -sqrt(-row.first)
+
+run bound_comparison(input: stack Paired, <count: i32>, <enabled: bool>, <value: f32>) -> f32:
+  for row in input using f32s up to <count>:
+    let <compared: bool> = <value> > <0.0>
+    let <take: bool> = <enabled> and <compared>
+    yield if <take> then sqrt(row.first) else -sqrt(-row.first)
 
 run absolute_rows(input: stack Paired, <count: i32>) -> f32:
   for row in input using f32s up to <count>:
@@ -226,6 +297,13 @@ slow main() -> i32:
   let written = i32(result[1])
   absolute_rows(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, result)
   let magnitude_sum = i32(result[0] + result[8])
+  let compound_values: [9]f32 = [9.0; 9]
+  repeated_roots(stack Paired { first: compound_values, second: b, third: a, fourth: b, tag: tags }, <9>, <1>, result)
+  if result[0] != 21.0 or result[8] != 21.0:
+    return 1
+  compound_roots(stack Paired { first: compound_values, second: b, third: a, fourth: b, tag: tags }, <9>, <false>, <0.0>, <1.0>, result)
+  if result[1] != 3.0 or result[8] != 3.0:
+    return 1
   positives: [9]f32 := [4.0; 9]
   signed_roots(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, result)
   if result[0] != 2.0 or result[8] != 2.0:
@@ -247,6 +325,15 @@ slow main() -> i32:
   let unsigned_a: [9]u32 = [0, 2147483647, 2147483648, 4294967295, 1, 2147483649, 4294967294, 17, 29]
   signed_output: [9]i32 := [0; 9]
   unsigned_output: [9]u32 := [0; 9]
+  repeated_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
+  for i from 0 up to 9:
+    if signed_output[i] != wrap_mul(signed_a[i], 59049):
+      return 1
+  repeated_destination(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output })
+  for i from 0 up to 9:
+    let incremented = wrap_add(unsigned_a[i], 1)
+    if unsigned_output[i] != wrap_mul(incremented, incremented):
+      return 1
   reinterpreted_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
   for i from 0 up to 9:
     let raw = if unsigned_a[i] >= 2147483648 then i64(unsigned_a[i]) else i64(unsigned_a[i]) + 1

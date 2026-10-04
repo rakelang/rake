@@ -102,8 +102,8 @@ let () =
   let source = C.emit ~source:"requantise.rk" [ select integer_kernel ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
-    [ "v128_t requantise(v128_t pair, v128_t weights, v128_t sums, v128_t scale)";
-      "wasm_i32x4_dot_i16x8(pair, weights)"; "wasm_i32x4_add(sums, step0)"; "wasm_f32x4_convert_i32x4(step1)";
+    [ "v128_t requantise(v128_t pair_, v128_t weights_, v128_t sums_, v128_t scale_)";
+      "wasm_i32x4_dot_i16x8(pair_, weights_)"; "wasm_i32x4_add(sums_, step0)"; "wasm_f32x4_convert_i32x4(step1)";
       "wasm_f32x4_nearest("; "wasm_i32x4_trunc_sat_f32x4("; "wasm_i16x8_narrow_i32x4("; "wasm_i16x8_splat(0)";
       "wasm_i16x8_max(" ]
 
@@ -120,17 +120,17 @@ let () =
   let source = C.emit ~source:"shared.rk" [ selected ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
-    [ "wasm_f32x4_add(a, b)"; "wasm_f32x4_mul(step0, step0)"; "wasm_f32x4_gt(step0, a)";
-      "wasm_v128_bitselect(step1, b, step2)" ];
+    [ "wasm_f32x4_add(a_, b_)"; "wasm_f32x4_mul(step0, step0)"; "wasm_f32x4_gt(step0, a_)";
+      "wasm_v128_bitselect(step1, b_, step2)" ];
   let source = C.emit ~source:"extremes.rk" [ select float_extremes ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
-    [ "wasm_f32x4_max(a, b)"; "wasm_f32x4_min(step0, b)" ];
+    [ "wasm_f32x4_max(a_, b_)"; "wasm_f32x4_min(step0, b_)" ];
   let source = C.emit ~source:"side_bits.rk" [ select side_bits ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
-    [ "uint32_t side_bits(v128_t a, v128_t b)";
-      "wasm_i8x16_shuffle(a, b, 0, 4, 8, 12, 16, 20, 24, 28, 0, 0, 0, 0, 0, 0, 0, 0)";
+    [ "uint32_t side_bits(v128_t a_, v128_t b_)";
+      "wasm_i8x16_shuffle(a_, b_, 0, 4, 8, 12, 16, 20, 24, 28, 0, 0, 0, 0, 0, 0, 0, 0)";
       "wasm_i8x16_ne(step0, step1)"; "wasm_i8x16_bitmask(step2)" ];
   print_endline "wasm-simd128 selection and C emission tests passed"
 
@@ -162,6 +162,6 @@ let () =
   let source = C.emit ~source:"spread.rk" [ select bits_kernel ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
-    [ "v128_t spread_east(v128_t here, v128_t open, v128_t board, uint32_t wrap)";
-      "wasm_v128_and(here, open)"; "wasm_i64x2_shl("; ", 1)"; "wasm_u64x2_shr("; ", wrap)";
+    [ "v128_t spread_east(v128_t here_, v128_t open_, v128_t board_, uint32_t wrap_)";
+      "wasm_v128_and(here_, open_)"; "wasm_i64x2_shl("; ", 1)"; "wasm_u64x2_shr("; ", wrap_)";
       "wasm_v128_or("; "wasm_v128_andnot(" ]

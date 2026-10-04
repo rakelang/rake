@@ -244,6 +244,16 @@ let verify_allocated_object ~source ~(config : Target.config) allocated object_b
       | Error error -> Error { stage = Verify; message = Wasm_simd128_toolchain.format_error error })
   | X86 _ | Neon _ ->
     let cross_lane_functions = cross_lane_function_names allocated in
+    let uniform_shift_counts = match allocated with
+      | X86 (_, functions) -> List.map (fun (func : X86_simd_regalloc.func) ->
+          func.name, List.fold_left (fun count (instruction : X86_simd_regalloc.instruction) ->
+            count + (match instruction.operation with X86_simd_regalloc.Shift_uniform_i32 _ -> 1 | _ -> 0))
+            0 func.instructions) functions
+      | Neon functions -> List.map (fun (func : Aarch64_neon_regalloc.func) ->
+          func.name, List.fold_left (fun count (instruction : Aarch64_neon_regalloc.instruction) ->
+            count + (match instruction.operation with Aarch64_neon_regalloc.Shift_uniform_i32 _ -> 1 | _ -> 0))
+            0 func.instructions) functions
+      | Wasm _ -> [] in
     let integer_argument_transfers = match allocated with
       | X86 (_, functions) -> List.map (fun (func : X86_simd_regalloc.func) ->
           func.name, List.filter_map (fun (instruction : X86_simd_regalloc.instruction) ->
@@ -262,6 +272,7 @@ let verify_allocated_object ~source ~(config : Target.config) allocated object_b
       Native_verify.verify ~profile:config.profile ~source ~functions
         ~cross_lane_functions
         ~integer_argument_transfers
+        ~uniform_shift_counts
         ~integer_result_functions:(integer_result_function_names allocated)
         ~expected_fma_count:(fma_count allocated) object_bytes
     with

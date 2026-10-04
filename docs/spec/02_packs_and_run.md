@@ -221,16 +221,47 @@ The unreleased development compiler supports an input stack and an `i32` or
 uniform `f32`, `i32`, `u32` or `bool` arguments within the C register limits.
 One traversal using `f32s`, `i32s` or `u32s` yields a stream of the matching
 scalar type from a read-only stack, or updates one `f32`, `i32` or `u32`
-column in its mutable input or destination. Its body loads one to four
+column in its mutable input or destination. Its body loads one to four distinct
 columns of these types, or compact columns explicitly widened to 32 bits,
-and combines immutable lane expressions, including
+and combines lane expressions, including
 calls to rakes and scratches. A float mask can select integer values, and an
 integer mask can select floats: each column keeps its own element type while
-sharing the traversal's lane count. General loops, multiple column stores,
+sharing the traversal's lane count. Local rack locations and arrays of them
+can be assigned with `<-`, and fixed-count `repeat` bodies compile when the
+checker unrolls them within its 4096-statement budget. General loops, multiple column stores,
 other scalar parameter types, reductions,
 scans, extraction, insertion and shuffles
 remain work in progress and fail compilation. Unused stored columns may have
 other scalar types.
+
+### Repeated rack updates
+
+Each traversal chunk creates its own rack locations. An assignment changes
+the value for subsequent expressions, while an earlier `let` keeps its
+original value. A fixed-count `repeat` copies the rack operations into the
+kernel, so the following run cubes each input value without a runtime inner
+loop:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Samples {
+  f32: value;
+}
+
+run cubes(input: stack Samples, <count: i64>) -> f32:
+  for row in input using f32s up to <count>:
+    let value = row.value
+    power := value
+    repeat <i: i32> from <0> up to <2>:
+      power <- power * value
+    yield power
+```
+
+Nested repeats use the same rule. Each copy has its own local bindings, and
+updates to an enclosing rack location survive the copy. These locations
+stay in allocated vector registers. Excess register pressure fails
+compilation. Runtime-counted loops and locations carried from one traversal
+chunk to the next remain WIP on physical targets.
 
 ### Compact columns
 
@@ -393,6 +424,13 @@ Booleans retain only their value bit, so unspecified upper C argument bits
 cannot affect a choice. Uniform comparisons and Boolean conditions use the
 same vector masks in full racks and tails.
 
+You can combine uniform conditions with `and`, `or` and `not`, and bind an
+intermediate Boolean for reuse. Logic short-circuits: when the left side
+already decides an `and` or `or`, a skipped floating-point comparison receives
+benign operands. A signalling NaN in that skipped comparison raises no invalid
+exception. The run's tail and any enclosing through mask also restrict its
+participating lanes. Other scalar arithmetic in native runs remains WIP.
+
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 pack Values {
@@ -402,7 +440,8 @@ pack Values {
 run choose_scale(input: stack Values, <count: i32>, <mode: i32>, <scale: f32>, <enabled: bool>) -> f32:
   for row in input using f32s up to <count>:
     let value = row.value
-    yield if <enabled> then (if <mode> < <0> then value * <scale> else value) else <0.0>
+    let <take: bool> = <enabled> and <mode> < <0>
+    yield if <take> then value * <scale> else (if not <enabled> then <0.0> else value)
 ```
 
 Its C declaration preserves that order. On x86, `mode` is in `edx`, `scale`
@@ -507,7 +546,7 @@ and embedded literals. Any difference or unresolved relocation is rejected.
 `test/native_stream_test.sh` checks independent C results, exact in-place
 output and guarded tails of every remainder for one to four columns. It also
 checks signed and unsigned integer columns against independently computed
-wrapping bits, including multiplication, absolute values, literal shifts,
+wrapping bits, including multiplication, absolute values, literal and runtime shifts,
 unsigned clamps and mixed float/integer selection. Integer streams and
 column updates exercise exact aliasing and a separately shaped destination.
 Compact-column checks cover signed and unsigned byte and 16-bit boundaries,

@@ -34,7 +34,7 @@ for source in "${test_dir}"/program/*.rk "${test_dir}"/abi/native_mixed.rk; do
   name="$(basename "${source}" .rk)"
   expected="$("${rakec}" --interpret "${source}")" || fail "${name}: interpreter failed"
   for addressing in barrier plain; do
-    "${rakec}" --emit-asm --target wasm-simd128 --wasm-addressing "${addressing}" \
+    "${rakec}" --emit-c --target wasm-simd128 --wasm-addressing "${addressing}" \
       -o "${tmp}/${name}.c" "${source}"
     link "${tmp}/${name}.c" "${source}" "${tmp}/${name}.wasm"
     actual="$(run_wasm "${tmp}/${name}.wasm")" || fail "${name} (${addressing}): wasm trapped"
@@ -51,7 +51,7 @@ for source in "${test_dir}"/program/trap/*.rk; do
     fail "${name}: the interpreter returned ${output} instead of trapping"
   fi
   grep -q "trap" <<<"${output}" || fail "${name}: the interpreter failed without trapping: ${output}"
-  "${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/${name}.c" "${source}"
+  "${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/${name}.c" "${source}"
   link "${tmp}/${name}.c" "${source}" "${tmp}/${name}.wasm"
   if result="$(run_wasm "${tmp}/${name}.wasm")"; then
     fail "${name}: wasm returned ${result} instead of trapping"

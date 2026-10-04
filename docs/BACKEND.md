@@ -1,7 +1,7 @@
 # The backend
 
 This page describes how `rakec` turns source into machine code, and which
-stage checks each promise from [the goals](GOALS.md).
+stage checks each requirement from [the goals](GOALS.md).
 
 ## Scratches and rakes
 
@@ -59,10 +59,13 @@ Instruction selection either finds a native form for every operation or
 rejects the function and reports the operation. Nothing falls back to scalar
 code or a helper call. The x86 and AArch64 allocators place every live rack
 in one register and reject a function that would need more registers than the
-profile has, or arguments on the stack. `--emit-asm` prints the assembly, or
-the C on wasm, and the system assembler or clang only encodes it.
+profile has, or arguments on the stack. `--emit-asm` prints physical-target
+register-kernel assembly. `--emit-c` prints the WebAssembly intrinsics or a
+native C unit embedding the selected assembly. The assembler encodes physical
+kernel instructions, while clang compiles WebAssembly intrinsics to virtual
+instructions. Explicit slow code uses the platform C compiler.
 
-In the development compiler, `abs` on `f32s` clears each lane's sign bit. SSE2 and AVX2
+In Rake 0.7.0, `abs` on `f32s` clears each lane's sign bit. SSE2 and AVX2
 use `andps` and `vandps` with a literal magnitude mask. AVX-512F uses `vpandd`,
 and NEON uses a literal rack and `and`. These are full-width bitwise operations,
 so they introduce no floating-point exception, even for a signalling NaN.
@@ -158,6 +161,16 @@ lowering as a comparison, including when `all` or `any` produced the Boolean.
 The broadcast and shifts use full-width vector instructions on every
 physical profile.
 
+Uniform conditions also compose with `and`, `or` and `not`. Their mask
+operations remain in vector registers. Short-circuit logic restricts the
+right-hand comparison's participation to lanes where its result is needed,
+intersecting that mask with any outer through or stream-tail mask. Skipped
+floating-point operands are sanitised before comparison, so a signalling NaN
+raises invalid only when that comparison participates. Native traversals
+lower immutable Boolean bindings once, retaining their computed masks for reuse.
+WebAssembly can broadcast a Boolean condition into a mask with `i32.sub`
+and `i32x4.splat` before combining it with another condition.
+
 Native 32-bit integer racks share the float racks' register widths and C
 vector argument slots. Add and subtract select packed `paddd` and `psubd`
 on SSE2, their full-width VEX/EVEX forms on AVX2 and AVX-512F, or NEON
@@ -209,9 +222,24 @@ full-width VEX/EVEX forms on AVX2 and AVX-512F. NEON uses `shl`, `ushr` or
 `sshr` with `.4s` operands. Instruction selection consumes a literal count
 from 0 to 31. A zero count needs only a register copy, elided when the
 destination reuses the input. The final-object verifier checks register
-widths and immediate bounds, rejecting register-supplied counts and memory
-operands in these register kernels. Native runtime shift counts remain
-work in progress.
+widths and immediate bounds.
+
+Runtime `u32` counts are taken modulo 32. All four physical profiles allocate
+one temporary vector register for normalisation, preserving live inputs and
+the original count. SSE2, AVX2 and AVX-512F shift each 64-bit word left and
+then logically right by 59, retaining the count's low five bits and clearing
+the rest of its low 64-bit word. The packed 32-bit shift reads that word
+through XMM even when its data rack uses YMM or ZMM. Only the uniform count
+uses this narrower operand. NEON broadcasts the count's low word and shifts
+left then logically right by 27. For a right shift, it negates the resulting
+0–31 count before `ushl` or `sshl` on four 32-bit lanes.
+
+The final-object verifier accepts these runtime forms only as the complete
+normalisation-and-shift sequence, with full-width data operands and the
+number of shifts derived from Rake's allocated instructions. Unnormalised,
+narrowed or undeclared runtime shifts fail verification. Native streams use
+the same selection and retain the count across full and partial racks.
+
 Signed comparisons use `pcmpeqd` and
 `pcmpgtd` on SSE2 and AVX2, with operand reversal or mask inversion for the
 other predicates. AVX-512F uses `vpcmpd` and expands its `k1` result into a
@@ -288,7 +316,7 @@ a scratch. `rakec --interpret` runs `main` in Rake's executable semantics,
 evaluating rack expressions in the same reference semantics as scratches, and
 `test/program_test.sh` compares it with the compiled program.
 
-The unreleased development compiler adds a native mixed destination for the
+Rake 0.7.0 supports a native mixed destination for the
 same tier IR:
 
 ```text
@@ -304,7 +332,7 @@ explicit slow code -> scalar C and C ABI declarations ────────�
                                                               register-kernel verifier
 ```
 
-This development path supports the limited SSE2, AVX2, AVX-512 and NEON stream traversal.
+This native path supports the limited SSE2, AVX2, AVX-512 and NEON stream traversal.
 General native runs remain work in progress. Slow callers can pass
 uniform `f32`, `i32`, `u32` and `bool` arguments and receive `f32`, `bool`, `i32` or
 `u32` results from register kernels.
@@ -392,8 +420,13 @@ retain them. Unproved arithmetic discards them. A narrower comparison or
 extending multiply without the required bounds is rejected. These
 alternatives grant no scalar lane instruction permission.
 
-The promise is the same as on a physical target: outside a `slow` block, rack
-work uses vector instructions wherever the selected profile implements the
+Some other packed substitutions remain WIP in the run verifier. Clang can
+fold `(x << n) >> n` into a mask and AND, or repeated integer additions into
+a multiplication. Their results pass the independent execution checks, but
+the verifier does not yet prove these rewrites across separate bindings.
+It rejects those objects rather than grant broader instruction permissions.
+
+Outside a `slow` block, rack work uses vector instructions wherever the selected profile implements the
 operation. A run may also contain the uniform address, loop and bounds work
 written in its source. It never replaces rack work with scalar lane loops.
 
@@ -401,15 +434,19 @@ written in its source. It never replaces rack work with scalar lane loops.
 
 Rake selects a native stream's loop, addresses, full-rack transfers and tail.
 Its lane expression goes through the same SSA selector
-and no-spill allocator as a register kernel. The tail is lowered under its
+and no-spill allocator as a register kernel. Ordered bindings retain each
+computed value in SSA. Local rack assignments rebind subsequent uses, leaving
+earlier snapshots intact. Unrolled `repeat` copies keep their local scope and
+retain updates to enclosing locations. Repeated access to the same column
+shares its loaded rack before the final output store. The tail is lowered under its
 participation mask, so inactive operands cannot raise arithmetic exceptions.
 The complete stream is opaque assembly inside the native C unit. C supplies
 only slow orchestration and its ABI. SSE2 and NEON use count-guarded lane
 transfers for the tail, then evaluate its arithmetic as one masked rack.
 AVX2 and AVX-512 use fault-suppressing masked vector transfers.
 
-The final traversal function's complete bytes must match a separately
-assembled selection. This includes its branches, address operands and
+The verifier compares the final traversal function's complete bytes with a
+separately assembled selection. This includes its branches, address operands and
 embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
@@ -470,8 +507,8 @@ It owns register allocation and assembly on x86 and AArch64. For WebAssembly,
 clang encodes the selected virtual instructions and the runtime assigns
 physical registers. The system toolchain also owns object formats,
 relocations, linking and start-up. Debug information and exception unwinding
-aren't produced. The x86 and AArch64 backends in 0.6.0-beta compile scratches
-and rakes only. The development compiler adds native mixed programs through
+aren't produced. Rake 0.7.0's x86 and AArch64 backends compile scratches,
+rakes and native mixed programs through
 the limited scalar C boundary above. General runs compile on WebAssembly;
 SSE2, AVX2, AVX-512 and NEON implement the stream subset.
 
@@ -493,7 +530,7 @@ The proposed `nvidia-ptx-sm120` profile targets PTX 8.7 and a 32-thread warp.
 NVIDIA will own final allocation and instruction scheduling. Rake will check
 the final cubin's instructions, control/data flow and resources against its
 contract, rejecting unknown or insufficient evidence. A certificate applies
-to that artifact, not every translation of its PTX.
+to that artifact's exact bytes.
 
 The runtime will load only the verified cubin, with an explicit parameter ABI,
 context and CUDA stream. It will refuse an unverified PTX JIT fallback.

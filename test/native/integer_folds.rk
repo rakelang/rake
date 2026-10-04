@@ -1,0 +1,63 @@
+scratch signed_sum(values: i32s) -> i32:
+  sum(values)
+
+scratch signed_product(values: i32s) -> i32:
+  product(values)
+
+scratch signed_minimum(values: i32s) -> i32:
+  minimum(values)
+
+scratch signed_maximum(values: i32s) -> i32:
+  maximum(values)
+
+scratch unsigned_sum(values: u32s) -> u32:
+  sum(values)
+
+scratch unsigned_product(values: u32s) -> u32:
+  product(values)
+
+scratch unsigned_minimum(values: u32s) -> u32:
+  minimum(values)
+
+scratch unsigned_maximum(values: u32s) -> u32:
+  maximum(values)
+
+scratch signed_sum_keep(values: i32s) -> i32s:
+  let <total: i32> = signed_sum(values)
+  values + <total>
+
+scratch unsigned_sum_keep(values: u32s) -> u32s:
+  let <total: u32> = unsigned_sum(values)
+  values + <total>
+
+scratch signed_scan_sum(values: i32s) -> i32s:
+  scan_sum(values)
+
+scratch signed_scan_product(values: i32s) -> i32s:
+  scan_product(values)
+
+scratch signed_scan_minimum(values: i32s) -> i32s:
+  scan_minimum(values)
+
+scratch signed_scan_maximum(values: i32s) -> i32s:
+  scan_maximum(values)
+
+scratch unsigned_scan_sum(values: u32s) -> u32s:
+  scan_sum(values)
+
+scratch unsigned_scan_product(values: u32s) -> u32s:
+  scan_product(values)
+
+scratch unsigned_scan_minimum(values: u32s) -> u32s:
+  scan_minimum(values)
+
+scratch unsigned_scan_maximum(values: u32s) -> u32s:
+  scan_maximum(values)
+
+scratch signed_scan_keep(values: i32s) -> i32s:
+  let prefixes = scan_sum(values)
+  prefixes + values
+
+scratch unsigned_scan_keep(values: u32s) -> u32s:
+  let prefixes = scan_sum(values)
+  prefixes + values

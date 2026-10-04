@@ -1,7 +1,7 @@
 (lang dune 3.20)
 (using menhir 3.0)
 (name rake)
-(version 0.6.0-beta)
+(version 0.7.0)
 (generate_opam_files true)
 
 (package
@@ -18,6 +18,7 @@ Data rakes through tine declarations (mask patterns), enabling divergent paralle
 computations on physical vector targets and the WebAssembly SIMD virtual machine.")
  (depends
   (ocaml (>= 5.1.0))
+  base-unix
   (menhir (>= 20231231))
   (ppx_deriving (>= 6.0.0))
   (js_of_ocaml (>= 6.0.0))

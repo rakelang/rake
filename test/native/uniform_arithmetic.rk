@@ -1,0 +1,61 @@
+scratch float_uniform_arithmetic(<left: f32>, <right: f32>) -> f32:
+  let <added: f32> = <left> + <right>
+  let <multiplied: f32> = <added> * <right>
+  (<multiplied> - <left>) / <right>
+
+scratch float_reduced_spread(values: f32s) -> f32:
+  maximum(values) - minimum(values)
+
+scratch float_reduced_half_sum(values: f32s) -> f32:
+  sum(values) / 2
+
+scratch float_spread_keep(values: f32s, <scale: f32>) -> f32s:
+  let <spread: f32> = maximum(values) - minimum(values)
+  let <scaled: f32> = <spread> * <scale> + 1
+  values + <scaled>
+
+scratch signed_uniform_arithmetic(<left: i32>, <right: i32>) -> i32:
+  let <added: i32> = <left> + <right>
+  let <multiplied: i32> = <added> * <right>
+  <multiplied> - <left>
+
+scratch unsigned_uniform_arithmetic(<left: u32>, <right: u32>) -> u32:
+  let <added: u32> = <left> + <right>
+  let <multiplied: u32> = <added> * <right>
+  <multiplied> - <left>
+
+scratch signed_reduced_span(values: i32s) -> i32:
+  maximum(values) - minimum(values)
+
+scratch unsigned_reduced_span(values: u32s) -> u32:
+  maximum(values) - minimum(values)
+
+scratch unsigned_mask_offset(values: f32s) -> u32:
+  bitmask(values > <0.0>) + <4294967295>
+
+scratch unsigned_extracted_keep(values: u32s) -> u32s:
+  let <offset: u32> = extract(values, 0) * <4294967295> + 1
+  values + <offset>
+
+scratch float_uniform_negation(<value: f32>) -> f32:
+  -<value>
+
+scratch float_negative_sum(values: f32s) -> f32:
+  -sum(values)
+
+scratch float_negated_extraction(values: f32s) -> f32:
+  -extract(values, 0)
+
+scratch float_negated_keep(values: f32s) -> f32s:
+  let <offset: f32> = -extract(values, 0)
+  values + <offset>
+
+scratch signed_uniform_negation(<value: i32>) -> i32:
+  -<value>
+
+scratch signed_negative_sum(values: i32s) -> i32:
+  -sum(values)
+
+scratch signed_negated_keep(values: i32s) -> i32s:
+  let <offset: i32> = -extract(values, 0)
+  values + <offset>

@@ -94,7 +94,7 @@ for document in "${documents[@]}"; do
         grep -Fq -- "${expected}" <<< "${result}" || fail "${where} traps without saying: ${expected} (${result})" ;;
       reject)
         expected="${arguments#\"}"; expected="${expected%\"}"
-        if "${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/out.c" "${block}" > "${tmp}/log" 2>&1; then
+        if "${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/out.c" "${block}" > "${tmp}/log" 2>&1; then
           fail "${where} compiles, but the page says it is rejected"
         fi
         grep -Fq -- "${expected}" "${tmp}/log" \

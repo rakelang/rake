@@ -11,13 +11,32 @@ each, with the category its directory implies:
 | `program` | `test/program/` | `main` gives the same result in `rakec --interpret` and as WebAssembly built from the emitted C |
 | `trap` | `test/program/trap/` | traps in both |
 | `abi` | `test/abi/` | independently compiled C checks layouts and calls across the C boundary |
-| `future` | `examples/future/` | a design sketch, not compiled |
+| `future` | `examples/future/` | a design sketch outside compiler checks |
 
 To add a case, put one `.rk` file in its directory and one row in
 `manifest.tsv`. A rejection records a stable substring of the diagnostic,
 without its location.
 
-The suites run from the development shell. `test/run_tests.sh` checks the
+`dune runtest` runs the portable compiler tests. It needs only the OCaml
+dependencies declared in `rake.opam`, and runs during `opam install
+--with-test`. Parsing, lowering, executable semantics and assembly-text
+checks do not require an assembler, a disassembler or a target runtime.
+
+The object integration suites have explicit aliases:
+
+```sh
+dune build @runtest-native   # GNU ELF binutils for x86-64 and AArch64
+dune build @runtest-wasm     # Clang's wasm32 target and llvm-objdump
+```
+
+Both suites fail when a required tool is missing. They never turn a missing
+dependency into a skipped or passing verification check. The package CI runs
+portable tests on Linux, macOS and Windows, and runs object integration in a
+Linux job with both target toolchains installed. The
+[compiler reference](../docs/RAKEC.md#tools-and-environment) lists executable
+overrides and installation commands.
+
+The remaining suites run from the development shell. `test/run_tests.sh` checks the
 release identity, the manifest's fixtures and the documentation's examples:
 
 ```sh
@@ -38,7 +57,7 @@ count unchanged. Final-object verification also checks that the choices stay
 on racks before partial stores.
 
 `tools/release_gate.sh` runs every check, including the OCaml unit tests
-(`dune runtest`), the AArch64 differential under QEMU, the capability
+(`dune runtest` and both object integration aliases), the AArch64 differential under QEMU, the capability
 evidence in `capability_evidence.tsv`, the parser differential and the
 website.
 
@@ -72,7 +91,7 @@ against independent scalar C. One to four input columns end at guard pages,
 as does the output, for counts from zero through 65. The checks cover every
 tail remainder, exact in-place output, inactive-lane arithmetic and an unread
 byte column in the descriptor. Signed and unsigned 32-bit columns check
-wrapping multiplication, absolute values, unsigned clamps, literal shifts
+wrapping multiplication, absolute values, unsigned clamps, literal and runtime shifts
 and mixed float/integer masks against scalar bit arithmetic. Their streams,
 in-place updates and separate destinations use the same guarded counts.
 C and Rake callers pass scale, bias
@@ -215,8 +234,10 @@ WebAssembly fixture exercise direct integer conditions too.
 Independently assembled fixtures require exact
 entry imports and reject wrong, missing, repeated and body-local transfers.
 Bit-shift checks cover every literal count from 0 to 31 on signed and unsigned
-racks. Unsigned scalar bit operations independently compute sign extension,
-and composition checks preserve live inputs across shifts and lane masks.
+racks, and runtime `u32` counts with high bits set, normalised modulo 32.
+Counts arrive through both the integer C ABI and lane extraction. Unsigned
+scalar bit operations independently compute sign extension, and composition
+checks preserve live inputs and the original count across shifts and lane masks.
 Static integer shuffles compare every output lane with independent C index
 arithmetic for reverse, rotation, repeated, identity, interleaved and mixed
 selections. Both signed and unsigned racks cross the vector C ABI. Fused
@@ -226,8 +247,9 @@ and cross-register subdivisions at four, eight and sixteen lanes.
 Independently assembled machine objects check
 rejection of narrowed integer vectors, scalar arithmetic
 and memory work inside a register kernel. SSE2 also rejects direct SSE4.1
-extrema and SSSE3 absolute-value instructions. Shift fixtures reject runtime counts and out-of-range
-immediates as well as narrowed and scalar instructions.
+extrema and SSSE3 absolute-value instructions. Shift fixtures require the
+selected normalisation sequence for runtime counts and reject unnormalised
+counts, out-of-range immediates, narrowed data and scalar instructions.
 
 The shared absolute-value oracle supplies explicit binary32 input and output
 bits for signed zeros, subnormals, infinities and quiet and signalling NaNs.
@@ -262,7 +284,7 @@ page is updated. Its header lists the checks a page can ask for.
 `test/parser_differential.sh` compares the compiler's parser with the
 Tree-sitter grammar in a sibling `tree-sitter-rake` checkout. It parses every
 manifest fixture and the malformed sources in `parser/manifest.tsv`, and the
-two parsers must accept and reject the same sources:
+check requires identical accept and reject decisions from both parsers:
 
 ```sh
 nix shell nixpkgs#tree-sitter --command bash test/parser_differential.sh

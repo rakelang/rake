@@ -8,6 +8,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
+  test "$("${rakec}" --interpret --target "${profile}" "${root}/test/abi/native_streams.rk")" = 160
   compiler=gcc
   object_copy=objcopy
   runner=()
@@ -40,3 +41,15 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   "${runner[@]}" "${tmp}/streams"
   printf '%s stream ABI, memory and numerical semantics passed\n' "${profile}"
 done
+
+for addressing in barrier plain; do
+  "${rakec}" --emit-c --target wasm-simd128 --wasm-addressing "${addressing}" \
+    -o "${tmp}/streams.c" "${root}/test/abi/native_streams.rk"
+  clang --target=wasm32 -msimd128 -O2 -ffreestanding -nostdlib -Wl,--no-entry \
+    -Wl,--export=__main_void -o "${tmp}/streams.wasm" "${tmp}/streams.c"
+  test "$(wasmtime run --invoke __main_void "${tmp}/streams.wasm" 2>/dev/null)" = 160
+done
+# Clang folds the composed shift pair and repeated integer additions into
+# packed operations the Wasm run verifier does not yet prove across bindings.
+# These execution checks do not claim a Wasm final-object certificate.
+printf 'stream composition passed on WebAssembly in both addressing modes\n'

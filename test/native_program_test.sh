@@ -74,6 +74,14 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
   test "${actual}" = "${expected}" && test "${actual}" = 3 || {
     echo "${profile} mixed C boundary: compiled ${actual}, interpreter ${expected}, expected 3" >&2; exit 1;
   }
+  # The public C product also uses the caller's own C toolchain.
+  "${rakec}" --emit-c --target "${profile}" -o "${tmp}/mixed.c" "${test_dir}/abi/native_mixed.rk"
+  "${cc}" -std=gnu11 -O2 -ffp-contract=off -fno-fast-math -Werror "${link_flags[@]}" \
+    "${tmp}/mixed.c" -lm -o "${tmp}/mixed-c"
+  actual=0; "${runner[@]}" "${tmp}/mixed-c" || actual=$?
+  test "${actual}" = 3 || {
+    echo "${profile} emitted C boundary: compiled ${actual}, expected 3" >&2; exit 1;
+  }
   if [[ "${profile}" != aarch64-neon ]]; then
     "${rakec}" --verify-native --target "${profile}" -o "${tmp}/mixed.o" "${test_dir}/abi/native_mixed_x86.rk"
     "${cc}" -O2 "${link_flags[@]}" "${tmp}/mixed.o" -o "${tmp}/mixed"

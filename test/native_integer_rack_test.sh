@@ -63,6 +63,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
             fi
         done
     done > "$source"
+    cat "${root}/test/native/integer_folds.rk" >> "$source"
     printf 'scratch unsigned_andnot_all(a: u32s) -> u32s:\n  bit_andnot(<4294967295>, a)\n\n' >> "$source"
     printf 'scratch signed_uniform_add(a: i32s, <amount: i32>) -> i32s:\n  a + <amount>\n\nscratch unsigned_uniform_keep(<xor_bits: u32>, a: u32s, <amount: u32>) -> u32s:\n  | changed <| bit_xor(a, <xor_bits>)\n  | retained <| changed + a\n  retained * <amount>\n\nscratch unsigned_uniform_clamp(a: u32s, <low: u32>, <high: u32>) -> u32s:\n  min(<high>, max(<low>, a))\n\nscratch unsigned_uniform_reverse(<removed: u32>, a: u32s) -> u32s:\n  bit_andnot(<removed>, a)\n\nscratch integer_float_boundary(<amount: i32>, values: f32s, <factor: f32>, <limit: u32>, integers: u32s) -> f32s:\n  if integers < <limit> then values * <factor> else values + <1.0>\n\nscratch six_integer_slots(<a: u32>, <b: u32>, <c: u32>, <d: u32>, <e: u32>, <f: u32>) -> u32s:\n  bit_xor(<a> + <b>, <c> * <d>) - <e> + <f>\n\n' >> "$source"
     if [[ "$profile" == aarch64-neon ]]; then
@@ -77,8 +78,15 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
             done
         done
         printf 'scratch %s_shift_keep_input(a: %s) -> %s:\n  | incremented <| a + <1>\n  | shifted <| shift_bits_right_signed(incremented, 7)\n  shifted + a\n\n' "$kind" "$kind" "$kind" >> "$source"
+        for operation in left right right_signed; do
+            printf 'scratch %s_runtime_shift_%s(a: %s, <amount: u32>) -> %s:\n  shift_bits_%s(a, <amount>)\n\n' \
+                "$kind" "$operation" "$kind" "$kind" "$operation" >> "$source"
+        done
+        printf 'scratch %s_runtime_shift_keep(a: %s, <amount: u32>) -> %s:\n  | shifted <| shift_bits_left(a, <amount>)\n  | twice <| shift_bits_right_signed(shifted, <amount>)\n  bit_xor(twice, a) + bitcast(%s, <amount>)\n\n' "$kind" "$kind" "$kind" "$kind" >> "$source"
+        printf 'scratch %s_runtime_shift_extracted(a: %s, counts: u32s) -> %s:\n  let <amount: u32> = extract(counts, 0)\n  shift_bits_right(a, <amount>) + a\n\n' "$kind" "$kind" "$kind" >> "$source"
     done
     printf 'scratch signed_shift_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then shift_bits_left(a, 31) else shift_bits_right_signed(b, 31)\n\n' >> "$source"
+    printf 'scratch signed_runtime_shift_selected(a: i32s, b: i32s, <amount: u32>) -> i32s:\n  if a < b then shift_bits_left(a, <amount>) else shift_bits_right_signed(b, <amount>)\n\n' >> "$source"
     printf 'scratch signed_andnot_selected(a: i32s, b: i32s) -> i32s:\n  if a < b then bit_andnot(a, b) else bit_andnot(b, a)\n\n' >> "$source"
     for operation in min max; do
         printf 'scratch signed_%s(a: i32s, b: i32s) -> i32s:\n  %s(a, b)\n\nscratch signed_%s_keep_inputs(a: i32s, b: i32s) -> i32s:\n  | chosen <| %s(a, b)\n  | mixed <| bit_xor(chosen, a)\n  mixed + b\n\nscratch signed_%s_keep_left(a: i32s, b: i32s) -> i32s:\n  let chosen = %s(a, b)\n  chosen + a\n\nscratch signed_%s_same(a: i32s) -> i32s:\n  %s(a, a)\n\n' \

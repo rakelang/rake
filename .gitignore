@@ -8,6 +8,7 @@
 
 # Dune
 _opam/
+*.install
 
 # Nix
 .direnv/

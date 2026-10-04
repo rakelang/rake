@@ -14,13 +14,14 @@ type compiled = { assembly : string; functions : string list }
 type output = Stream | Column of string * string
 type count_width = Count32 | Count64
 
-(* Expand A-normal immutable bindings into the expression consumed by the
-   common lowerer. This stage rejects other forms rather than dropping work. *)
-let rec expand bindings (expression : Ast.expr) : Ast.expr =
-  let walk = expand bindings in
+(* Rebind checked names to immutable SSA aliases. An assignment changes the
+   alias for subsequent expressions, leaving earlier snapshots intact. *)
+let rec rename_bindings bindings (expression : Ast.expr) : Ast.expr =
+  let walk = rename_bindings bindings in
+  let rename name = Option.value (List.assoc_opt name bindings) ~default:name in
   let v = match expression.v with
-    | EVar name | EScalarVar name ->
-        (match List.assoc_opt name bindings with Some e -> e.Ast.v | None -> expression.v)
+    | EVar name -> Ast.EVar (rename name)
+    | EScalarVar name -> Ast.EScalarVar (rename name)
     | EBroadcast e -> Ast.EBroadcast (walk e)
     | EBinop (a, op, b) -> EBinop (walk a, op, walk b)
     | EUnop (op, e) -> EUnop (op, walk e)
@@ -28,6 +29,11 @@ let rec expand bindings (expression : Ast.expr) : Ast.expr =
     | EIf (c, a, b) -> EIf (walk c, walk a, walk b)
     | EFma (a, b, c) -> EFma (walk a, walk b, walk c)
     | EConvert (kind, ty, e) -> EConvert (kind, ty, walk e)
+    | EReduce (op, e) -> EReduce (op, walk e)
+    | EScan (op, e) -> EScan (op, walk e)
+    | EExtract (e, lane) -> EExtract (walk e, walk lane)
+    | EInsert (e, lane, value) -> EInsert (walk e, walk lane, walk value)
+    | EShuffle (e, indices) -> EShuffle (walk e, indices)
     | other -> other
   in
   { expression with v }
@@ -36,13 +42,15 @@ let rec expand bindings (expression : Ast.expr) : Ast.expr =
    checked, direct comparison or Boolean so the common lowerer selects its vector
    mask, including the outer tail's participation. Other scalar work stays
    outside the supported native traversal subset. *)
-let uniform_condition_expression uniforms (value : expr) =
+let rec uniform_condition_expression uniforms bindings (value : expr) =
+  let walk = uniform_condition_expression uniforms bindings in
   let operand (value : expr) : Ast.expr =
     let v = match value.ty, value.k with
       | Sc scalar, Var name when List.assoc_opt name uniforms = Some scalar -> Ast.EScalarVar name
+      | Sc _, Var name when List.mem_assoc name bindings -> Ast.EScalarVar (List.assoc name bindings)
       | Sc Types.SFloat, Float number -> Ast.EFloat number
       | Sc (Types.SInt | Types.SUint), Int number -> Ast.EInt number
-      | Sc Types.SBool, Bool value -> Ast.EBool value
+      | Sc Types.SBool, Bool boolean -> Ast.EBroadcast { Ast.v = Ast.EBool boolean; loc = value.loc }
       | _ -> reject value.loc
           "native stream uniform conditions take f32/i32/u32/bool parameters or literals; other scalar expressions are work in progress" in
     { Ast.v; loc = value.loc } in
@@ -53,8 +61,12 @@ let uniform_condition_expression uniforms (value : expr) =
         | Ge -> Ast.Ge | Eq -> Ast.Eq | Ne -> Ast.Ne in
       { Ast.v = Ast.EBinop (operand left, comparison, operand right); loc = value.loc }
   | Sc Types.SBool, (Var _ | Bool _) -> operand value
+  | Sc Types.SBool, Logic (conjunction, left, right) ->
+      { Ast.v = Ast.EBinop (walk left, (if conjunction then Ast.And else Ast.Or), walk right); loc = value.loc }
+  | Sc Types.SBool, Unary (Not, inner) ->
+      { Ast.v = Ast.EUnop (Ast.Not, walk inner); loc = value.loc }
   | _ -> reject value.loc
-      "native stream uniform work supports direct f32/i32/u32 comparisons and Booleans; other scalar expressions are work in progress"
+      "native stream uniform conditions support f32/i32/u32 comparisons, Booleans and and/or/not; other scalar expressions are work in progress"
 
 let uniform_type = function
   | Types.SFloat -> Native_ir.Scalar Native_ir.F32
@@ -110,22 +122,58 @@ let uniform_register profile index =
   first + index
 
 let compile_body ~profile program run traverse uniforms output ~tail =
-  let bindings = ref [] and columns = ref [] and result = ref None in
-  List.iter (fun statement ->
+  let bindings = ref [] and conditions = ref [] and columns = ref [] and result = ref None in
+  let expressions = ref [] and locations = ref [] and next_binding = ref 0 in
+  let fresh () =
+    incr next_binding;
+    Printf.sprintf "$native_binding_%d" !next_binding in
+  let bind name alias = bindings := (name, alias) :: List.remove_assoc name !bindings in
+  let alias loc name = match List.assoc_opt name !bindings with
+    | Some alias -> alias
+    | None -> reject loc "native traversal value '%s' is not bound" name in
+  let rec statements body = List.iter (fun statement ->
     if !result <> None then reject statement.rloc "native traversal must end with its yield or column update";
     match statement.r with
     | R_chunk_load (name, element, field, stored) when column_load_supported element stored ->
-        columns := !columns @ [ name, element, field, stored ]
+        let existing = List.find_opt (fun (_, e, f, s) ->
+          e = element && f = field && s = stored) !columns in
+        (match existing with
+         | Some (parameter, _, _, _) -> bind name parameter
+         | None ->
+             columns := !columns @ [ name, element, field, stored ];
+             bind name name)
     | R_pure (name, Rack (Types.SFloat | Types.SInt | Types.SUint), expression, false)
     | R_pure (name, Mask _, expression, false) ->
-        bindings := (name, expand !bindings expression) :: !bindings
+        let expression = rename_bindings !bindings expression in
+        let value = fresh () in
+        expressions := (value, expression) :: !expressions;
+        bind name value
     | R_uniform (name, value) ->
-        bindings := (name, uniform_condition_expression uniforms value) :: !bindings
-    | R_yield name when output = Stream -> result := List.assoc_opt name !bindings
+        if value.ty <> Sc Types.SBool then reject value.loc
+          "native stream local uniform bindings currently require bool; other scalar bindings are work in progress";
+        let expression = uniform_condition_expression uniforms !bindings value in
+        let condition = fresh () in
+        conditions := !conditions @ [ condition, expression ];
+        bind name condition
+    | R_location (name, (Rack (Types.SFloat | Types.SInt | Types.SUint) | Mask _), first) ->
+        bind name (alias statement.rloc first);
+        locations := name :: !locations
+    | R_set (name, value) when List.mem name !locations ->
+        bind name (alias statement.rloc value)
+    | R_block body ->
+        let outer_bindings = !bindings and outer_locations = !locations in
+        statements body;
+        bindings := List.map (fun (name, previous) ->
+          name, if List.mem name outer_locations then alias statement.rloc name else previous)
+          outer_bindings;
+        locations := outer_locations
+    | R_yield name when output = Stream ->
+        result := Some { Ast.v = Ast.EVar (alias statement.rloc name); loc = statement.rloc }
     | R_output (owner, field, name) when output = Column (owner, field) ->
-        result := List.assoc_opt name !bindings
+        result := Some { Ast.v = Ast.EVar (alias statement.rloc name); loc = statement.rloc }
     | _ -> reject statement.rloc
-        "native traversals currently support f32/i32/u32 columns, explicit byte/16-bit widening, immutable lane expressions and one final yield or column update; this run operation is work in progress") traverse.t_body;
+        "native traversals currently support f32/i32/u32 columns, explicit byte/16-bit widening, local rack assignments, unrolled repeat and one final yield or column update; this run operation is work in progress") body in
+  statements traverse.t_body;
   let expression = match !result with Some e -> e | None -> reject run.run_loc "native traversal requires a 32-bit rack output expression" in
   if List.length !columns = 0 || List.length !columns > 4 then
     reject run.run_loc "native streams currently load one to four columns into f32/i32/u32 racks";
@@ -140,6 +188,7 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     @ (if tail then [ { Native_register_assignment.register = List.length !columns; persistent = false } ] else []) in
   Native_ir.floating_point_exceptions := true;
   let func = match Native_lower.lower_expression ~profile ~definitions:program.vector_defs
+    ~condition_bindings:!conditions ~expression_bindings:(List.rev !expressions)
     ~name:run.run_name ~parameters ?mask ~fused:false run.run_loc expression with
     | Ok f -> f | Error e -> reject run.run_loc "%s" (Native_lower.format_error e) in
   let output_element = match output with

@@ -552,6 +552,67 @@ let round_half_even x =
       else floor +. 1.0 in
     if rounded = 0.0 then Float.copy_sign rounded x else rounded
 
+let reference_type_environment env =
+  let checked = Typecheck.create_env Capabilities.Frontend !definitions in
+  Typecheck.add_builtins checked;
+  List.iter (Typecheck.register_type_def checked) !definitions;
+  List.iter (Typecheck.register_func_def checked) !definitions;
+  List.iter (fun (name, value) ->
+    let typ = match value with
+      | F32_scalar _ -> Types.Scalar Types.SFloat
+      | F32_rack _ -> Types.Rack Types.SFloat
+      | Mask _ -> Types.Mask
+      | U8_rack _ -> Types.Rack Types.SUint8
+      | U32_scalar _ -> Types.Scalar Types.SUint
+      | I16_rack _ -> Types.Rack Types.SInt16
+      | I32_rack _ -> Types.Rack Types.SInt
+      | U32_rack _ -> Types.Rack Types.SUint
+      | I64_rack _ -> Types.Rack Types.SInt64
+      | Int_scalar (element, _) -> Types.Scalar element in
+    Hashtbl.replace checked.vars name typ) (List.rev env);
+  checked
+
+(** Infer a skipped operand's shape without executing it. A uniform Boolean
+    broadcast occupies every bit, while a mask retains its comparison domain. *)
+let short_circuit_logical_value ~lanes env expression truth =
+  try
+    let checked = reference_type_environment env in
+    let rec mask_width (expression : expr) =
+      if Typecheck.infer_expr checked expression = Types.Scalar Types.SBool then Ok None
+      else match expression.v with
+        | EBool _ -> Ok (Some lanes)
+        | EVar name | EScalarVar name -> (
+            match List.assoc_opt name env with
+            | Some (Mask values) -> Ok (Some (Array.length values))
+            | _ -> error expression.loc (Unsupported_expression "mask without a comparison domain"))
+        | EBroadcast inner | EUnop (Not, inner) -> mask_width inner
+        | EBinop (left, (And | Or), right) ->
+            let* left = mask_width left in
+            let* right = mask_width right in
+            (match left, right with
+             | Some left, Some right when left <> right ->
+                 error expression.loc (Lane_count_mismatch { expected = left; actual = right })
+             | Some width, _ | _, Some width -> Ok (Some width)
+             | _ -> Ok None)
+        | EBinop (left, (Lt | Le | Gt | Ge | Eq | Ne), right) -> (
+            let operand = if Typecheck.is_integer_literal left then right else left in
+            match Typecheck.infer_expr checked operand with
+            | Types.Rack element | Types.Scalar element ->
+                Ok (Some (lanes * element_lanes element / 4))
+            | _ -> error expression.loc (Unsupported_expression "comparison without a lane domain"))
+        | EIf (_, selected, _) | ECall ("select", [_; selected; _]) -> mask_width selected
+        | _ -> error expression.loc (Unsupported_expression "skipped mask without a known lane domain")
+    in
+    match Typecheck.infer_expr checked expression with
+    | Types.Scalar Types.SBool -> Ok (int_scalar Types.SBool (if truth then 1L else 0L))
+    | Types.Mask ->
+        let* width = mask_width expression in
+        (match width with
+         | Some width -> Ok (Mask (Array.make width truth))
+         | None -> error expression.loc (Unsupported_expression "mask without a comparison domain"))
+    | _ -> error expression.loc (Unsupported_expression "a logical result is a Boolean or a mask")
+  with Typecheck.TypeError (message, loc) -> error loc (Unsupported_expression message)
+
 let rec eval_expr ~lanes env (expr : expr) =
   if lanes <= 0 then error expr.loc (Invalid_lane_count lanes)
   else
@@ -607,10 +668,6 @@ let rec eval_expr ~lanes env (expr : expr) =
          | Ge -> compare_f32 expr.loc lanes "ge" ( >= ) left right
          | Eq -> compare_f32 expr.loc lanes "eq" Float.equal left right
          | _ -> compare_f32 expr.loc lanes "ne" (fun x y -> not (Float.equal x y)) left right)
-    | EUnop ((Neg | FNeg), inner) when (match eval_expr ~lanes env inner with Ok v -> int_lanes v <> None | _ -> false) ->
-        let* value = eval_expr ~lanes env inner in
-        let element, xs = Option.get (int_lanes value) in
-        Ok (int_rack element (Array.map Int64.neg xs))
     | ECall ("abs", [ inner ]) when (match eval_expr ~lanes env inner with Ok v -> int_lanes v <> None | _ -> false) ->
         let* value = eval_expr ~lanes env inner in
         let element, xs = Option.get (int_lanes value) in
@@ -785,10 +842,14 @@ let rec eval_expr ~lanes env (expr : expr) =
                 }))
     | EUnop ((Neg | FNeg), inner) ->
         let* value = eval_expr ~lanes env inner in
-        unary_f32 expr.loc lanes "negate" Float.neg value
+        (match int_lanes value, integer_uniform value with
+         | Some (element, xs), _ -> Ok (int_rack element (Array.map Int64.neg xs))
+         | _, Some (element, value) -> Ok (int_scalar element (Int64.neg value))
+         | _ -> unary_f32 expr.loc lanes "negate" Float.neg value)
     | EUnop (Not, inner) ->
         let* value = eval_expr ~lanes env inner in
         (match value with
+         | Int_scalar (Types.SBool, value) -> Ok (Int_scalar (Types.SBool, if value = 0L then 1L else 0L))
          | Mask xs ->
              let* _ = validate_width expr.loc lanes value in
              Ok (Mask (Array.map not xs))
@@ -969,6 +1030,26 @@ let rec eval_expr ~lanes env (expr : expr) =
         let* left = eval_expr ~lanes env left_expr in
         let* right = eval_expr ~lanes env right_expr in
         compare_u8 expr.loc (Ast.show_binop op) (Option.get (u8_predicate op)) left right
+    | EBinop (left_expr, ((And | Or) as operation), right_expr) ->
+        let* left = eval_expr ~lanes env left_expr in
+        (match left with
+         | Int_scalar (Types.SBool, value)
+             when (operation = And && value = 0L) || (operation = Or && value <> 0L) ->
+               short_circuit_logical_value ~lanes env expr (value <> 0L)
+         | _ ->
+             let* right = eval_expr ~lanes env right_expr in
+             let truth = if operation = And then ( && ) else ( || ) in
+             match left, right with
+             | Int_scalar (Types.SBool, a), Int_scalar (Types.SBool, b) ->
+                 Ok (Int_scalar (Types.SBool, if truth (a <> 0L) (b <> 0L) then 1L else 0L))
+             | _ ->
+                 let width = match left, right with
+                   | Mask values, _ | _, Mask values -> Array.length values
+                   | _ -> lanes in
+                 let as_mask = function
+                   | Int_scalar (Types.SBool, value) -> Mask (Array.make width (value <> 0L))
+                   | value -> value in
+                 mask_binary expr.loc lanes (Ast.show_binop operation) truth (as_mask left) (as_mask right))
     | EBinop (left_expr, op, right_expr) ->
         let* left = eval_expr ~lanes env left_expr in
         let* right = eval_expr ~lanes env right_expr in
@@ -1038,12 +1119,32 @@ let rec eval_expr ~lanes env (expr : expr) =
         let* b = eval_expr ~lanes env b in
         let* c = eval_expr ~lanes env c in
         ternary_fma expr.loc lanes a b c
-    | EReduce (((RAdd | RMul | RMin | RMax) as operation), operand) ->
-        let* value = eval_expr ~lanes env operand in
-        eval_f32_reduction expr.loc operation value
+    | EReduce (((RAdd | RMul | RMin | RMax) as operation), operand)
     | EScan (((RAdd | RMul | RMin | RMax) as operation), operand) ->
         let* value = eval_expr ~lanes env operand in
-        eval_f32_scan expr.loc operation value
+        let scan = match expr.v with EScan _ -> true | _ -> false in
+        let fold_integer element values =
+          let step left right = match operation with
+            | RAdd -> Int64.add left right
+            | RMul -> Int64.mul left right
+            | RMin -> min left right
+            | RMax -> max left right
+            | RAnd | ROr -> invalid_arg "arithmetic integer fold" in
+          let normalize result = if element = Types.SInt
+            then Int64.of_int32 (Int64.to_int32 result) else wrap_u32 result in
+          let prefixes = Array.copy values in
+          for lane = 1 to Array.length values - 1 do
+            prefixes.(lane) <- normalize (step prefixes.(lane - 1) values.(lane))
+          done;
+          if not scan then Ok (Int_scalar (element, prefixes.(Array.length prefixes - 1)))
+          else if element = Types.SInt then Ok (I32_rack (Array.map Int64.to_int prefixes))
+          else Ok (U32_rack prefixes) in
+        (match value with
+         | I32_rack values when Array.length values > 0 ->
+             fold_integer Types.SInt (Array.map Int64.of_int values)
+         | U32_rack values when Array.length values > 0 -> fold_integer Types.SUint values
+         | _ -> if scan then eval_f32_scan expr.loc operation value
+                else eval_f32_reduction expr.loc operation value)
     | EScan ((RAnd | ROr), _) ->
         error expr.loc (Unsupported_expression "logical prefix scan")
     | kind -> error expr.loc (Unsupported_expression (Ast.show_expr_kind kind))

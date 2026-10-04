@@ -44,6 +44,27 @@ DECLARE_ARITHMETIC(u32s)
 DECLARE_SHUFFLE(i32s)
 DECLARE_SHUFFLE(u32s)
 
+extern int32_t signed_sum(integer_rack);
+extern int32_t signed_product(integer_rack);
+extern int32_t signed_minimum(integer_rack);
+extern int32_t signed_maximum(integer_rack);
+extern uint32_t unsigned_sum(integer_rack);
+extern uint32_t unsigned_product(integer_rack);
+extern uint32_t unsigned_minimum(integer_rack);
+extern uint32_t unsigned_maximum(integer_rack);
+extern integer_rack signed_sum_keep(integer_rack);
+extern integer_rack unsigned_sum_keep(integer_rack);
+extern integer_rack signed_scan_sum(integer_rack);
+extern integer_rack signed_scan_product(integer_rack);
+extern integer_rack signed_scan_minimum(integer_rack);
+extern integer_rack signed_scan_maximum(integer_rack);
+extern integer_rack unsigned_scan_sum(integer_rack);
+extern integer_rack unsigned_scan_product(integer_rack);
+extern integer_rack unsigned_scan_minimum(integer_rack);
+extern integer_rack unsigned_scan_maximum(integer_rack);
+extern integer_rack signed_scan_keep(integer_rack);
+extern integer_rack unsigned_scan_keep(integer_rack);
+
 #define FOR_EACH_SHIFT_COUNT(apply, kind) \
     apply(kind, 0)  apply(kind, 1)  apply(kind, 2)  apply(kind, 3) \
     apply(kind, 4)  apply(kind, 5)  apply(kind, 6)  apply(kind, 7) \
@@ -62,6 +83,15 @@ FOR_EACH_SHIFT_COUNT(DECLARE_SHIFT, u32s)
 extern integer_rack i32s_shift_keep_input(integer_rack);
 extern integer_rack u32s_shift_keep_input(integer_rack);
 extern integer_rack signed_shift_selected(integer_rack, integer_rack);
+#define DECLARE_RUNTIME_SHIFT(kind) \
+    extern integer_rack kind##_runtime_shift_left(integer_rack, uint32_t); \
+    extern integer_rack kind##_runtime_shift_right(integer_rack, uint32_t); \
+    extern integer_rack kind##_runtime_shift_right_signed(integer_rack, uint32_t); \
+    extern integer_rack kind##_runtime_shift_keep(integer_rack, uint32_t); \
+    extern integer_rack kind##_runtime_shift_extracted(integer_rack, integer_rack);
+DECLARE_RUNTIME_SHIFT(i32s)
+DECLARE_RUNTIME_SHIFT(u32s)
+extern integer_rack signed_runtime_shift_selected(integer_rack, integer_rack, uint32_t);
 extern integer_rack signed_andnot_selected(integer_rack, integer_rack);
 extern integer_rack unsigned_andnot_all(integer_rack);
 
@@ -227,6 +257,12 @@ int main(void)
         {FOR_EACH_SHIFT_COUNT(SHIFT_FUNCTIONS, u32s)}
     };
     integer_rack (*const shift_keep_input[])(integer_rack) = {i32s_shift_keep_input, u32s_shift_keep_input};
+    integer_rack (*const runtime_shifts[2][3])(integer_rack, uint32_t) = {
+        {i32s_runtime_shift_left, i32s_runtime_shift_right, i32s_runtime_shift_right_signed},
+        {u32s_runtime_shift_left, u32s_runtime_shift_right, u32s_runtime_shift_right_signed}
+    };
+    integer_rack (*const runtime_shift_keep[])(integer_rack, uint32_t) = {i32s_runtime_shift_keep, u32s_runtime_shift_keep};
+    integer_rack (*const runtime_shift_extracted[])(integer_rack, integer_rack) = {i32s_runtime_shift_extracted, u32s_runtime_shift_extracted};
     integer_rack (*const extrema[])(integer_rack, integer_rack) = {signed_min, signed_max};
     integer_rack (*const extrema_keep_inputs[])(integer_rack, integer_rack) = {signed_min_keep_inputs, signed_max_keep_inputs};
     integer_rack (*const extrema_keep_left[])(integer_rack, integer_rack) = {signed_min_keep_left, signed_max_keep_left};
@@ -294,6 +330,56 @@ int main(void)
         integer_rack a, b;
         memcpy(&a, left, sizeof a);
         memcpy(&b, right, sizeof b);
+        /* A sequential scalar oracle disagrees with a faulty tree grouping.
+           Unsigned arithmetic defines wrapping without C signed overflow. */
+        uint32_t sum = 0u, product = 1u;
+        uint32_t prefix_sum[LANES], prefix_product[LANES];
+        uint32_t prefix_signed_low[LANES], prefix_signed_high[LANES];
+        uint32_t prefix_unsigned_low[LANES], prefix_unsigned_high[LANES];
+        uint32_t unsigned_low = left[0], unsigned_high = left[0];
+        int32_t signed_low = signed_bits(left[0]), signed_high = signed_bits(left[0]);
+        for (int lane = 0; lane < LANES; ++lane) {
+            sum += left[lane];
+            product *= left[lane];
+            if (left[lane] < unsigned_low) unsigned_low = left[lane];
+            if (left[lane] > unsigned_high) unsigned_high = left[lane];
+            const int32_t signed_value = signed_bits(left[lane]);
+            if (signed_value < signed_low) signed_low = signed_value;
+            if (signed_value > signed_high) signed_high = signed_value;
+            prefix_sum[lane] = sum;
+            prefix_product[lane] = product;
+            prefix_signed_low[lane] = (uint32_t)signed_low;
+            prefix_signed_high[lane] = (uint32_t)signed_high;
+            prefix_unsigned_low[lane] = unsigned_low;
+            prefix_unsigned_high[lane] = unsigned_high;
+        }
+        if ((uint32_t)signed_sum(a) != sum || unsigned_sum(a) != sum
+            || (uint32_t)signed_product(a) != product || unsigned_product(a) != product
+            || signed_minimum(a) != signed_low || signed_maximum(a) != signed_high
+            || unsigned_minimum(a) != unsigned_low || unsigned_maximum(a) != unsigned_high) {
+            fprintf(stderr, "integer reductions disagree with the scalar C fold\n");
+            return 1;
+        }
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] + sum;
+        if (check_bits("signed reduction retains its input", signed_sum_keep(a), expected)
+            || check_bits("unsigned reduction retains its input", unsigned_sum_keep(a), expected)) return 1;
+        if (check_bits("signed prefix sum", signed_scan_sum(a), prefix_sum)
+            || check_bits("unsigned prefix sum", unsigned_scan_sum(a), prefix_sum)
+            || check_bits("signed prefix product", signed_scan_product(a), prefix_product)
+            || check_bits("unsigned prefix product", unsigned_scan_product(a), prefix_product)
+            || check_bits("signed prefix minimum", signed_scan_minimum(a), prefix_signed_low)
+            || check_bits("signed prefix maximum", signed_scan_maximum(a), prefix_signed_high)
+            || check_bits("unsigned prefix minimum", unsigned_scan_minimum(a), prefix_unsigned_low)
+            || check_bits("unsigned prefix maximum", unsigned_scan_maximum(a), prefix_unsigned_high)) return 1;
+        for (int lane = 0; lane < LANES; ++lane) expected[lane] = left[lane] + prefix_sum[lane];
+        if (check_bits("signed scan retains its input", signed_scan_keep(a), expected)
+            || check_bits("unsigned scan retains its input", unsigned_scan_keep(a), expected)) return 1;
+        for (unsigned count = 0; count < 32; ++count) {
+            for (int lane = 0; lane < LANES; ++lane)
+                expected[lane] = compare_signed(0, left[lane], right[lane])
+                    ? shift_lane_bits(left[lane], count, 0) : shift_lane_bits(right[lane], count, 2);
+            if (check_bits("masked runtime shift", signed_runtime_shift_selected(a, b, 0xffffffe0u + count), expected)) return 1;
+        }
         for (int kind = 0; kind < 2; ++kind) {
             for (int pattern = 0; pattern < 4; ++pattern) {
                 for (int lane = 0; lane < LANES; ++lane) {
@@ -327,6 +413,27 @@ int main(void)
                     for (int lane = 0; lane < LANES; ++lane)
                         expected[lane] = shift_lane_bits(left[lane], count, operation);
                     if (check_bits("literal integer bit shifts", shifts[kind][count][operation](a), expected)) return 1;
+                }
+            }
+            /* The count comes from both the integer C ABI and a rack lane.
+               High bits must vanish even when extraction broadcasts them. */
+            const uint32_t count_bases[] = {0u, 32u, 256u, 0x80000000u, 0xffffffe0u};
+            for (unsigned base = 0; base < sizeof count_bases / sizeof count_bases[0]; ++base) {
+                for (unsigned count = 0; count < 32; ++count) {
+                    const uint32_t amount = count_bases[base] + count;
+                    for (int operation = 0; operation < 3; ++operation) {
+                        for (int lane = 0; lane < LANES; ++lane)
+                            expected[lane] = shift_lane_bits(left[lane], count, operation);
+                        if (check_bits("runtime modulo-32 shift", runtime_shifts[kind][operation](a, amount), expected)) return 1;
+                    }
+                    for (int lane = 0; lane < LANES; ++lane)
+                        expected[lane] = (shift_lane_bits(shift_lane_bits(left[lane], count, 0), count, 2) ^ left[lane]) + amount;
+                    if (check_bits("retained rack and runtime count", runtime_shift_keep[kind](a, amount), expected)) return 1;
+                    integer_rack counts = b;
+                    counts[0] = amount;
+                    for (int lane = 0; lane < LANES; ++lane)
+                        expected[lane] = shift_lane_bits(left[lane], count, 1) + left[lane];
+                    if (check_bits("extracted runtime count", runtime_shift_extracted[kind](a, counts), expected)) return 1;
                 }
             }
             for (int lane = 0; lane < LANES; ++lane)

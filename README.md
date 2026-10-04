@@ -15,9 +15,9 @@ or helper calls. The language and its documentation are at
 What Rust does for safety with `unsafe {}`, Rake does for speed with
 `slow {}`. A run explicitly enters scalar code at `slow {` and resumes vector
 work at `}`. [Slow blocks](docs/spec/08_slow_tier.md#slow-blocks) are available
-in 0.6.0-beta and in the playground.
+in 0.7.0 and in the playground.
 
-Release: 0.6.0-beta.
+Release: 0.7.0.
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
@@ -56,8 +56,8 @@ multiply-add.
 | `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
 The scalar fallback remains WIP (work in progress), and the compiler rejects
-code for it. General native runs are also WIP. The unreleased development
-compiler compiles slow orchestration with register kernels as native C and
+code for it. General native runs are also WIP. Rake 0.7.0
+compiles slow orchestration with register kernels as native C and
 objects. It embeds Rake's selected assembly, checks the kernels in the final
 object, and supports uniform `f32`, `i32`, `u32` and `bool` parameters and `f32`,
 `bool`, `i32` or `u32` results at the boundary from slow code. Other native
@@ -77,9 +77,12 @@ The physical profiles also compile direct uniform
 `f32` comparisons as vector selections, including within through masks and
 stream tails. Native `i32s` and `u32s` support wrapping add/subtract and
 bitwise AND/OR/XOR. Signed `i32s` comparisons produce masks for selection
-and mask reductions. The [operation reference](docs/spec/01_primitives_operations_and_targets.md#integer-racks)
+and mask reductions. `sum`, `product`, `minimum` and `maximum` reduce an
+`i32s` or `u32s` rack to one result of the matching scalar type.
+The corresponding `scan_` operations keep every inclusive prefix in a rack.
+The [operation reference](docs/spec/01_primitives_operations_and_targets.md#integer-racks)
 lists the implemented subset and remaining work.
-These development additions are absent from the 0.6.0-beta source tag. On
+These CPU and C ABI additions are included in 0.7.0. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one
 `wasm_simd128.h` intrinsic.
@@ -120,18 +123,27 @@ slow main() -> i32:
 
 ## Using the compiler
 
+The opam submission is awaiting review. Its package tests run portable
+compiler checks, without requiring toolchains for every output target.
+Producing and verifying objects needs the target tools described in the
+[compiler reference](docs/RAKEC.md#tools-and-environment).
+
 The compiler is `rakec`, written in OCaml. The Nix development shell has
 everything it needs:
 
 ```sh
 nix develop --command dune build
 nix develop --command dune exec rakec -- --interpret program.rk
-nix develop --command dune exec rakec -- --emit-asm --target x86-avx2 -o program.s program.rk
+nix develop --command dune exec rakec -- --emit-c --target x86-avx2 -o program.c program.rk
+nix develop --command dune exec rakec -- --emit-asm --target x86-avx2 -o kernels.s kernels.rk
 nix develop --command dune exec rakec -- --verify-native --target wasm-simd128 -o program.o program.rk
 ```
 
-`--interpret` runs `main` in Rake's executable semantics. `--emit-asm` writes
-assembly, or C for a whole program. `--verify-native` builds an object,
+`--interpret` runs `main` in Rake's executable semantics. `--emit-c` writes a C
+unit for a whole program or register kernels. On a physical target, that unit
+embeds Rake-selected assembly, while the platform C compiler lowers slow code.
+`--emit-asm` writes physical-target register-kernel assembly.
+`--verify-native` builds an object,
 disassembles it and checks its vector functions against the profile's rules. A
 scratch or rake contains only register work from the profile's instruction
 list, with no calls and no stack. On x86 and AArch64 each rack is one whole

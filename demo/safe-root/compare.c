@@ -14,6 +14,27 @@
 typedef struct { const float *value; } rake_stack_Samples_v1;
 extern void roots(const rake_stack_Samples_v1 *, int64_t, float *);
 extern void safe_root_c(const float *, float *, size_t);
+#ifdef SAFE_ROOT_FOUR_WAY
+extern void safe_root_c_scalar(const float *, float *, size_t);
+extern void safe_root_avx2(const float *, float *, size_t);
+
+typedef void (*root_kernel)(const float *, float *, size_t);
+
+static void rake_roots(const float *values, float *output, size_t count) {
+    const rake_stack_Samples_v1 stack = { values };
+    roots(&stack, (int64_t)count, output);
+}
+
+static const struct {
+    const char *label;
+    root_kernel calculate;
+} kernels[] = {
+    { "c-scalar", safe_root_c_scalar },
+    { "c-auto", safe_root_c },
+    { "c-intrinsics", safe_root_avx2 },
+    { "rake", rake_roots },
+};
+#endif
 
 static uint32_t bits(float value) {
     uint32_t result;
@@ -56,6 +77,30 @@ static void check_tail_memory(void) {
         roots(&stack, (int64_t)count, values);
         for (size_t i = 0; i < count; ++i)
             if (bits(values[i]) != bits(expected[i])) abort();
+#ifdef SAFE_ROOT_FOUR_WAY
+        for (size_t kernel = 0; kernel < 4; ++kernel) {
+            for (size_t i = 0; i < count; ++i) values[i] = special[i % 11];
+            feclearexcept(FE_ALL_EXCEPT);
+            kernels[kernel].calculate(values, results, count);
+            /* The masked implementations also suppress inactive arithmetic.
+               Ordinary C comparisons may raise FE_INVALID for quiet NaNs. */
+            const int exceptions = fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW);
+            if (kernel >= 2 && exceptions) {
+                fprintf(stderr, "%s raised a floating exception at count %zu\n",
+                    kernels[kernel].label, count);
+                abort();
+            }
+            for (size_t i = 0; i < count; ++i)
+                if (bits(results[i]) != bits(expected[i])) {
+                    fprintf(stderr, "%s mismatch at count %zu, element %zu: %08x != %08x\n",
+                        kernels[kernel].label, count, i, bits(results[i]), bits(expected[i]));
+                    abort();
+                }
+            kernels[kernel].calculate(values, values, count);
+            for (size_t i = 0; i < count; ++i)
+                if (bits(values[i]) != bits(expected[i])) abort();
+        }
+#endif
     }
     roots(NULL, -1, NULL);
     munmap(input, page * 2);
@@ -92,11 +137,40 @@ int main(int argc, char **argv) {
     roots(&stack, (int64_t)count + 3, actual);
     for (size_t i = 0; i < count + 3; ++i)
         if (bits(actual[i]) != bits(expected[i])) abort();
+#ifdef SAFE_ROOT_FOUR_WAY
+    for (size_t kernel = 0; kernel < 4; ++kernel) {
+        kernels[kernel].calculate(values, actual, count + 3);
+        for (size_t i = 0; i < count + 3; ++i)
+            if (bits(actual[i]) != bits(expected[i])) abort();
+    }
+#endif
     if (check_only) {
         free(values); free(expected); free(actual);
         puts("native safe-root guard-page and million-element scalar-oracle checks passed");
         return 0;
     }
+#ifdef SAFE_ROOT_FOUR_WAY
+    double samples[4][31];
+    for (int repeat = -4; repeat < 31; ++repeat) {
+        for (int position = 0; position < 4; ++position) {
+            const size_t kernel = (size_t)((position + repeat + 4) % 4);
+            const double start = now();
+            for (int pass = 0; pass < 4; ++pass)
+                kernels[kernel].calculate(values, actual, count);
+            const double elapsed = (now() - start) / 4;
+            if (repeat >= 0) samples[kernel][repeat] = elapsed;
+        }
+    }
+    puts("record\tvariant\tsample\tmilliseconds");
+    for (size_t kernel = 0; kernel < 4; ++kernel) {
+        for (size_t sample = 0; sample < 31; ++sample)
+            printf("sample\t%s\t%zu\t%.9f\n", kernels[kernel].label,
+                sample, samples[kernel][sample] * 1000);
+        qsort(samples[kernel], 31, sizeof(double), order);
+        printf("median\t%s\t31\t%.9f\n", kernels[kernel].label,
+            samples[kernel][15] * 1000);
+    }
+#else
     double c_time[31], rake_time[31];
     for (int repeat = -4; repeat < 31; ++repeat) {
         for (int turn = 0; turn < 2; ++turn) {
@@ -117,6 +191,7 @@ int main(int argc, char **argv) {
     printf("elements\tc_median_ms\trake_median_ms\tc_over_rake\n");
     printf("%zu\t%.6f\t%.6f\t%.3f\n", count,
         c_time[15] * 1000, rake_time[15] * 1000, c_time[15] / rake_time[15]);
+#endif
     volatile uint32_t checksum = bits(actual[count - 1]) ^ bits(expected[count - 1]);
     free(values); free(expected); free(actual);
     return checksum != 0;

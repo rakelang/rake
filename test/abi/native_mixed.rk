@@ -42,6 +42,30 @@ scratch native_boolean_literal_binding() -> f32:
   let selected: f32s = if <enabled> then <2.5> else <-0.0>
   extract(selected, 0)
 
+scratch native_boolean_and(<left: bool>, <right: bool>) -> bool:
+  <left> and <right>
+
+scratch native_boolean_or(<left: bool>, <right: bool>) -> bool:
+  <left> or <right>
+
+scratch native_boolean_not(<value: bool>) -> bool:
+  not <value>
+
+scratch native_boolean_bits(<enabled: bool>, <value: f32>) -> u32:
+  bitmask(<enabled> or (<value> > <0.0>))
+
+scratch native_compound_choice(<enabled: bool>, <left: f32>, <right: f32>) -> f32:
+  let selected: f32s = if <enabled> and (not (<left> >= <right>) or <left> = <right>) then <3.5> else <-0.0>
+  extract(selected, 0)
+
+scratch native_compound_integer(<enabled: bool>, <signed: i32>, <unsigned: u32>) -> f32:
+  let selected: f32s = if not <enabled> or (<signed> < <0> and <unsigned> >= <2147483648>) then <3.5> else <-0.0>
+  extract(selected, 0)
+
+scratch native_parameter_identifiers(<result: f32>, <step0: f32>, <step1: f32>, <v128_t: f32>, <uint32_t: f32>) -> f32:
+  let values: f32s = <result> + <step0> + <step1> + <v128_t> + <uint32_t>
+  extract(values, 0)
+
 scratch native_reduced_choice(<value: f32>) -> f32:
   let <take: bool> = all(<value> > <0.0>)
   native_boolean_choice(<take>, <value>)
@@ -82,7 +106,43 @@ scratch native_relocate_unsigned(<value: u32>) -> u32:
   let <picked: u32> = extract(values, 0)
   extract(insert(values, 3, <picked>), 3)
 
+scratch native_shift_unsigned(<value: u32>, <amount: u32>) -> u32:
+  let values: u32s = <value>
+  let <picked: u32> = extract(values, 0)
+  extract(shift_bits_left(shift_bits_right(values, <amount>), <picked>), 0)
+
+scratch native_shift_signed(<value: i32>, <amount: u32>) -> i32:
+  let values: i32s = <value>
+  extract(shift_bits_right_signed(values, <amount>), 0)
+
+scratch native_shift_constant(<value: u32>) -> u32:
+  native_shift_unsigned(<value>, <4294967295>)
+
+scratch native_uniform_arithmetic(<left: f32>, <right: f32>) -> f32:
+  let <added: f32> = <left> + <right>
+  let <multiplied: f32> = <added> * <right>
+  (<multiplied> - <left>) / <right>
+
+scratch native_wrapping_arithmetic(<left: u32>, <right: u32>) -> u32:
+  let <added: u32> = <left> + <right>
+  let <multiplied: u32> = <added> * <right>
+  <multiplied> - <left>
+
+scratch native_float_negation(<value: f32>) -> f32:
+  -<value>
+
+scratch native_signed_negation(<value: i32>) -> i32:
+  -<value>
+
 slow main() -> i32:
+  if bitcast(u32, native_float_negation(<0.0>)) != 2147483648 or native_float_negation(<-3.5>) != 3.5:
+    return 82
+  if native_signed_negation(<-2147483648>) != -2147483648 or native_signed_negation(<2147483647>) != -2147483647:
+    return 83
+  if native_uniform_arithmetic(<2.0>, <2.0>) != 3.0:
+    return 80
+  if native_wrapping_arithmetic(<4294967295>, <2>) != 3:
+    return 81
   let original: f32 = -0.0
   let carried = native_identity(<original>)
   if bitcast(u32, carried) != bitcast(u32, original):
@@ -117,6 +177,26 @@ slow main() -> i32:
     return 10
   if bitcast(u32, native_boolean_literal_binding()) != bitcast(u32, original):
     return 10
+  if not native_boolean_and(<true>, <true>) or native_boolean_and(<true>, <false>):
+    return 10
+  if not native_boolean_or(<false>, <true>) or native_boolean_or(<false>, <false>):
+    return 10
+  if native_boolean_not(<true>) or not native_boolean_not(<false>):
+    return 10
+  if bit_and(native_boolean_bits(<true>, <-1.0>), 15) != 15 or bit_and(native_boolean_bits(<false>, <1.0>), 15) != 15:
+    return 10
+  if native_boolean_bits(<false>, <-1.0>) != 0:
+    return 10
+  if native_compound_choice(<true>, <1.0>, <2.0>) != 3.5 or native_compound_choice(<true>, <2.0>, <2.0>) != 3.5:
+    return 10
+  if bitcast(u32, native_compound_choice(<false>, <1.0>, <2.0>)) != bitcast(u32, original):
+    return 10
+  if native_compound_integer(<true>, <-2147483648>, <4294967295>) != 3.5 or native_compound_integer(<false>, <2147483647>, <0>) != 3.5:
+    return 10
+  if bitcast(u32, native_compound_integer(<true>, <2147483647>, <4294967295>)) != bitcast(u32, original):
+    return 10
+  if native_parameter_identifiers(<1.0>, <2.0>, <4.0>, <8.0>, <16.0>) != 31.0:
+    return 10
   if native_reduced_choice(<3.5>) != 3.5 or bitcast(u32, native_reduced_choice(<-3.5>)) != bitcast(u32, original):
     return 11
   if native_extract_signed(<-2147483648>) != -2147483648:
@@ -125,4 +205,10 @@ slow main() -> i32:
     return 13
   if native_relocate_unsigned(<2147483648>) != 2147483648:
     return 14
+  if native_shift_unsigned(<4294967295>, <4294967295>) != 2147483648:
+    return 15
+  if native_shift_signed(<-2147483648>, <2147483649>) != -1073741824:
+    return 16
+  if native_shift_constant(<4294967295>) != 2147483648:
+    return 17
   return i32(native_identity(<3.5>))

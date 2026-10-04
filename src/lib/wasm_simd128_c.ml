@@ -192,7 +192,7 @@ let result_type text =
   else "v128_t"
 
 let emit_function (func : I.func) =
-  let parameter_name index = (List.nth func.parameters index).I.parameter_name in
+  let parameter_name index = C_identifier.local (List.nth func.parameters index).I.parameter_name in
   let scratch_names = Hashtbl.create 8 in
   let local_name = function
     | I.Result_local -> "result"
@@ -233,19 +233,19 @@ let emit_function (func : I.func) =
           stack := name :: !stack)
     func.instructions;
   let parameters =
-    List.map
-      (fun (parameter : I.parameter) -> c_type parameter.parameter_class ^ " " ^ parameter.parameter_name)
+    List.mapi
+      (fun index (parameter : I.parameter) -> c_type parameter.parameter_class ^ " " ^ parameter_name index)
       func.parameters
   in
   (* Keep the selected ABI even when an operation needs no tail mask. *)
   let unused_parameters =
     List.mapi
-      (fun index (parameter : I.parameter) ->
+      (fun index (_parameter : I.parameter) ->
         if List.exists
           (function I.Local_get (I.Parameter_local used) -> used = index | _ -> false)
           func.instructions
         then ""
-        else "    (void)" ^ parameter.parameter_name ^ ";\n")
+        else "    (void)" ^ parameter_name index ^ ";\n")
       func.parameters
     |> String.concat ""
   in

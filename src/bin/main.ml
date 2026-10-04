@@ -9,7 +9,8 @@ Usage:
   rakec --emit-tokens <file.rk>       Emit tokens (for debugging)
   rakec --emit-ast <file.rk>          Emit AST (for debugging)
   rakec --emit-native-ir <file.rk>    Emit rack-preserving native SSA
-  rakec --emit-asm <file.rk>          Emit Rake-owned textual assembly
+  rakec --emit-c <file.rk>            Emit a C translation unit
+  rakec --emit-asm <file.rk>          Emit physical-target kernel assembly
   rakec --emit-obj <file.rk>          Assemble Rake-owned code to an object
   rakec --verify-native <file.rk>     Verify and emit a Rake-owned object
   rakec --interpret <file.rk> [-- args...]  Run main in Rake's executable semantics
@@ -33,13 +34,15 @@ Options:
 The production kernel backends are x86-sse2, x86-avx2, x86-avx512,
 aarch64-neon and wasm-simd128. Rake owns
 native SSA, instruction selection, no-spill allocation and assembly emission.
-On wasm-simd128 the emitted text is C with one wasm_simd128.h intrinsic per
-selected instruction, and a program with slow code or runs compiles to one C
-file with a C main entry point. External tools only assemble or compile Rake's text
-into an object file, which --verify-native then disassembles and checks.
-Native slow-only programs emit C and compile with the platform C compiler.
-Native programs may call register kernels through f32 C boundaries.
-Native SSE2, AVX2, AVX-512 and NEON provide a restricted f32 stream traversal.
+--emit-c writes C for WebAssembly or a native C unit embedding Rake-selected
+assembly. The platform C compiler lowers slow code and implements its C ABI.
+On wasm-simd128 each selected vector instruction is a wasm_simd128.h intrinsic.
+--emit-asm writes only physical-target register-kernel assembly. Use --emit-c
+for whole programs and WebAssembly. C output alone has not passed final-object
+verification; --verify-native compiles, disassembles and checks the object.
+Native programs call register kernels through f32/i32/u32/bool uniform C boundaries.
+Native SSE2, AVX2, AVX-512 and NEON traverse f32/i32/u32 streams, including
+explicit widening of byte and 16-bit columns and guarded partial racks.
 General native runs remain WIP.
 
 |}
@@ -79,6 +82,7 @@ type emit_mode =
   | Tokens
   | Ast
   | Native_ir
+  | C_source
   | Assembly
   | Object
   | Verify_native
@@ -126,9 +130,7 @@ let typecheck program =
   | Ok environment -> environment
   | Error message -> fail message
 
-(** A program with slow code, runs or module definitions is one whole
-    program: checked by the tier checker, and on wasm-simd128 emitted,
-    assembled and verified as one C translation unit. *)
+(** Slow code, runs and module definitions use the whole-program C emitter. *)
 let is_whole_program (program : Rake.Ast.program) =
   List.exists
     (fun (m : Rake.Ast.module_) ->
@@ -217,6 +219,9 @@ let () =
         | "--emit-native-ir" :: rest ->
             select_mode Native_ir "--emit-native-ir";
             parse rest
+        | "--emit-c" :: rest ->
+            select_mode C_source "--emit-c";
+            parse rest
         | "--emit-asm" :: rest ->
             select_mode Assembly "--emit-asm";
             parse rest
@@ -277,7 +282,7 @@ let () =
       in
       (match (opts.emit_mode, opts.output) with
       | (Check | Tokens | Ast), Some _ ->
-          fail "Error: -o requires an IR, assembly, or object emission mode"
+          fail "Error: -o requires an IR, C, assembly, or object emission mode"
       | _ -> ());
       match opts.emit_mode with
       | Tokens -> print_string (emit_tokens filename)
@@ -307,11 +312,14 @@ let () =
           let _ = typecheck program in
           if is_whole_program program then ignore (tier_check filename program);
           Printf.printf "Parsed and type-checked %s successfully.\n" filename
-      | (Native_ir | Assembly | Object | Verify_native) as mode ->
+      | (Native_ir | C_source | Assembly | Object | Verify_native) as mode ->
           let program = parse_program filename in
           let _ = typecheck program in
           let config = resolve_target_config opts in
-          if is_whole_program program then (
+          let whole_program = is_whole_program program in
+          if mode = Assembly && (whole_program || Rake.Target.is_wasm config.profile) then
+            fail "Error: --emit-asm requires physical-target register kernels; use --emit-c for whole programs or WebAssembly";
+          if whole_program || (mode = C_source && not (Rake.Target.is_wasm config.profile)) then (
             Rake.Native_lower.relaxed := config.profile = Rake.Target.Wasm_simd128_relaxed;
             Rake.Native_ir.floating_point_exceptions := false;
             Rake.Wasm_simd128_c.relaxed := !Rake.Native_lower.relaxed;
@@ -322,7 +330,7 @@ let () =
             | Native_ir ->
                 let native = report_backend (Rake.Native_backend.lower ~config [ { Rake.Ast.mod_name = "main"; mod_defs = checked.vector_defs } ]) in
                 write_output (Rake.Native_ir.dump native ^ Rake.Tier_ir.dump checked) opts.output
-            | Assembly -> write_output c_source (default ".c")
+            | C_source -> write_output c_source (default ".c")
             | (Object | Verify_native) when not (Rake.Target.is_wasm config.profile) ->
                 if mode = Verify_native && native_kernels = None then
                   fail "Error: native slow-only code has no vector functions to verify; use --emit-obj for its platform C compilation";
@@ -351,12 +359,11 @@ let () =
           | Native_ir ->
               let native_ir = report_backend (Rake.Native_backend.lower ~config program) in
               write_output (Rake.Native_ir.dump native_ir) opts.output
-          | Assembly ->
+          | C_source | Assembly ->
               let assembly =
                 report_backend (Rake.Native_backend.emit_assembly ~source:filename ~config program)
               in
-              (* The wasm-simd128 profile's textual assembly is C of SIMD intrinsics. *)
-              let extension = if Rake.Target.is_wasm config.profile then ".c" else ".s" in
+              let extension = if mode = C_source then ".c" else ".s" in
               let output =
                 Some
                   (match opts.output with

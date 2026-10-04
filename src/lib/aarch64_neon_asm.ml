@@ -39,6 +39,7 @@ let registers = function
   | A.Broadcast_bool { dst; source } -> [ dst; source ]
   | A.Insert_word32 { dst; inserted; _ } -> [ dst; inserted ]
   | A.Reduce_mask { dst; source; scratch; _ } -> [ dst; source; scratch ]
+  | A.Shift_uniform_i32 { dst; source; count; normalized; _ } -> [ dst; source; count; normalized ]
   | A.Fadd { dst; left; right }
   | A.Fsub { dst; left; right }
   | A.Add_i32 { dst; left; right }
@@ -177,6 +178,15 @@ let emit_instruction pool buffer ({ A.operation; _ } : A.instruction) =
           | Native_ir.Shift_right -> "ushr"
           | Native_ir.Shift_right_signed -> "sshr" in
         emit "%s %s, %s, #%d" mnemonic (lanes_f32 dst) (lanes_f32 source) count
+  | A.Shift_uniform_i32 { dst; source; count; normalized; shift } ->
+      emit "dup %s, %s.s[0]" (lanes_f32 normalized) (vector count);
+      emit "shl %s, %s, #27" (lanes_f32 normalized) (lanes_f32 normalized);
+      emit "ushr %s, %s, #27" (lanes_f32 normalized) (lanes_f32 normalized);
+      if shift <> Native_ir.Shift_left then
+        emit "neg %s, %s" (lanes_f32 normalized) (lanes_f32 normalized);
+      emit "%s %s, %s, %s"
+        (if shift = Native_ir.Shift_right_signed then "sshl" else "ushl")
+        (lanes_f32 dst) (lanes_f32 source) (lanes_f32 normalized)
   | A.Compare_i32 { dst; predicate; unsigned; left; right } ->
       let greater = if unsigned then "cmhi" else "cmgt" in
       let greater_equal = if unsigned then "cmhs" else "cmge" in

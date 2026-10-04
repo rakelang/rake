@@ -1,11 +1,78 @@
 # Changelog
 
 A Rake version identifies one compiler, Tree-sitter grammar, documentation set and
-website. Beta releases may still change the source language and the binary
+website. Releases before 1.0 may still change the source language and the binary
 boundaries between versions. A design in the documentation gets a version
 only when the compiler implements it and the tests cover it.
 
-## Unreleased
+## 0.7.0
+
+- Package tests run without target assemblers or disassemblers. Separate
+  native and WebAssembly object suites retain mandatory verification checks,
+  and the release gate runs both. Native GNU ELF tools accept explicit
+  executable overrides and common distribution cross-toolchain prefixes.
+  Package CI checks Linux, macOS and Windows separately from object checks.
+
+- Native register kernels bitcast between `f32s`, `i32s` and `u32s` without
+  changing lane bits. Reinterpreting an input uses its register or a vector
+  register copy, preserving zero signs and NaN payloads without floating-point
+  exceptions.
+
+- Register kernels accept unary minus on `f32` and `i32` uniforms,
+  including reduced and extracted values. Packed negation preserves float
+  zero signs and NaN payloads, and signed results wrap to 32 bits.
+  Negation under a partial lane mask remains WIP.
+
+- Register kernels accept arithmetic on `f32`, `i32` and `u32` uniforms,
+  including results of reductions, extraction and `bitmask`. Physical
+  profiles broadcast those values and use packed instructions, then retain
+  the completed scalar result. Float arithmetic rounds to binary32 at each
+  step, and integer addition, subtraction and multiplication wrap to 32 bits.
+  Arithmetic under a partial lane mask remains WIP.
+
+- `scan_sum`, `scan_product`, `scan_minimum` and `scan_maximum` accept
+  `i32s` and `u32s` on every CPU profile. Packed stages combine inclusive
+  prefixes across the full rack, preserving wrapping arithmetic and signed
+  or unsigned extrema. A sequential C oracle checks every lane and reuse of
+  the input rack. Scans and reductions at other integer widths remain WIP.
+
+- `sum`, `product`, `minimum` and `maximum` accept `i32s` and `u32s` on every
+  CPU profile. Packed shuffle-and-combine trees preserve wrapping arithmetic
+  and signedness, with one completed result crossing the scalar C ABI.
+  Independent C checks overflow boundaries and reuse of the input rack.
+  Scans and reductions at other integer widths remain WIP.
+
+- Native stream bodies support local rack assignments, arrays of rack
+  locations and unrolled fixed-count `repeat`, including nested repeats.
+  Ordered SSA bindings preserve earlier snapshots without duplicating their
+  expressions. Each traversal chunk starts with fresh locations, and each
+  unrolled copy has its own locals. Runtime-counted inner loops remain WIP.
+
+- `--emit-c` produces a C translation unit for WebAssembly, native whole
+  programs or native register kernels. `--emit-asm` produces physical-target
+  register-kernel assembly and directs whole-program and WebAssembly users to
+  `--emit-c`. Native C output embeds Rake-selected assembly and delegates slow
+  lowering to the platform C compiler. C ABI interoperation remains independent
+  of the output format.
+
+- Uniform conditions compose with `and`, `or` and `not` in physical register
+  kernels and native streams. Chained immutable Boolean bindings retain that
+  structure. Short-circuit masks sanitise skipped floating-point comparisons,
+  including inside through masks and partial racks. Independent C checks
+  exact choices and signalling-NaN exception flags, with guarded stream
+  inputs and column updates. Mixed-program and WebAssembly checks cover the
+  composed condition too. WebAssembly C emission also keeps parameter
+  identifiers distinct from C keywords, generated temporaries and typedefs.
+
+- Native `i32s` and `u32s` shifts accept runtime uniform `u32` counts on
+  SSE2, AVX2, AVX-512F and NEON, including native streams. Vector operations
+  normalise the count modulo 32 in one allocated temporary, preserving live
+  inputs and the original count. Final-object checks require the complete
+  selected sequence with full-width data operands. Independent C checks all
+  counts, high count bits, extracted values, masked calls and retained
+  inputs. Guarded streams check full racks, tails, column updates and
+  separate destinations. Mixed-program checks cover the scalar C boundary
+  and WebAssembly.
 
 - Literal-index `extract` and `insert` support `i32s` and `u32s` on SSE2,
   AVX2, AVX-512F and NEON. They reuse the float lane transfers without
@@ -129,7 +196,7 @@ only when the compiler implements it and the tests cover it.
   explicitly typed rack bindings broadcast their uniforms. Native scalar
   integer constants stay in vector registers until the C return transfer.
   Executable semantics and WebAssembly checks cover unsigned boundary bits
-  and wrapping uniform arithmetic. Runtime shift counts remain work in progress.
+  and wrapping uniform arithmetic.
 
 - `u32s` `min` and `max` compile on SSE2, AVX2, AVX-512F, NEON and
   WebAssembly. SSE2 compares sign-bit-biased copies, then selects the
@@ -180,8 +247,8 @@ only when the compiler implements it and the tests cover it.
   all four physical profiles. Full-width packed instructions implement left,
   logical-right and signed-right shifts. A zero count leaves the rack unchanged.
   Independent C checks every count, sign extension, masked use and retained
-  inputs. Final-object checks reject narrowed or scalar shifts, runtime
-  counts and out-of-range immediates. Native uniform counts remain WIP.
+  inputs. Final-object checks reject narrowed or scalar shifts and
+  out-of-range immediates. Runtime counts use the normalisation sequence above.
 
 - Native signed `i32s` `min` and `max` compile on all four physical profiles.
   SSE2 uses packed comparison and logical selection with an allocated mask

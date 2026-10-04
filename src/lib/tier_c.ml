@@ -39,12 +39,6 @@ let fail loc fmt = Printf.ksprintf (fun m -> raise (Emission_error (loc, m))) fm
 
 (* ─── Names ─────────────────────────────────────────────────────────── *)
 
-(** A Rake local in C: user names gain a trailing underscore, and the
-    compiler's own names (which contain [$]) map [$] to [_rk], so the two
-    never collide. *)
-let local name =
-  if String.contains name '$' then String.concat "_rk" (String.split_on_char '$' name) else name ^ "_"
-
 let is_aggregate = function Array _ | Record _ -> true | _ -> false
 
 let function_name name = if List.mem name Typecheck.c_reserved_words then name ^ "_" else name
@@ -312,8 +306,8 @@ let rec expr u scope (e : expr) : string =
   | Str_lit text -> "\"" ^ text ^ "\""
   | Var name -> (
       match Hashtbl.find_opt scope.places name with
-      | Some Borrowed -> "(*" ^ local name ^ ")"
-      | _ -> local name)
+      | Some Borrowed -> "(*" ^ C_identifier.local name ^ ")"
+      | _ -> C_identifier.local name)
   | Global name -> global_ref u name e.ty
   | Unary (Neg, a) -> (
       match a.ty with
@@ -627,18 +621,18 @@ and stmt u scope indent (s : stmt) =
       let field = Node_table.find scope.frame_slots (Obj.repr s) in
       let initial = Option.map go value in
       Hashtbl.replace scope.places name Borrowed;
-      let setup = Printf.sprintf "%s%s *const %s = &rake_locals->%s;\n" pad (ctype u ty) (local name) field in
+      let setup = Printf.sprintf "%s%s *const %s = &rake_locals->%s;\n" pad (ctype u ty) (C_identifier.local name) field in
       let initialise = match value, initial with
-        | Some v, Some text when not (is_zero u v) -> Printf.sprintf "%s*%s = %s;\n" pad (local name) text
-        | _ -> Printf.sprintf "%s__builtin_memset(%s, 0, sizeof *%s);\n" pad (local name) (local name)
+        | Some v, Some text when not (is_zero u v) -> Printf.sprintf "%s*%s = %s;\n" pad (C_identifier.local name) text
+        | _ -> Printf.sprintf "%s__builtin_memset(%s, 0, sizeof *%s);\n" pad (C_identifier.local name) (C_identifier.local name)
       in
       setup ^ initialise
   | Decl (name, (Ptr _ as ty), Some v, mutable_) ->
       (* An immutable pointer binding is a const pointer, not a pointer to const. *)
-      Printf.sprintf "%s%s%s %s = %s;\n" pad (ctype u ty) (if mutable_ then "" else "const") (local name) (go v)
+      Printf.sprintf "%s%s%s %s = %s;\n" pad (ctype u ty) (if mutable_ then "" else "const") (C_identifier.local name) (go v)
   | Decl (name, ty, Some v, mutable_) ->
-      Printf.sprintf "%s%s%s %s = %s;\n" pad (if mutable_ || is_aggregate ty then "" else "const ") (ctype u ty) (local name) (go v)
-  | Decl (name, ty, None, _) -> Printf.sprintf "%s%s %s = {0};\n" pad (ctype u ty) (local name)
+      Printf.sprintf "%s%s%s %s = %s;\n" pad (if mutable_ || is_aggregate ty then "" else "const ") (ctype u ty) (C_identifier.local name) (go v)
+  | Decl (name, ty, None, _) -> Printf.sprintf "%s%s %s = {0};\n" pad (ctype u ty) (C_identifier.local name)
   | Assign (place, v) -> (
       match place.ty with
       | Array _ when raw_array u place ->
@@ -652,7 +646,7 @@ and stmt u scope indent (s : stmt) =
   | While (c, body) ->
       Printf.sprintf "%s#pragma clang loop vectorize(disable)\n%swhile %s {\n%s%s}\n" pad pad (condition (go c)) (block u scope (indent + 4) body) pad
   | For (name, s, from, upto, by, body) ->
-      let t = scalar_c s and i = local name in
+      let t = scalar_c s and i = C_identifier.local name in
       let step, next =
         match by with
         | None -> ("", Printf.sprintf "%s = (%s)(%s + 1)" i t i)
@@ -843,7 +837,7 @@ type run_state = {
     lowered by the scratch pipeline; returns the call. *)
 let pure_call u rs loc name ty (pure : Ast.expr) fused =
   let free = free_names pure in
-  let cname n = local n in
+  let cname n = C_identifier.local n in
   let parameters =
     List.map
       (fun n ->
@@ -992,7 +986,7 @@ let affine defs var index =
 let rec run_stmts u rs scope indent (stmts : rstmt list) =
   String.concat "" (List.map (run_stmt u rs scope indent) stmts)
 
-and view_c (view : expr) = match view.k with Var name -> local name | _ -> "/* view */"
+and view_c (view : expr) = match view.k with Var name -> C_identifier.local name | _ -> "/* view */"
 
 and record_type rs name ty =
   Hashtbl.replace rs.types name ty;
@@ -1005,28 +999,28 @@ and run_stmt u rs scope indent (s : rstmt) =
   | R_uniform (name, e) ->
       record_type rs name e.ty;
       if Node_table.mem scope.dropped (Obj.repr s) then ""
-      else Printf.sprintf "%sconst %s %s = %s;\n" pad (ctype u e.ty) (local name) (uniform e)
+      else Printf.sprintf "%sconst %s %s = %s;\n" pad (ctype u e.ty) (C_identifier.local name) (uniform e)
   | R_slow e -> Printf.sprintf "%s(void)%s;\n" pad (uniform e)
   | R_pure (name, ty, pure, fused) ->
       record_type rs name ty;
       let c = match ty with Sc st -> scalar_c st | _ -> "v128_t" in
-      Printf.sprintf "%sconst %s %s = %s;\n" pad c (local name) (pure_call u rs s.rloc name ty pure fused)
+      Printf.sprintf "%sconst %s %s = %s;\n" pad c (C_identifier.local name) (pure_call u rs s.rloc name ty pure fused)
   | R_load (name, element, view, index, checked) ->
       record_type rs name (Rack element);
       u.selected <- "v128.load" :: u.selected;
-      Printf.sprintf "%sconst v128_t %s = wasm_v128_load(%s);\n" pad (local name) (address u rs scope view index element (lanes element) checked)
+      Printf.sprintf "%sconst v128_t %s = wasm_v128_load(%s);\n" pad (C_identifier.local name) (address u rs scope view index element (lanes element) checked)
   | R_gather (name, element, view, indices, checked) ->
       record_type rs name (Rack element);
       u.lane_operations <- u.lane_operations + 8;
       u.selected <- "v128.load32_lane" :: "i32x4.extract_lane" :: "i32x4.splat" :: u.selected;
-      let v = view_c view and g = local indices in
+      let v = view_c view and g = C_identifier.local indices in
       let check =
         if checked then (
           u.selected <- "i32x4.all_true" :: "i32x4.ge_s" :: "i32x4.lt_s" :: "v128.and" :: "i32x4.splat" :: u.selected;
           Printf.sprintf "%s    if (!wasm_i32x4_all_true(wasm_v128_and(wasm_i32x4_ge(%s, wasm_i32x4_splat(0)), wasm_i32x4_lt(%s, wasm_i32x4_splat(%s.count))))) __builtin_trap();\n" pad g g v)
         else ""
       in
-      let lane k = Printf.sprintf "%s = wasm_v128_load32_lane(%s.data + wasm_i32x4_extract_lane(%s, %d), %s, %d);" (local name) v g k (local name) k in
+      let lane k = Printf.sprintf "%s = wasm_v128_load32_lane(%s.data + wasm_i32x4_extract_lane(%s, %d), %s, %d);" (C_identifier.local name) v g k (C_identifier.local name) k in
       if rs.tail then (
         (* In a traversal's tail only the active lanes are checked and read,
            chosen by the uniform remainder as the tail's loads are. *)
@@ -1037,24 +1031,24 @@ and run_stmt u rs scope indent (s : rstmt) =
           else ""
         in
         Printf.sprintf "%sv128_t %s = wasm_i32x4_splat(0);\n%s{\n%s%s    switch (rake_r) {\n%s    case 3: %s __attribute__((fallthrough));\n%s    case 2: %s __attribute__((fallthrough));\n%s    case 1: %s break;\n%s    default: __builtin_trap();\n%s    }\n%s}\n"
-          pad (local name) pad check pad pad (lane 2) pad (lane 1) pad (lane 0) pad pad pad)
+          pad (C_identifier.local name) pad check pad pad (lane 2) pad (lane 1) pad (lane 0) pad pad pad)
       else
         let lanes = List.init 4 (fun k -> Printf.sprintf "%s    %s\n" pad (lane k)) in
-        Printf.sprintf "%sv128_t %s = wasm_i32x4_splat(0);\n%s{\n%s%s%s}\n" pad (local name) pad check (String.concat "" lanes) pad
+        Printf.sprintf "%sv128_t %s = wasm_i32x4_splat(0);\n%s{\n%s%s%s}\n" pad (C_identifier.local name) pad check (String.concat "" lanes) pad
   | R_location (name, ty, first) ->
       record_type rs name ty;
-      Printf.sprintf "%sv128_t %s = %s;\n" pad (local name) (local first)
+      Printf.sprintf "%sv128_t %s = %s;\n" pad (C_identifier.local name) (C_identifier.local first)
   | R_set (name, value) ->
       Hashtbl.remove rs.compact_ranges name;
       if rs.tail && Hashtbl.mem rs.assigned_in_traversal name then (
         (* A tail updates only its active lanes. *)
         u.selected <- "v128.bitselect" :: u.selected;
-        Printf.sprintf "%s%s = wasm_v128_bitselect(%s, %s, rake_tail);\n" pad (local name) (local value) (local name))
-      else Printf.sprintf "%s%s = %s;\n" pad (local name) (local value)
+        Printf.sprintf "%s%s = wasm_v128_bitselect(%s, %s, rake_tail);\n" pad (C_identifier.local name) (C_identifier.local value) (C_identifier.local name))
+      else Printf.sprintf "%s%s = %s;\n" pad (C_identifier.local name) (C_identifier.local value)
   | R_store (view, index, value, checked) ->
       let element = match view.ty with View (Sc e, _) -> e | _ -> SInt in
       u.selected <- "v128.store" :: u.selected;
-      Printf.sprintf "%swasm_v128_store(%s, %s);\n" pad (address u rs scope view index element (lanes element) checked) (local value)
+      Printf.sprintf "%swasm_v128_store(%s, %s);\n" pad (address u rs scope view index element (lanes element) checked) (C_identifier.local value)
   | R_for (var, from, upto, by, body) -> loop u rs scope indent var from upto by body
   | R_if (c, a, b) ->
       let else_part = if b = [] then "" else Printf.sprintf " else {\n%s%s}" (run_stmts u rs scope (indent + 4) b) pad in
@@ -1154,7 +1148,7 @@ and loop u rs scope indent var from upto by body =
   let pad = String.make indent ' ' in
   u.loops <- u.loops + 1;
   let s = match from.ty with Sc s -> s | _ -> SInt in
-  let t = scalar_c s and i = local var in
+  let t = scalar_c s and i = C_identifier.local var in
   let uniform e = expr u scope e in
   (* Accesses directly in this body (and its unrolled blocks); the body's
      uniform definitions that are pure arithmetic; and every name the body
@@ -1299,18 +1293,18 @@ and loop u rs scope indent var from upto by body =
   let line indent text = Buffer.add_string lines (String.make indent ' ' ^ text ^ "\n") in
   let first = var ^ "$first" and last = var ^ "$last" in
   line indent "{";
-  line (indent + 4) (Printf.sprintf "const %s %s = %s;" t (local first) (uniform from));
+  line (indent + 4) (Printf.sprintf "const %s %s = %s;" t (C_identifier.local first) (uniform from));
   line (indent + 4) (Printf.sprintf "const %s %s_end = %s;" t i (uniform upto));
   line (indent + 4) (Printf.sprintf "const %s %s_step = %s;" t i (match by with Some b -> uniform b | None -> "1"));
   if by <> None then line (indent + 4) (Printf.sprintf "if (%s_step <= 0) __builtin_trap();" i);
   line (indent + 4)
     (Printf.sprintf "const %s %s = %s < %s_end ? (%s)(%s + ((%s_end - %s - 1) / %s_step) * %s_step) : %s;"
-       t (local last) (local first) i t (local first) i (local first) i i (local first));
+       t (C_identifier.local last) (C_identifier.local first) i t (C_identifier.local first) i (C_identifier.local first) i i (C_identifier.local first));
   List.iter
     (fun (view, base_terms, strides, el, name, members) ->
       line (indent + 4)
         (Printf.sprintf "uint8_t *%s = (uint8_t *)%s.data + (int32_t)((%s + (%s) * (int64_t)%s) * %d);"
-           name view (base_c base_terms) (stride_c strides) (local first) (bytes el));
+           name view (base_c base_terms) (stride_c strides) (C_identifier.local first) (bytes el));
       line (indent + 4) (Printf.sprintf "const int32_t %s_step = (int32_t)((%s) * (int64_t)%s_step * %d);" name (stride_c strides) i (bytes el));
       (* Each checked access, evaluated as written at the first and last
          iterations: its index is affine in the loop index, so these bound
@@ -1322,7 +1316,7 @@ and loop u rs scope indent var from upto by body =
             let at name = uniform (substitute [] var name index) in
             line (indent + 4)
               (Printf.sprintf "if (%s < %s_end) { (void)rake_span(%s, %d, %s.count); (void)rake_span(%s, %d, %s.count); }"
-                 (local first) i (at first) lane_count view (at last) lane_count view)))
+                 (C_identifier.local first) i (at first) lane_count view (at last) lane_count view)))
         (checked_representatives (List.filter (fun (_, _, checked) -> checked) (List.rev !members))))
     !groups;
   let next =
@@ -1339,15 +1333,15 @@ and loop u rs scope indent var from upto by body =
   (match by with
    | None ->
        pragma ();
-       line (indent + 4) (Printf.sprintf "for (%s %s = %s; %s < %s_end; %s) {" t i (local first) i i next)
+       line (indent + 4) (Printf.sprintf "for (%s %s = %s; %s < %s_end; %s) {" t i (C_identifier.local first) i i next)
    | Some _ ->
        (* A stepped loop counts its trips: the index then advances by a plain
           add, which can't overflow before the count ends the loop. *)
        ignore next;
        line (indent + 4)
-         (Printf.sprintf "const uint32_t %s_trips = %s < %s_end ? (uint32_t)(((int64_t)%s_end - (int64_t)%s - 1) / (int64_t)%s_step) + 1u : 0u;" i (local first) i i (local first) i);
+         (Printf.sprintf "const uint32_t %s_trips = %s < %s_end ? (uint32_t)(((int64_t)%s_end - (int64_t)%s - 1) / (int64_t)%s_step) + 1u : 0u;" i (C_identifier.local first) i i (C_identifier.local first) i);
        line (indent + 4)
-         (Printf.sprintf "%s %s = %s;" t i (local first));
+         (Printf.sprintf "%s %s = %s;" t i (C_identifier.local first));
        pragma ();
        line (indent + 4)
          (Printf.sprintf "for (uint32_t %s_trip = 0; %s_trip < %s_trips; %s_trip++, %s = (%s)((%s)%s + (%s)%s_step)) {" i i i i i t (Tier_ir.(if is_signed s then "uint64_t" else "uint64_t")) i "uint64_t" i));
@@ -1384,11 +1378,11 @@ and traverse u rs scope indent t =
     match Hashtbl.find_opt column_names key with
     | Some name -> name
     | None ->
-        let name = Printf.sprintf "rake_column_%s_%s%s" (local owner) field (if writable then "_out" else "") in
+        let name = Printf.sprintf "rake_column_%s_%s%s" (C_identifier.local owner) field (if writable then "_out" else "") in
         Hashtbl.replace column_names key name;
         Buffer.add_string columns
           (Printf.sprintf "%s        %suint8_t *const %s = (%suint8_t *)%s->%s;\n" pad (if writable then "" else "const ")
-             name (if writable then "" else "const ") (local owner) field);
+             name (if writable then "" else "const ") (C_identifier.local owner) field);
         name
   in
   let body tail =
@@ -1424,7 +1418,7 @@ and traverse u rs scope indent t =
           in
           if tail then tail_helpers u (bytes stored * l) (bytes stored);
           u.selected <- "v128.load" :: "v128.load32_zero" :: "v128.load64_zero" :: u.selected;
-          Printf.sprintf "%s        const v128_t %s = %s;\n" pad (local name) (widen raw)
+          Printf.sprintf "%s        const v128_t %s = %s;\n" pad (C_identifier.local name) (widen raw)
       | _ -> ""
     in
     u.selected <- "v128.store" :: u.selected;
@@ -1432,13 +1426,13 @@ and traverse u rs scope indent t =
       match s.r with
       | R_yield value ->
           let out = Printf.sprintf "(uint8_t *)p_result + (uint32_t)%d * rake_i" (bytes t.t_domain) in
-          if tail then (tail_helpers u (bytes t.t_domain * l) (bytes t.t_domain); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes t.t_domain * l) (bytes t.t_domain) out (local value))
-          else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (local value)
+          if tail then (tail_helpers u (bytes t.t_domain * l) (bytes t.t_domain); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes t.t_domain * l) (bytes t.t_domain) out (C_identifier.local value))
+          else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (C_identifier.local value)
       | R_output (output, field, value) ->
           let element = List.assoc field (find_pack u.program (match Hashtbl.find_opt rs.types output with Some (Stack (s, _)) -> s | _ -> t.t_pack)).pack_fields in
           let out = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer ~writable:true output field) (bytes element) in
-          if tail then (tail_helpers u (bytes element * l) (bytes element); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes element * l) (bytes element) out (local value))
-          else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (local value)
+          if tail then (tail_helpers u (bytes element * l) (bytes element); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes element * l) (bytes element) out (C_identifier.local value))
+          else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (C_identifier.local value)
       | R_block b -> Printf.sprintf "%s        {\n%s%s        }\n" pad (String.concat "" (List.map stmt b)) pad
       | _ -> run_stmt u rs scope (indent + 8) s
     in
@@ -1525,18 +1519,18 @@ let run_function u (run : run) =
     (function
       | Run_stack (name, stack, w) ->
           record_type rs name (Stack (stack, w));
-          params := Printf.sprintf "const %s *%s" (stack_type u stack w) (local name) :: !params
+          params := Printf.sprintf "const %s *%s" (stack_type u stack w) (C_identifier.local name) :: !params
       | Run_view (name, s, w) ->
           record_type rs name (View (Sc s, w));
           let view = ctype u (View (Sc s, w)) in
           params := Printf.sprintf "int32_t p_%s_count" name :: Printf.sprintf "%s%s *p_%s" (if w then "" else "const ") (scalar_c s) name :: !params;
-          Buffer.add_string entry (Printf.sprintf "    const %s %s = { (%s *)p_%s, p_%s_count };\n" view (local name) (scalar_c s) name name)
+          Buffer.add_string entry (Printf.sprintf "    const %s %s = { (%s *)p_%s, p_%s_count };\n" view (C_identifier.local name) (scalar_c s) name name)
       | Run_uniform (name, s) ->
           record_type rs name (Sc s);
-          params := Printf.sprintf "%s %s" (scalar_c s) (local name) :: !params
+          params := Printf.sprintf "%s %s" (scalar_c s) (C_identifier.local name) :: !params
       | Run_rack (name, s) ->
           record_type rs name (Rack s);
-          params := Printf.sprintf "v128_t %s" (local name) :: !params)
+          params := Printf.sprintf "v128_t %s" (C_identifier.local name) :: !params)
     run.run_params;
   (match run.run_stream with
    | Some s -> params := Printf.sprintf "%s *p_result" (scalar_c s) :: !params
@@ -1599,18 +1593,18 @@ let slow_function u (f : slow_func) =
         | View (Sc s, w), By_value when f.fblock ->
             Buffer.add_string entry
               (Printf.sprintf "    const %s %s = { (%s *)p_%s, p_%s_count };\n"
-                 (ctype u p.pty) (local p.pname) (scalar_c s) p.pname p.pname);
+                 (ctype u p.pty) (C_identifier.local p.pname) (scalar_c s) p.pname p.pname);
             [ Printf.sprintf "%s%s *p_%s" (if w then "" else "const ") (scalar_c s) p.pname;
               Printf.sprintf "int32_t p_%s_count" p.pname ]
-        | _, By_value -> [ Printf.sprintf "%s %s" (ctype u p.pty) (local p.pname) ]
+        | _, By_value -> [ Printf.sprintf "%s %s" (ctype u p.pty) (C_identifier.local p.pname) ]
         | _, Borrow ->
             Hashtbl.replace scope.places p.pname Borrowed;
             complete u p.pty;
-            [ Printf.sprintf "const %s *%s" (ctype u p.pty) (local p.pname) ]
+            [ Printf.sprintf "const %s *%s" (ctype u p.pty) (C_identifier.local p.pname) ]
         | _, Borrow_mut ->
             Hashtbl.replace scope.places p.pname Borrowed;
             complete u p.pty;
-            [ Printf.sprintf "%s *%s" (ctype u p.pty) (local p.pname) ])
+            [ Printf.sprintf "%s *%s" (ctype u p.pty) (C_identifier.local p.pname) ])
       f.fparams
   in
   let signature =
@@ -1653,7 +1647,7 @@ let slow_function u (f : slow_func) =
   | locals ->
       scope.framed <- true;
       frame_helpers u;
-      let frame_type = Printf.sprintf "struct rake_frame_%s" (local f.fname) in
+      let frame_type = Printf.sprintf "struct rake_frame_%s" (C_identifier.local f.fname) in
       List.iter (fun (_, ty) -> complete u ty) locals;
       let fields = List.mapi (fun index (declaration, ty) ->
         let field = Printf.sprintf "slot_%d" index in
@@ -1879,8 +1873,8 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
         let prototypes = List.map (fun run ->
           let parameters = List.map (function
             | Run_stack (name, schema, writable) ->
-                Printf.sprintf "const %s *%s" (stack_type u schema writable) (local name)
-            | Run_uniform (name, scalar) -> Printf.sprintf "%s %s" (scalar_c scalar) (local name)
+                Printf.sprintf "const %s *%s" (stack_type u schema writable) (C_identifier.local name)
+            | Run_uniform (name, scalar) -> Printf.sprintf "%s %s" (scalar_c scalar) (C_identifier.local name)
             | _ -> assert false) run.run_params in
           let parameters = parameters @ (match run.run_stream with
             | None -> [] | Some element -> [ scalar_c element ^ " *rake_out" ]) in

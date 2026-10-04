@@ -15,6 +15,7 @@ test/native/fused_contract.rk	native	x86-avx2	8	native-object	pass	-
 test/native/fused_fma.rk	native	x86-avx2	8	native-object	pass	-
 test/native/identity.rk	native	x86-avx2	8	native-object	pass	-
 test/native/add.rk	native	x86-avx2	8	native-object	pass	-
+test/native/bitcast.rk	native	x86-avx2	8	native-object	pass	-
 test/native/simple_scratch.rk	native	x86-avx2	8	native-object	pass	-
 test/native/select.rk	native	x86-avx2	8	native-object	pass	-
 test/native/scalar_parameter.rk	native	x86-avx2	8	native-object	pass	-
@@ -24,6 +25,8 @@ test/native/rounding.rk	native	x86-avx2	8	native-object	pass	-
 test/native/predication.rk	native	x86-avx2	8	native-object	pass	-
 test/native/supported_float_rack.rk	native	x86-avx2	8	native-object	pass	-
 test/native/reductions_scans.rk	native	x86-avx2	8	native-object	pass	-
+test/native/integer_folds.rk	native	x86-avx2	8	native-object	pass	-
+test/native/uniform_arithmetic.rk	native	x86-avx2	8	native-object	pass	-
 test/native/multiple_through.rk	native	x86-avx2	8	native-object	pass	-
 test/reject/fused_user_call.rk	reject	x86-avx2	8	frontend	reject	Fused binding contract for 'result' rejected: call to 'helper' is not a compiler-known pure built-in
 test/reject/fused_annotation_mismatch.rk	reject	x86-avx2	8	frontend	reject	Fused binding 'result' type mismatch: expected i32s, got f32s
@@ -37,7 +40,7 @@ test/reject/sweep_duplicate_tine.rk	reject	x86-avx2	8	frontend	reject	Unreachabl
 test/reject/sweep_missing_catchall.rk	reject	x86-avx2	8	frontend	reject	Sweep does not provably cover every lane
 test/reject/tine_forward_reference.rk	reject	x86-avx2	8	frontend	reject	Reference to undefined tine: #later
 test/reject/tine_duplicate.rk	reject	x86-avx2	8	frontend	reject	Duplicate tine declaration: #active
-test/reject/reduction_requires_float_rack.rk	reject	x86-avx2	8	frontend	reject	Floating-point reduction requires float rack
+test/reject/reduction_requires_arithmetic_rack.rk	reject	x86-avx2	8	frontend	reject	Arithmetic reduction requires f32s, i32s or u32s
 test/reject/fused_reduction.rk	reject	x86-avx2	8	frontend	reject	Fused binding contract for 'result' rejected: reduction is not an inlineable expression shape
 examples/future/demo.rk	future	-	-	design	excluded	Uses unavailable single definitions
 examples/future/broadcasting.rk	future	-	-	design	excluded	Uses proposed angle-bracket literal syntax and implicit results

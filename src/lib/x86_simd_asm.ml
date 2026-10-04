@@ -52,6 +52,7 @@ let registers = function
   | A.Extreme_i32 { dst; left; right; scratch; _ } -> dst :: left :: right :: scratch
   | A.Mul_i32 { dst; left; right; scratch } -> dst :: left :: right :: scratch
   | A.Abs_i32 { dst; source; sign } -> dst :: source :: Option.to_list sign
+  | A.Shift_uniform_i32 { dst; source; count; normalized; _ } -> [ dst; source; count; normalized ]
   | A.Addps { dst; left; right }
   | A.Subps { dst; left; right }
   | A.Add_i32 { dst; left; right }
@@ -476,6 +477,24 @@ let emit_instruction profile pool buffer ({ A.operation; _ } : A.instruction) =
         move dst source;
         emit "%s %s, %d" mnemonic (ymm dst) count)
       else emit "v%s %s, %s, %d" mnemonic (ymm dst) (ymm source) count
+  | A.Shift_uniform_i32 { dst; source; count; normalized; shift } ->
+      (* The packed shift reads a 64-bit count from XMM even for wider racks.
+         Retain five bits and clear the rest without scalar-register work. *)
+      if sse then (
+        move normalized count;
+        emit "psllq %s, 59" (ymm normalized);
+        emit "psrlq %s, 59" (ymm normalized))
+      else (
+        emit "vpsllq %s, %s, 59" (ymm normalized) (ymm count);
+        emit "vpsrlq %s, %s, 59" (ymm normalized) (ymm normalized));
+      let mnemonic = match shift with
+        | Native_ir.Shift_left -> "pslld"
+        | Native_ir.Shift_right -> "psrld"
+        | Native_ir.Shift_right_signed -> "psrad" in
+      if sse then (
+        move dst source;
+        emit "%s %s, xmm%d" mnemonic (ymm dst) normalized)
+      else emit "v%s %s, %s, xmm%d" mnemonic (ymm dst) (ymm source) normalized
   | A.Compare_i32 { dst; predicate; unsigned; left; right; scratch } ->
       if avx512 then (
         let immediate = match predicate with

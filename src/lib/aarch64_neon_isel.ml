@@ -358,10 +358,14 @@ let select_function (func : N.func) =
       | N.Shift { operand; count; shift } ->
           let dst = word_rack_result () in
           ensure_operand_i32 func.name environment index operand;
-          (match Option.bind (N.IntMap.find_opt count integer_constants) N.I32_shift_count.of_int32 with
+          (match Option.bind (Option.map (fun bits -> Int32.logand bits 31l)
+              (N.IntMap.find_opt count integer_constants)) N.I32_shift_count.of_int32 with
           | Some count -> [ M.Shift_i32 { dst; source = operand; count; shift; provenance } ]
-          | None -> fail func.name ~instruction:index
-              "32-bit rack shifts require a literal count from 0 to 31; native uniform counts remain work in progress")
+          | None ->
+              (match find_type func.name environment index count with
+              | N.Scalar N.U32 -> [ M.Shift_uniform_i32 { dst; source = operand; count; shift; provenance } ]
+              | _ -> fail func.name ~instruction:index
+                  "32-bit rack shifts require a literal count from 0 to 31 or a uniform u32"))
       | N.Fma (multiplicand, multiplier, addend) ->
           let dst = rack_result () in
           List.iter (ensure_operand_f32 func.name environment index)
@@ -525,9 +529,10 @@ let select_function (func : N.func) =
           ensure_operand_f32 func.name environment index operand;
           let conversion = if element = N.U32 then N.F32_to_u32 else N.F32_to_i32 in
           [ M.Convert_word_f32 { dst; source = operand; conversion; provenance } ]
-      | N.Reinterpret { operand; element = (N.I32 | N.U32) } ->
+      | N.Reinterpret { operand; element = (N.F32 | N.I32 | N.U32) } ->
           let dst = word_rack_result () in
-          ensure_operand_i32 func.name environment index operand;
+          require_word_rack func.name ~instruction:index "bitcast input"
+            (find_type func.name environment index operand);
           [ M.Copy_word { dst; source = operand; provenance } ]
       | N.Reinterpret _ | N.Relaxed _
       | N.Dot _ | N.Narrow _ | N.Widen _ | N.Convert _ ->

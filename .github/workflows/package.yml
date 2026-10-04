@@ -1,0 +1,115 @@
+name: package
+
+on:
+  push:
+    branches: [main, wasm-simd128]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    name: opam / ${{ matrix.os }} / OCaml ${{ matrix.ocaml }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        ocaml: ["5.1", "5.2", "5.3", "5.4", "5.5"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml }}
+      - run: opam install . --deps-only --with-test --with-doc
+      - run: opam lint rake.opam
+      - name: Install with the package's declared tests and documentation
+        env:
+          RAKE_X86_AS: /nonexistent-rake-assembler
+          RAKE_X86_OBJDUMP: /nonexistent-rake-disassembler
+          RAKE_AARCH64_AS: /nonexistent-rake-assembler
+          RAKE_AARCH64_OBJDUMP: /nonexistent-rake-disassembler
+          RAKE_WASM_CC: /nonexistent-rake-compiler
+          RAKE_WASM_OBJDUMP: /nonexistent-rake-disassembler
+        run: opam install . --with-test --with-doc
+      - run: opam exec -- rakec --version
+
+  objects:
+    name: GNU ELF and WebAssembly object integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3
+        with:
+          ocaml-compiler: "5.4"
+      - run: sudo apt-get update && sudo apt-get install -y binutils binutils-aarch64-linux-gnu clang llvm
+      - run: opam install . --deps-only --with-test
+      - run: opam exec -- dune build @runtest-native @runtest-wasm
+
+  cpu-runtime:
+    name: SSE2, AVX2, AVX-512, NEON and WebAssembly runtime oracles
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RAKE_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: rakelang/tree-sitter-rake
+          ref: 4c3c350e2a65171090d5d0ff32e9b86144646a9d # 0.7.0 grammar
+          path: .grammar
+      - uses: cachix/install-nix-action@v31
+        with:
+          enable_kvm: false
+          extra_nix_config: |
+            max-jobs = 2
+            cores = 2
+      - name: Install the pinned AVX-512 instruction emulator
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 \
+            https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-lin.tar.xz \
+            -o "$RUNNER_TEMP/intel-sde.tar.xz"
+          echo "94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50  $RUNNER_TEMP/intel-sde.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/intel-sde.tar.xz" -C "$RUNNER_TEMP"
+          echo "RAKE_SDE=$RUNNER_TEMP/sde-external-10.13.1-2026-07-28-lin/sde64" >> "$GITHUB_ENV"
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+      - name: Run the canonical compiler gate with the locked toolchain
+        shell: bash
+        run: |
+          export TREE_SITTER_RAKE_DIR="$PWD/.grammar"
+          nix develop --command bash tools/release_gate.sh --compiler-only
+
+  grammar:
+    name: Compiler and Tree-sitter grammar agreement
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: rakelang/tree-sitter-rake
+          ref: 4c3c350e2a65171090d5d0ff32e9b86144646a9d # 0.7.0 grammar
+          path: .grammar
+      - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7
+        with:
+          ocaml-compiler: "5.4"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: opam install . --with-test
+      - run: npm ci --prefix .grammar
+      - run: npm test --prefix .grammar
+      - name: Compare both parsers on the compiler fixtures
+        run: |
+          RAKEC="$(opam exec -- which rakec)"
+          export RAKEC
+          export TREE_SITTER_RAKE_DIR="$PWD/.grammar"
+          export TREE_SITTER_BIN="$PWD/.grammar/node_modules/.bin/tree-sitter"
+          bash test/parser_differential.sh

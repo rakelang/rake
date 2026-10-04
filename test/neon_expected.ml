@@ -1,6 +1,6 @@
 open Rake
 open Ast
-open Native_semantics
+open Native_reference
 
 let fail message =
   prerr_endline message;

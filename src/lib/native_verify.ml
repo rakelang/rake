@@ -60,23 +60,14 @@ let run program arguments ~output =
           Failed
             (Printf.sprintf "%s: %s" call (Unix.error_message unix_error)))
 
-let disassembler_command = function
-  | Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512 ->
-      ("objdump", [ "-d"; "-M"; "intel"; "--no-show-raw-insn" ])
-  | Target.Aarch64_neon ->
-      ("aarch64-unknown-linux-gnu-objdump", [ "-d"; "--no-show-raw-insn" ])
-  | profile ->
-      invalid_arg
-        (Printf.sprintf "no disassembler configured for profile '%s'"
-           (Target.profile_name profile))
-
 let disassemble ~profile ~source ~object_ ~output =
-  let program, prefix = disassembler_command profile in
+  let program, prefix = Native_tool_selection.disassembler profile in
   let arguments = prefix @ [ object_ ] in
   match run program arguments ~output with
   | Missing ->
       error ~source ~obligation:"disassembler"
-        "GNU objdump could not be executed"
+        (Printf.sprintf "cannot execute %s; %s" program
+           (Native_tool_selection.requirement ~profile ~operation:`Disassemble))
   | Failed detail ->
       error ~source ~obligation:"disassembler"
         (Printf.sprintf "cannot execute GNU objdump (%s)" detail)
@@ -502,17 +493,22 @@ let valid_neon_integer_shift mnemonic operands =
 let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   let mnemonic = decoded.mnemonic in
   let operands = decoded.operands in
+  (* GNU objdump appends a symbol annotation to literal addresses. Registers
+     occur in the operands, not in that annotation (for example <spread>). *)
+  let register_operands = match String.index_opt operands '<' with
+    | None -> operands
+    | Some position -> String.sub operands 0 position in
   if mnemonic = "bl" || mnemonic = "blr" then
     error ~source ~function_name ~obligation:"no calls"
       (Printf.sprintf "encountered %s" mnemonic)
-  else if contains operands "sp" || contains operands "x29" then
+  else if regexp_contains "\\b\\(sp\\|wsp\\|x29\\|w29\\)\\b" register_operands then
     error ~source ~function_name ~obligation:"no stack use"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
-  else if neon_callee_saved_vector operands then
+  else if neon_callee_saved_vector register_operands then
     error ~source ~function_name ~obligation:"AAPCS64 leaf register set"
       (Printf.sprintf "encountered partially callee-saved register in %s %s"
          mnemonic operands)
-  else if neon_general_register operands then
+  else if neon_general_register register_operands then
     error ~source ~function_name ~obligation:"no scalarized lane control"
       (Printf.sprintf "encountered general register in %s %s" mnemonic operands)
   else if mnemonic = "bic"
@@ -537,21 +533,21 @@ let verify_neon_instruction ~allow_cross_lane ~source ~function_name decoded =
   else if mnemonic = "ldr" && not (valid_neon_literal_load operands) then
     error ~source ~function_name ~obligation:"literal rack loads only"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
-  else if contains operands "q" && mnemonic <> "ldr" then
+  else if contains register_operands "q" && mnemonic <> "ldr" then
     error ~source ~function_name ~obligation:"full-register operations"
       (Printf.sprintf "q-register form is only permitted for literal loads: %s %s"
          mnemonic operands)
-  else if contains operands ".s[" && not (
+  else if contains register_operands ".s[" && not (
     (mnemonic = "dup" && valid_neon_dup ~allow_cross_lane operands)
     || (mnemonic = "mov" && allow_cross_lane && valid_neon_insert operands)) then
     error ~source ~function_name ~obligation:"no lane extraction"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
-  else if neon_scalar_register operands then
+  else if neon_scalar_register register_operands then
     error ~source ~function_name ~obligation:"no scalar floating arithmetic"
       (Printf.sprintf "encountered %s %s" mnemonic operands)
   else if
-    contains operands ".2s" || contains operands ".2d" || contains operands ".8b"
-    || contains operands ".8h" || contains operands ".4h"
+    contains register_operands ".2s" || contains register_operands ".2d" || contains register_operands ".8b"
+    || contains register_operands ".8h" || contains register_operands ".4h"
   then
     error ~source ~function_name ~obligation:"one 128-bit vector per rack"
       (Printf.sprintf "encountered narrowed vector form in %s %s" mnemonic operands)
@@ -597,36 +593,119 @@ let valid_integer_argument_transfer profile (transfer : Native_register_assignme
       && operands = Printf.sprintf "s%d,w%d" register argument
   | _ -> false
 
-let verify_function ~profile ~allow_cross_lane ~integer_result ~integer_arguments ~source ~function_name instructions =
-  let rec loop saw_ret fma_count = function
+(** Runtime counts have a closed normalization/shift sequence. Wider x86
+    racks read only their count through XMM, never their lane data. Keep these
+    forms out of the ordinary instruction allow-list. *)
+let uniform_shift_sequence profile instructions =
+  let operands instruction =
+    List.map String.trim (String.split_on_char ',' instruction.operands) in
+  let word prefix maximum text =
+    if not (String.starts_with ~prefix text) then false else
+    match int_of_string_opt (String.sub text (String.length prefix) (String.length text - String.length prefix)) with
+    | Some register -> register >= 0 && register < maximum
+    | None -> false in
+  let immediate value text = Int32.of_string_opt text = Some value in
+  let neon_immediate value text =
+    String.starts_with ~prefix:"#" text
+    && immediate value (String.sub text 1 (String.length text - 1)) in
+  match profile, instructions with
+  | (Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512), left :: right :: rest ->
+      let sse = profile = Target.X86_sse2 in
+      let prefix = if sse then "" else "v" in
+      let vector = if sse then "xmm" else if profile = Target.X86_avx2 then "ymm" else "zmm" in
+      let full = word vector (Target.x86_register_count profile) in
+      let normalized = match operands left, operands right with
+        | [ dst; count ], [ same; count_again ] when sse && full dst && dst = same
+            && immediate 59l count && immediate 59l count_again -> Some dst
+        | [ dst; source; count ], [ same; input; count_again ] when not sse
+            && full dst && full source && dst = same && dst = input
+            && immediate 59l count && immediate 59l count_again -> Some dst
+        | _ -> None in
+      if left.mnemonic <> prefix ^ "psllq" || right.mnemonic <> prefix ^ "psrlq" then None
+      else Option.bind normalized (fun normalized ->
+        let moves, rest = match rest with
+          | move :: rest when sse && move.mnemonic = "movaps" ->
+              (match operands move with
+              | [ dst; source ] when full dst && full source && dst <> normalized -> [move], rest
+              | _ -> [], move :: rest)
+          | rest -> [], rest in
+        match rest with
+        | shifted :: rest when List.mem shifted.mnemonic
+            (List.map (( ^ ) prefix) [ "pslld"; "psrld"; "psrad" ]) ->
+            let low = "xmm" ^ String.sub normalized (String.length vector) (String.length normalized - String.length vector) in
+            let valid = match operands shifted with
+              | [ dst; count ] when sse -> full dst && dst <> normalized && count = low
+              | [ dst; source; count ] when not sse ->
+                  full dst && full source && dst <> normalized && source <> normalized && count = low
+              | _ -> false in
+            if valid then Some (left :: right :: moves @ [shifted], rest) else None
+        | _ -> None)
+  | Target.Aarch64_neon, broadcast :: left :: right :: rest ->
+      let full text =
+        regexp_contains "^v[0-9]+\\.4s$" text && not (neon_callee_saved_vector text) in
+      let normalized = match operands broadcast, operands left, operands right with
+        | [ dst; source ], [ left_dst; left_source; count ], [ right_dst; right_source; count_again ]
+            when full dst && valid_neon_dup ~allow_cross_lane:false broadcast.operands
+            && not (neon_callee_saved_vector source)
+            && dst = left_dst && dst = left_source && dst = right_dst && dst = right_source
+            && neon_immediate 27l count && neon_immediate 27l count_again -> Some dst
+        | _ -> None in
+      if broadcast.mnemonic <> "dup" || left.mnemonic <> "shl" || right.mnemonic <> "ushr" then None
+      else Option.bind normalized (fun normalized ->
+        let negatives, rest = match rest with
+          | negative :: rest when negative.mnemonic = "neg" && operands negative = [normalized; normalized] -> [negative], rest
+          | rest -> [], rest in
+        match rest with
+        | shifted :: rest when List.mem shifted.mnemonic ["ushl"; "sshl"] ->
+            let valid = match operands shifted with
+              | [dst; source; count] -> full dst && full source && dst <> normalized
+                  && source <> normalized && count = normalized
+                  && (shifted.mnemonic <> "sshl" || negatives <> [])
+              | _ -> false in
+            if valid then Some (broadcast :: left :: right :: negatives @ [shifted], rest) else None
+        | _ -> None)
+  | _ -> None
+
+let verify_function ~profile ~allow_cross_lane ~integer_result ~integer_arguments ~uniform_shift_count ~source ~function_name instructions =
+  let rec loop saw_ret fma_count remaining = function
     | [] ->
-        if not saw_ret then
+        if remaining <> 0 then
+          error ~source ~function_name ~obligation:"uniform shift selection"
+            "final object is missing a selected modulo-32 uniform shift"
+        else if not saw_ret then
           error ~source ~function_name ~obligation:"function return"
             "function contains no ret instruction"
         else Ok fma_count
     | decoded :: rest when saw_ret && is_alignment_padding decoded ->
-        loop saw_ret fma_count rest
+        loop saw_ret fma_count remaining rest
     | decoded :: _ when saw_ret ->
         error ~source ~function_name ~obligation:"terminal return"
           (Printf.sprintf "encountered %s after ret" decoded.mnemonic)
     | decoded :: { mnemonic = ("ret" | "retq"); operands = "" } :: rest when integer_result ->
-        if valid_integer_result_transfer profile decoded then loop true fma_count rest
+        if valid_integer_result_transfer profile decoded then loop true fma_count remaining rest
         else error ~source ~function_name ~obligation:"integer result boundary"
           "expected the low 32 bits of vector register 0 in the C integer return register immediately before ret"
     | { mnemonic = ("ret" | "retq"); _ } :: _ when integer_result ->
         error ~source ~function_name ~obligation:"integer result boundary"
           "missing the terminal vector-to-integer result transfer"
     | decoded :: rest -> (
-        match verify_instruction ~profile ~allow_cross_lane ~source ~function_name decoded with
-        | Error _ as result -> result
-        | Ok () ->
-            let saw_ret = saw_ret || decoded.mnemonic = "ret" || decoded.mnemonic = "retq" in
-            loop saw_ret
-              (fma_count + if is_fma profile decoded.mnemonic then 1 else 0)
-              rest)
+        match uniform_shift_sequence profile (decoded :: rest) with
+        | Some _ when remaining <= 0 ->
+            error ~source ~function_name ~obligation:"uniform shift selection"
+              "final object contains an undeclared modulo-32 uniform shift"
+        | Some (_, rest) -> loop saw_ret fma_count (remaining - 1) rest
+        | None ->
+            match verify_instruction ~profile ~allow_cross_lane ~source ~function_name decoded with
+            | Error _ as result -> result
+            | Ok () ->
+                let saw_ret = saw_ret || decoded.mnemonic = "ret" || decoded.mnemonic = "retq" in
+                loop saw_ret
+                  (fma_count + if is_fma profile decoded.mnemonic then 1 else 0)
+                  remaining
+                  rest)
   in
   let rec entry transfers instructions = match transfers, instructions with
-    | [], instructions -> loop false 0 instructions
+    | [], instructions -> loop false 0 uniform_shift_count instructions
     | transfer :: transfers, decoded :: instructions
         when valid_integer_argument_transfer profile transfer decoded -> entry transfers instructions
     | _ -> error ~source ~function_name ~obligation:"integer argument boundary"
@@ -635,7 +714,8 @@ let verify_function ~profile ~allow_cross_lane ~integer_result ~integer_argument
   entry integer_arguments instructions
 
 let verify ?(profile = Target.X86_avx2) ?expected_fma_count
-    ?(cross_lane_functions = []) ?(integer_result_functions = []) ?(integer_argument_transfers = []) ~source ~functions object_bytes =
+    ?(cross_lane_functions = []) ?(integer_result_functions = []) ?(integer_argument_transfers = [])
+    ?(uniform_shift_counts = []) ~source ~functions object_bytes =
   let object_ = Filename.temp_file "rake-native-verify-" ".o" in
   let output = Filename.temp_file "rake-native-verify-" ".objdump" in
   let files = [ object_; output ] in
@@ -670,6 +750,7 @@ let verify ?(profile = Target.X86_avx2) ?expected_fma_count
                           ~allow_cross_lane:(List.mem function_name cross_lane_functions)
                           ~integer_result:(List.mem function_name integer_result_functions)
                           ~integer_arguments:(Option.value ~default:[] (List.assoc_opt function_name integer_argument_transfers))
+                          ~uniform_shift_count:(Option.value ~default:0 (List.assoc_opt function_name uniform_shift_counts))
                           ~source ~function_name instructions
                       with
                       | Error _ as result -> result

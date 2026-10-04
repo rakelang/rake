@@ -116,8 +116,10 @@ let objdump object_bytes =
         Fun.protect
           ~finally:(fun () -> Unix.close input; Unix.close destination)
           (fun () ->
-            let argv = [| "objdump"; "-d"; "-M"; "intel"; "--no-show-raw-insn"; object_ |] in
-            let pid = Unix.create_process "objdump" argv input destination destination in
+            let program, flags =
+              Rake.Native_tool_selection.disassembler Rake.Target.X86_avx2 in
+            let argv = Array.of_list (program :: flags @ [ object_ ]) in
+            let pid = Unix.create_process program argv input destination destination in
             snd (Unix.waitpid [] pid))
       in
       match status with Unix.WEXITED 0 -> read_file output | _ -> failwith "objdump failed")

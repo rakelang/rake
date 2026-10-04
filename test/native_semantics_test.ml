@@ -1,6 +1,6 @@
 open Rake
 open Ast
-open Native_semantics
+open Native_reference
 
 let loc = { dummy_loc with file = "native-semantics-test" }
 let expression value = node value loc
@@ -68,6 +68,33 @@ let test_comparison_and_select () =
   eval_expr ~lanes:4 [ "x", rack [| -1.0; 2.0; nan; 4.0 |] ]
     condition
   |> get |> expect_mask [ false; true; false; true ]
+
+let test_short_circuit_boolean_shapes () =
+  (* Independent truth tables: Boolean results remain scalars, while skipped
+     comparisons retain one mask entry per compared element. *)
+  let boolean value = expression (EBroadcast (expression (EBool value))) in
+  List.iter (fun lanes ->
+    List.iter (fun (left, right) ->
+      List.iter (fun (operation, expected) ->
+        match eval_expr ~lanes [] (binop (boolean left) operation (boolean right)) |> get with
+        | Int_scalar (Types.SBool, value) when (value <> 0L) = expected -> ()
+        | _ -> failwith "uniform logical result lost its Boolean shape")
+        [And, left && right; Or, left || right])
+      [false, false; false, true; true, false; true, true];
+    let positive = binop (var "values") Gt (float 0.0) in
+    let floats = ["values", rack (Array.make lanes 1.0)] in
+    eval_expr ~lanes floats (binop (boolean true) Or positive)
+    |> get |> expect_mask (List.init lanes (fun _ -> true));
+    eval_expr ~lanes floats (binop (boolean false) And positive)
+    |> get |> expect_mask (List.init lanes (fun _ -> false));
+    let byte_count = 4 * lanes in
+    let bytes = ["values", U8_rack (Array.make byte_count 1)] in
+    let positive = binop (expression (EInt 0L)) Lt (var "values") in
+    List.iter (fun (operation, enabled, expected) ->
+      eval_expr ~lanes bytes (binop (boolean enabled) operation positive)
+      |> get |> expect_mask (List.init byte_count (fun _ -> expected)))
+      [Or, true, true; Or, false, true; And, false, false; And, true, true])
+    [4; 8; 16]
 
 let test_sqrt () =
   let expr = expression (ECall ("sqrt", [ var "x" ])) in
@@ -194,6 +221,87 @@ let test_rake_priority_and_inactive_lanes () =
   in
   eval_rake ~lanes:4 definition [ rack [| -1.0; 0.0; 1.0; nan |] ]
   |> get |> expect_rack [| 2.0; 1.0; 1.0; 3.0 |]
+
+let test_integer_folds () =
+  (* Hand-computed overflow and signedness goldens, independent of the tree
+     selected by the compiler. Padding uses the operation's identity. *)
+  List.iter (fun lanes ->
+    let check element values operation expected =
+      match eval_expr ~lanes ["x", values] (expression (EReduce (operation, var "x"))) |> get with
+      | Int_scalar (actual_element, actual) when actual_element = element && actual = expected -> ()
+      | _ -> failwith "integer reduction lost wrapping bits or signedness" in
+    let signed = Array.make lanes 0 in
+    signed.(0) <- -2147483648; signed.(1) <- -1;
+    check Types.SInt (I32_rack signed) RAdd 2147483647L;
+    check Types.SInt (I32_rack signed) RMin (-2147483648L);
+    check Types.SInt (I32_rack signed) RMax 0L;
+    let unsigned = Array.make lanes 0L in
+    unsigned.(0) <- 0xffffffffL; unsigned.(1) <- 2L;
+    check Types.SUint (U32_rack unsigned) RAdd 1L;
+    check Types.SUint (U32_rack unsigned) RMin 0L;
+    check Types.SUint (U32_rack unsigned) RMax 0xffffffffL;
+    Array.fill signed 0 lanes 1;
+    signed.(0) <- -2147483648; signed.(1) <- -1;
+    check Types.SInt (I32_rack signed) RMul (-2147483648L);
+    Array.fill unsigned 0 lanes 1L;
+    unsigned.(0) <- 0xffffffffL; unsigned.(1) <- 2L;
+    check Types.SUint (U32_rack unsigned) RMul 0xfffffffeL;
+    let scan values operation first tail =
+      let expected = Array.init lanes (fun lane -> if lane < 4 then first.(lane) else tail) in
+      match eval_expr ~lanes ["x", values] (expression (EScan (operation, var "x"))) |> get with
+      | I32_rack actual when Array.map Int64.of_int actual = expected -> ()
+      | U32_rack actual when actual = expected -> ()
+      | _ -> failwith "integer scan lost an inclusive prefix, wrapping bits or signedness" in
+    scan (I32_rack signed) RMul
+      [|-2147483648L; -2147483648L; -2147483648L; -2147483648L|] (-2147483648L);
+    scan (U32_rack unsigned) RMul
+      [|0xffffffffL; 0xfffffffeL; 0xfffffffeL; 0xfffffffeL|] 0xfffffffeL;
+    Array.fill signed 0 lanes 0;
+    signed.(0) <- -2147483648; signed.(1) <- -1; signed.(2) <- 1; signed.(3) <- 1;
+    Array.fill unsigned 0 lanes 0L;
+    unsigned.(0) <- 0xffffffffL; unsigned.(1) <- 2L; unsigned.(2) <- 1L; unsigned.(3) <- 1L;
+    scan (I32_rack signed) RAdd
+      [|-2147483648L; 2147483647L; -2147483648L; -2147483647L|] (-2147483647L);
+    scan (I32_rack signed) RMin
+      [|-2147483648L; -2147483648L; -2147483648L; -2147483648L|] (-2147483648L);
+    scan (I32_rack signed) RMax [|-2147483648L; -1L; 1L; 1L|] 1L;
+    scan (U32_rack unsigned) RAdd [|0xffffffffL; 1L; 2L; 3L|] 3L;
+    scan (U32_rack unsigned) RMin [|0xffffffffL; 2L; 1L; 1L|] 0L;
+    scan (U32_rack unsigned) RMax
+      [|0xffffffffL; 0xffffffffL; 0xffffffffL; 0xffffffffL|] 0xffffffffL)
+    [4; 8; 16]
+
+let test_uniform_arithmetic () =
+  (* Hand-derived scalar answers, independent of packed broadcast/extraction. *)
+  List.iter (fun lanes ->
+    let left = scalar_var "left" and right = scalar_var "right" in
+    let arithmetic = binop (binop (binop left Add right) Mul right) Sub left in
+    eval_expr ~lanes ["left", scalar 2.0; "right", scalar 3.0]
+      (binop arithmetic Div right) |> get |> expect_scalar (f32 (13.0 /. 3.0));
+    List.iter (fun (element, left_value, right_value, expected) ->
+      match eval_expr ~lanes
+        ["left", int_scalar element left_value; "right", int_scalar element right_value]
+        arithmetic |> get with
+      | Int_scalar (actual_element, actual) when actual_element = element && actual = expected -> ()
+      | _ -> failwith "uniform arithmetic lost wrapping bits or signedness")
+      [Types.SInt, -2147483648L, -1L, 1L;
+       Types.SUint, 4294967295L, 2L, 3L];
+    let values = rack (Array.init lanes (fun lane -> float_of_int (lane - 1))) in
+    let spread = binop (expression (EReduce (RMax, var "x"))) Sub
+      (expression (EReduce (RMin, var "x"))) in
+    eval_expr ~lanes ["x", values] spread |> get
+    |> expect_scalar (float_of_int (lanes - 1));
+    let negated = expression (EUnop (Neg, scalar_var "value")) in
+    eval_expr ~lanes ["value", scalar 0.0] negated |> get |> expect_scalar (-0.0);
+    eval_expr ~lanes ["value", scalar (-3.5)] negated |> get |> expect_scalar 3.5;
+    List.iter (fun (value, expected) ->
+      match eval_expr ~lanes ["value", int_scalar Types.SInt value] negated |> get with
+      | Int_scalar (Types.SInt, actual) when actual = expected -> ()
+      | _ -> failwith "uniform negation lost signed 32-bit wrapping")
+      [-2147483648L, -2147483648L; 2147483647L, -2147483647L; -1L, 1L; 0L, 0L];
+    eval_expr ~lanes ["x", values] (expression (EUnop (Neg, spread))) |> get
+    |> expect_scalar (float_of_int (1 - lanes)))
+    [4; 8; 16]
 
 let expect_i16 expected = function
   | I16_rack actual when expected = Array.to_list actual -> ()
@@ -392,6 +500,7 @@ let () =
   test_round_after_each_operation ();
   test_broadcast_arithmetic ();
   test_comparison_and_select ();
+  test_short_circuit_boolean_shapes ();
   test_sqrt ();
   test_integral_rounding ();
   test_division ();
@@ -399,5 +508,7 @@ let () =
   test_typed_error ();
   test_scratch_evaluation ();
   test_strict_reductions_and_scans ();
+  test_integer_folds ();
+  test_uniform_arithmetic ();
   test_rake_priority_and_inactive_lanes ();
   print_endline "native executable semantics tests passed"

@@ -34,25 +34,23 @@ GPU targets are designs, outside the implemented table above:
 | Proposed profile | Rack | Boundary and status |
 | --- | --- | --- |
 | `nvidia-ptx-sm120` | 32 thread lanes | PTX 8.7 to ahead-of-time cubin, with final artifact verification. WIP* |
-| Vulkan subgroup profiles | required 32- or 64-invocation subgroup | portable SPIR-V, with device verification for physical claims. Later design, WIP* |
+| Vulkan subgroup profiles | required 32- or 64-invocation subgroup | portable SPIR-V, with device verification of physical resource use. Later design, WIP* |
 | Direct physical GPU profile | specified wave/lane mapping | Rake-owned selection, allocation and sequencing for a documented ISA. Later design, WIP* |
 
-A GPU lane's scalar arithmetic is the SIMT mapping, not CPU scalar fallback.
+A GPU invocation performs one lane's arithmetic as part of the SIMT mapping.
 The [GPU contract](../GPU.md) defines the proposed operation set, masks,
-collectives, memory rules and verification boundary. These profiles are not
-accepted by the current compiler.
+collectives, memory rules and verification boundary. The current compiler
+rejects these planned profiles.
 
 `lanes`, the lane count, and `@`, the lane index, are reserved and
 unavailable on every profile.
 
 ## Float racks
 
-The table shows operations on `f32s` racks in the development compiler.
-Physical profiles gained `abs`, `min`, `max` and integral rounding after the 0.6.0-beta tag,
-so the tagged compiler still rejects them on those profiles. Native float
-extraction, insertion, static shuffles, mask reductions, uniform
-conditionals and NEON folds are also development
-features after that tag.
+The table shows operations on `f32s` racks in Rake 0.7.0.
+Physical profiles support `abs`, `min`, `max` and integral rounding, along
+with float extraction, insertion, static shuffles, mask reductions,
+uniform conditionals and NEON folds.
 
 | Operation | `x86-sse2` | `x86-avx2` | `x86-avx512` | `aarch64-neon` | `wasm-simd128` |
 | --- | :-: | :-: | :-: | :-: | :-: |
@@ -73,6 +71,8 @@ features after that tag.
 | `insert` | yes | yes | yes | yes | yes |
 | `shuffle` | yes | yes | yes | yes | yes |
 | `all` `any` `bitmask` on float comparison masks | yes | yes | yes | yes | yes |
+| arithmetic on `f32`, `i32` and `u32` uniform results in register kernels | yes | yes | yes | yes | yes |
+| unary minus on `f32` and `i32` uniforms in register kernels | yes | yes | yes | yes | yes |
 
 *WIP: work in progress. Compilation fails for these cells.* †SSE2 and strict
 WebAssembly SIMD have no fused multiply-add instruction. Their rejection of
@@ -134,8 +134,8 @@ can't provide, so it rejects `fma` rather than computing it with two.
 
 ## Integer racks
 
-Integer arithmetic on racks wraps. The development compiler adds a native
-`i32s` and `u32s` subset after the 0.6.0-beta tag. Both types have four lanes
+Integer arithmetic on racks wraps. Rake 0.7.0 supports a native
+`i32s` and `u32s` subset. Both types have four lanes
 on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 
 | Native operation | `i32s` | `u32s` |
@@ -154,11 +154,15 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 | `if` on a direct comparison of marked uniforms | yes | yes |
 | static one- and two-rack `shuffle` | yes | yes |
 | `bitcast` between `i32s` and `u32s` | yes | yes |
+| `bitcast` to and from `f32s` | yes | yes |
 | `to_f32` (`i32s` or `u32s` to `f32s`) | yes | yes |
 | literal-index `extract` and `insert` | yes | yes |
-| runtime shift counts | WIP* | WIP* |
+| runtime uniform `u32` shift counts, modulo 32 | yes | yes |
+| `sum`, `product`, `minimum`, `maximum` | yes | yes |
+| `scan_sum`, `scan_product`, `scan_minimum`, `scan_maximum` | yes | yes |
 
-These operations stay in full vector registers. Integer masks can select
+Rack work stays in full vector registers. A reduction transfers only its
+completed result to a scalar. Integer masks can select
 float racks, and float masks can select integer racks. The
 [native stream subset](02_packs_and_run.md#native-cpu-streams) accepts `f32`,
 `i32` and `u32` columns while preserving each column's type.
@@ -167,9 +171,12 @@ unsigned ones into `u32s`. The stored type determines sign or zero extension.
 The [traversal contract](02_packs_and_run.md#native-cpu-streams) covers its
 compact memory transfers and partial racks.
 
-`bitcast(u32s, values)` reinterprets an `i32s` rack's bits as unsigned words,
-and `bitcast(i32s, values)` does the reverse. A lane containing −1 becomes
-4294967295 without changing a bit. The native allocator needs no instruction
+`bitcast` keeps every bit while changing the rack's element type. It works
+between `f32s`, `i32s` and `u32s` on every CPU profile.
+A signed lane containing −1 becomes 4294967295 when cast to `u32s`.
+Casting the bits of the float 1.0 to `u32s` gives 1065353216. Float zero signs
+and NaN payloads survive a round trip without raising a floating-point exception.
+The native allocator needs no instruction
 when it can reuse the input register, or a vector register copy when the
 input remains live. Numerical conversion uses `to_f32`, `to_i32` or `to_u32` instead.
 
@@ -177,6 +184,12 @@ input remains live. Numerical conversion uses `to_f32`, `to_i32` or `to_u32` ins
 ```rake
 scratch unsigned_bits(values: i32s) -> u32s:
   bitcast(u32s, values)
+
+scratch float_bits(values: f32s) -> u32s:
+  bitcast(u32s, values)
+
+scratch floats_from_bits(values: u32s) -> f32s:
+  bitcast(f32s, values)
 ```
 
 An integer literal passed to a typed scratch or rake parameter takes that
@@ -275,12 +288,17 @@ On its 128-bit register a `u8s` rack has 16 lanes, `i16s` 8, `i32s` and
 | comparisons, and so `select` and `bitmask` | yes | yes | yes | yes | yes | WIP* |
 | bitwise operations and bit shifts | yes | yes | yes | yes | yes | yes |
 | `shuffle` `extract` `insert` | yes | yes | yes | yes | yes | yes |
+| `sum` `product` `minimum` `maximum` | WIP* | WIP* | yes | yes | WIP* | WIP* |
+| `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | WIP* | WIP* | yes | yes | WIP* | WIP* |
 
 `u8s` and `u32s` lanes compare unsigned, and the other supported integer
 comparisons are signed.
 `abs` of a `u8s` rack treats its lanes as signed bytes. No integer rack
-divides, and the reductions and scans take float racks only. An integer
-literal beside an integer rack is broadcast in the rack's element type, as in
+divides. The four arithmetic reductions and inclusive scans accept `i32s`
+and `u32s`, with
+wrapping addition and multiplication and the input's signedness for extrema.
+An integer literal beside an integer rack is broadcast in the rack's element
+type, as in
 `a + 1` or `min(a, <0>)`.
 
 Conversions between integer and float racks:
@@ -385,7 +403,13 @@ with literal counts from 0 to 31. Zero leaves the rack unchanged.
 SSE2, AVX2 and AVX-512F use full-width packed shifts, and NEON uses
 `shl`, `ushr` or `sshr` on four 32-bit lanes. The signed-right operation
 copies each lane's high bit, even when the rack's element type is unsigned.
-Runtime uniform counts remain WIP* on physical profiles.
+
+A runtime `<amount: u32>` also works on every physical profile, in register
+kernels and native streams. Its low five bits give the count, so 32 means
+zero and 4294967295 means 31. The compiler normalises a temporary vector
+register before the packed shift, leaving the input rack and count available
+for later use. The final-object verifier checks that normalisation and the
+full-width data operands together.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -397,6 +421,9 @@ scratch sign_bits(values: i32s) -> i32s:
 
 scratch shifted(values: u32s) -> u32s:
   shift_bits_left(values, 7)
+
+scratch shifted_by(values: u32s, <amount: u32>) -> u32s:
+  shift_bits_left(values, <amount>)
 ```
 
 These shift bits within a lane. The reserved identifiers `shift_left`,
@@ -539,8 +566,12 @@ operations. The compiler checks one temporary vector register in addition to
 the result. At the function boundary, the low 32 bits pass to `eax` on x86
 or `w0` on AArch64. Boolean results are exactly zero or one. The object verifier
 permits that transfer only immediately before the return of a source-declared
-integer result. General scalar arithmetic on these results inside a native
-scratch remains WIP*. Cross-lane reductions are forbidden in a `through`
+integer result. Rake 0.7.0 supports wrapping addition,
+subtraction and multiplication on a `bitmask` result inside a register kernel.
+Numeric uniform arithmetic uses full-width packed instructions on physical
+profiles, retaining the completed result as a scalar. Boolean results still
+use Boolean operations. Further scalar operations remain WIP*.
+Cross-lane reductions are forbidden in a `through`
 block. Native stream mask reductions remain WIP* until their partial-rack
 participation contract is implemented.
 
@@ -624,7 +655,7 @@ zero of the same class, or `xmm0` for a scalar `f32`.
 `all` and `any` return C `bool` in `al`, with the full `eax` set to zero or
 one. `bitmask` returns `uint32_t` in `eax`.
 
-The development compiler also takes `i32`, `u32` and `bool` uniforms through the
+Rake 0.7.0 also takes `i32`, `u32` and `bool` uniforms through the
 six C integer argument registers: `edi`, `esi`, `edx`, `ecx`, `r8d` and `r9d`.
 This counter advances independently of the SIMD counter. At entry, Rake
 imports each integer's 32 bits into an allocated vector register. `<value>`
@@ -690,8 +721,7 @@ splat on wasm.
 
 A run's boundary is in [packs and runs](02_packs_and_run.md#wasm32-boundary),
 and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
-backends in the 0.6.0-beta tag compile neither runs nor slow code. The
-unreleased development compiler adds native C programs with slow orchestration
+backends in Rake 0.7.0 compile native C programs with slow orchestration
 and Rake-selected register kernels. Slow callers can pass uniform `f32`,
 `i32`, `u32` or `bool` arguments and receive `f32`, `bool`, `i32` or `u32` results.
 SSE2, AVX2, AVX-512 and NEON also support the

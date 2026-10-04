@@ -6,8 +6,7 @@ tutorial introduces one idea at a time and makes each idea visible in the
 result, lane trace, generated code or compiler message. The reference after
 the editor explains each lesson and the syntax that may look strange to a
 programmer coming from C, Java, JavaScript or Python. Every program is
-also compiled by the documentation checker, and its result is the one the
-lesson promises.
+also compiled by the documentation checker, which verifies its stated result.
 
 ## The screen
 
@@ -50,6 +49,10 @@ also compile `f32`, `i32` and `u32` stream traversals and single-column stack up
 Stored byte and 16-bit columns can be explicitly widened into signed or
 unsigned 32-bit racks. `to_f32` converts signed or unsigned integer racks to
 floats, and `to_i32` converts floats to signed integers, including in streams.
+Native stream bodies now support local rack assignments and fixed-count
+`repeat`. Each chunk starts with fresh locations, and earlier `let` bindings
+keep their original values after an assignment. Runtime inner loops and
+state carried between chunks remain work in progress on physical targets.
 General native memory runs
 give the compiler's work-in-progress diagnostic. Updates
 can use a separate destination stack with a different record layout. Every result and
@@ -62,8 +65,9 @@ and the platform toolchain outside the browser.
 
 The compiler runs in the page. `rakec` is OCaml, and `js_of_ocaml` compiles
 its front end, interpreter and emitters for the browser, so the playground
-calls the same code behind `rakec --interpret` and `rakec --emit-asm` that
-runs on a workstation. The parts that start clang and the assembler stay out
+uses the interpreter and target emitters behind `rakec --interpret`,
+`rakec --emit-c` and `rakec --emit-asm` on a workstation.
+The parts that start clang and the assembler stay out
 of the browser build. Compilation and execution happen in a worker. A program
 that runs for more than three seconds is stopped without freezing the editor.
 The Lanes tab reads the
@@ -139,7 +143,7 @@ slow main() -> i32:
 Result: `main returned 20`, the sum of 0, 2, 4, 6 and 8. Change
 `total := 0` to `let total = 0` and run. The
 Messages tab says `this location can't be assigned` at the `<-`, which shows
-that the two kinds of name are different things, not two spellings.
+that a mutable location and an immutable binding have different rules.
 
 ## 3. A rack
 
@@ -358,8 +362,8 @@ negative lane, where no root was computed.
 To define that intermediate lane, add `else <999.0>` before `into rooted`
 in the through header. Run with `rooted` still in both sweep arms: the
 result is now 1007. Reset the lesson to restore its original behaviour.
-These computations are pure, but not lazy. A sweep selects values in place
-without triggering or rearranging earlier work. It is the rake's result
+The sweep selects values computed by the through blocks. The compiler can
+optimize these pure calculations together. A sweep is the rake's result
 form and needs no `return` keyword.
 
 ## 9. Columns

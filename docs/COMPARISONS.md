@@ -116,8 +116,8 @@ Rake's [proposed GPU contract](GPU.md) will preserve a rack's lane-to-thread
 mapping and check its permitted control flow, memory effects and register
 use. A partial mask remains a legitimate program choice. The compiler will
 reject a hidden loop that serially emulates the rack, or forbidden spills
-and helper paths in a strict region. It cannot ensure that every input keeps
-all lanes busy, or that a no-spill kernel is the fastest one.
+and helper paths in a strict region. Inputs determine lane activity, and
+performance measurements establish the cost of each register policy.
 
 | Question | Rake GPU design | ISPC | Bend 2 |
 | --- | --- | --- | --- |
@@ -127,8 +127,7 @@ all lanes busy, or that a no-spill kernel is the fastest one.
 | What still needs measurement? | lane activity, occupancy, memory transactions and elapsed time | branch coherence, spills, memory costs and elapsed time | task balance, divergence, scheduling costs and elapsed time |
 | Availability | design only; no Rake GPU compiler, runtime or verifier yet | implemented CPU and Intel Xe GPU targets | implemented CPU and GPU parallel-call paths, as described in the pinned guide below |
 
-ISPC already exposes lane parallelism. Its distinction from Rake isn't that
-it depends on autovectorising an ordinary C loop. ISPC's
+ISPC exposes lane parallelism directly. Its
 [Xe performance guide](https://ispc.github.io/ispc_for_xe.html)
 explains how varying loops and register pressure can cause costly spills,
 and how uniform values and coherent branches affect execution. Rake's
@@ -147,13 +146,11 @@ c22f07f](https://github.com/ispc/ispc.github.com/tree/c22f07f9f626e32393741ccb5f
 
 The original Bend/HVM2 lineage used interaction-net evaluation and runtime
 work sharing. Its [HVM2 paper](https://github.com/HigherOrderCO/HVM2/blob/main/paper/HVM2.typst)
-is historical context, not a description of the current Bend 2 scheduler.
+describes that earlier execution model.
 
 Rake, ISPC and Bend still need enough independent work and balanced workloads
 to use a device effectively. More registers per thread can reduce resident
-warps, so forbidding spills doesn't establish a speed ranking. The
-comparison above concerns execution models and checked properties, not a
-benchmark result between these projects.
+warps. The tables above compare execution models and compiler checks.
 
 ## Other languages for parallel kernels
 

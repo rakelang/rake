@@ -53,7 +53,7 @@ Element width and register width are different quantities.
 | --- | --- |
 | Scalar | One value, such as a single float. Scalar execution processes one element per operation. |
 | f32 / FP32 / binary32 | A 32-bit IEEE 754 floating-point value, normally C's `float`. `f64` / FP64 uses 64 bits. Integer element types specify signedness and bit width. |
-| Vector / packed value | Several elements held together for parallel operations. “Packed” here means multiple elements in a register, not Rake's record declaration. |
+| Vector / packed value | Several elements held together in a register for parallel operations. Rake uses `pack` separately for a record declaration. |
 | Element / lane | An element is a stored value. A lane is its position within a vector operation. Some instruction manuals also use “lane” for a larger sub-register, so check the instruction's granularity. |
 | SIMD | Single instruction, multiple data: one instruction operates on multiple elements. |
 | Vector width / element width | The register's bit capacity and the bits per element. Their ratio gives the element count for a fixed-width vector. |
@@ -61,7 +61,7 @@ Element width and register width are different quantities.
 | Uniform / varying | A uniform has the same value across lanes. A varying value can differ by lane. A uniform may be computed at runtime. |
 | Fixed-width / scalable vector | Fixed-width code uses a specified register size. Scalable-vector code can adapt its active element count to the machine. |
 | VLA / vector-length agnostic | Code written without assuming one hardware vector length. A loop can process the available number of elements at each step. |
-| Vector length / VL | The current active element count, especially in scalable architectures. It need not equal the register's maximum capacity. |
+| Vector length / VL | The current active element count, especially in scalable architectures. It can be smaller than the register's maximum capacity. |
 | SWAR | SIMD within a register: treating a scalar word as several smaller fields and operating on them with bit tricks. |
 | SSE / SSE2 / XMM | x86 instruction families with 128-bit XMM registers. SSE2 adds, among other operations, packed integer and double-precision operations. |
 | AVX / AVX2 / YMM | x86 families using 256-bit YMM vectors as well as narrower forms. AVX2 extends packed integer operations and adds gathers. |
@@ -111,7 +111,7 @@ operation spellings, so consult the instruction's element and sub-vector rules.
 | --- | --- |
 | Comparison | Compare corresponding elements and produce a mask, such as `[1,4,2,9] > 3 → [0,1,0,1]`. |
 | Mask / predicate | A true/false choice per lane. Its representation may be vector bits or a dedicated predicate register. |
-| Active / inactive lane | A lane included or excluded by the operation's mask. An inactive result does not by itself imply suppressed computation or memory access. |
+| Active / inactive lane | A lane included or excluded by the operation's mask. Suppression of computation and memory access depends on the instruction and profile. |
 | Predication | Execute under a predicate. The instruction defines whether inactive lanes suppress work, retain old values or produce a fill value. |
 | Select / blend | Choose one of two values per lane: mask `[1,0,1,0]` selects `[a,y,c,w]` from `[a,b,c,d]` and `[x,y,z,w]`. |
 | Merge masking / zero masking | Inactive lanes preserve a supplied or previous value, or become zero. These are different result policies. |
@@ -122,7 +122,7 @@ operation spellings, so consult the instruction's element and sub-vector rules.
 | Masked load / masked store | Memory operations restricted to selected lanes. Fault suppression and inactive results depend on the instruction. |
 | Fault suppression / first-fault | Suppression prevents some inactive accesses from faulting. First-fault loads, on supporting architectures, record how far a load succeeded. Neither makes arbitrary invalid pointers safe. |
 | Speculation / safe operands | A compiler may calculate both candidates before selecting. Replacing invalid inactive inputs with safe ones can prevent unwanted arithmetic exceptions. |
-| Partial operation | An operation valid for only part of its input domain, such as real square root for non-negative values. Masks alone do not establish safe evaluation. |
+| Partial operation | An operation valid for only part of its input domain, such as real square root for non-negative values. Safe evaluation requires suppressed arithmetic or benign operands in inactive lanes. |
 
 ### Combining lanes and calculating values
 
@@ -150,12 +150,12 @@ operation spellings, so consult the instruction's element and sub-vector rules.
 | --- | --- |
 | Element-wise / vertical operation | Apply an operation independently at corresponding lane positions, such as vector addition. |
 | Horizontal operation / reduction | Combine lanes into fewer results, such as a sum, minimum or maximum. |
-| Pairwise operation | Combine adjacent pairs. Pairwise adds of `[a,b,c,d]` produce `a+b` and `c+d`, not necessarily one total. |
+| Pairwise operation | Combine adjacent pairs. Pairwise adds of `[a,b,c,d]` produce the two results `a+b` and `c+d`. |
 | Scan / prefix sum | Produce running partial results. Inclusive includes the current element. Exclusive starts with an identity and excludes the current element. |
 | Segmented reduction / scan | Combine values within separately marked groups, restarting at each segment boundary. |
 | Dot product | Multiply corresponding elements, then sum those products. The instruction or algorithm specifies accumulation width and rounding. |
 | FMA / fused multiply-add | Calculate `a*b+c` with one final rounding, which can differ from separate multiply and add. |
-| Multiply-accumulate / MAC | Multiply and add into an accumulator. The term alone does not guarantee FMA's single-rounding behaviour. |
+| Multiply-accumulate / MAC | Multiply and add into an accumulator. The selected instruction determines whether the operations round separately or once as an FMA. |
 | Saturating arithmetic | Clamp an overflowing integer to its representable limit, such as unsigned 8-bit `250+10 → 255`. |
 | Wrapping / modular arithmetic | Keep the result modulo the integer width: unsigned 8-bit `250+10 → 4`. |
 | Widen / narrow | Convert to a wider or narrower element type. Narrowing needs a rule for rounding, truncation, saturation or overflow. |
@@ -214,7 +214,7 @@ operation spellings, so consult the instruction's element and sub-vector rules.
 | Prefetch | Request data before its use. It is a latency hint whose effectiveness depends on the access pattern. |
 | Streaming / non-temporal store | A store with cache-policy hints intended for data with little expected reuse. Alignment and ordering requirements still apply. |
 | Aliasing / overlap | Different pointers may refer to the same memory. A vectorised loop needs valid rules for overlapping reads and writes. |
-| Tail / remainder | The final incomplete vector when a count is not divisible by the lane count. Masking or a separately specified cleanup handles it. |
+| Tail / remainder | The final incomplete vector when division by the lane count leaves a remainder. Masking or a separately specified cleanup handles it. |
 | Strip mining / chunking | Divide a longer loop into vector-sized chunks, then handle the remainder. |
 
 ### Data streams and traversal
@@ -263,7 +263,7 @@ so stores don't replace inputs before they have been read.
 
 | Term | Meaning |
 | --- | --- |
-| Data stream | Successive data elements or records. The sequence can already be in memory and need not arrive from a file or network. |
+| Data stream | Successive data elements or records, stored in memory or arriving from a file or network. |
 | Stream traversal | A pass over successive chunks of a sequence. A SIMD traversal processes each chunk as a rack, with a defined policy for the tail. |
 | Stream update | A traversal that writes transformed values, either to a separate output or back into the input. Traversals can also inspect or combine data without updating it. |
 | In-place / out-of-place update | Store into the input's storage, or into separate output storage. In-place vector work needs explicit rules for overlapping inputs and outputs. |
@@ -290,7 +290,7 @@ guarantee a particular cache policy.
 | Latency / throughput | Latency is the delay from input to result. Throughput is the rate of independent completed operations. |
 | Bandwidth / arithmetic intensity | Bytes transferred per unit time, and arithmetic work per byte transferred. A wider vector may leave a memory-bound loop unchanged. |
 | Roofline / compute-bound / memory-bound | A performance model compares arithmetic limits with memory bandwidth. The limiting resource depends on the workload. |
-| Dispatch / multiversioning | Select among implementations for supported ISA features. An instruction-set feature is not a guarantee that the widest variant runs fastest. |
+| Dispatch / multiversioning | Select among implementations for supported ISA features. Measurements establish which variant is fastest for a workload. |
 | ABI / calling convention | Rules for data layout, argument and result locations, register preservation and calls between compiled functions. |
 
 [ISPC's performance guide](https://ispc.github.io/perfguide.html) explains
@@ -335,18 +335,18 @@ The CPU arithmetic terms above also apply to GPU lane values.
 | Kernel / shader | A program entry executed across many GPU invocations. A compute shader performs general calculation through a graphics API. |
 | Thread / work-item / invocation | One instance of the program, with its own indices and values. GPU threads differ from operating-system threads. |
 | Lane / lane ID | A thread's position within its subgroup. NVIDIA warp lane IDs run from 0 to 31. |
-| Warp | NVIDIA's grouping of 32 threads for SIMT execution. It does not mean 32 operating-system threads or 32 consecutive clock cycles. |
+| Warp | NVIDIA's grouping of 32 GPU threads for SIMT execution, scheduled together by the hardware. |
 | Wave / wavefront | AMD terminology for a comparable execution group. Width depends on architecture and mode, commonly 32 or 64. |
 | Subgroup | Portable API terminology for invocations that participate in subgroup operations. Supported sizes and operations are device-dependent. |
 | Block / workgroup / threadgroup | A programmer-selected collection of threads with group-scoped cooperation. These terms come from CUDA, OpenCL/Vulkan and Metal respectively. |
 | Grid / dispatch / launch | The collection of blocks or workgroups submitted to execute a kernel. |
-| SM / CU | NVIDIA streaming multiprocessor or AMD compute unit: an execution resource hosting groups of threads. The terms are not interchangeable hardware specifications. |
+| SM / CU | NVIDIA streaming multiprocessor or AMD compute unit: a vendor-specific execution resource hosting groups of threads. Each architecture defines its hardware organization. |
 | SPMD | Single program, multiple data: many program instances process different data. ISPC applies this model to CPU SIMD gangs too. |
 | SIMT | Single instruction, multiple threads: GPU execution across thread lanes, with masking for differing paths. |
-| Per-thread vector / vector load | Several components held or transferred by one thread, such as a CUDA `float4`. This does not create four threads or replace warp-level parallelism. |
+| Per-thread vector / vector load | Several components held or transferred by one thread, such as a CUDA `float4`. Warp-level parallelism comes from executing multiple threads. |
 | Gang | An SPMD group, such as ISPC's program instances mapped to SIMD lanes. |
 | Cooperative group | A programming abstraction for an explicitly defined group that cooperates and synchronises. Its scope can differ from one warp. |
-| Tile / subgroup partition | A subdivision used for data or cooperation. A logical tile need not equal one hardware warp. |
+| Tile / subgroup partition | A subdivision used for data or cooperation. Its logical size can differ from the hardware warp size. |
 | Warp specialisation | Different warps take different roles, such as loading tiles or calculating results. Their handoff needs synchronisation. |
 
 See [NVIDIA's SIMT model](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#simt-execution-model),
@@ -361,19 +361,19 @@ and [Vulkan subgroups](https://docs.vulkan.org/guide/latest/subgroups.html).
 | Divergence / reconvergence | Lanes take different paths, then meet again at a common point. Masked execution can spend time on paths with few active lanes. |
 | Active mask / execution mask | The lanes participating at a point in execution. An instantaneous active mask may differ from the intended membership of a later collective. |
 | Predication | Enable an instruction's effects according to a per-thread predicate. Masked instructions and divergent branches have different costs. |
-| Warp scheduler / issue | Hardware chooses runnable warp instructions to issue. Source code controls work mapping, not the hardware scheduling decisions. |
+| Warp scheduler / issue | Hardware chooses runnable warp instructions to issue. Source code controls the mapping of work onto lanes. |
 | Independent thread scheduling | Hardware can track thread progress more independently. Assuming implicit warp lockstep is unsafe for communication without the specified synchronisation. |
 | Collective / subgroup operation | Threads cooperate in an exchange, vote or reduction. Required participants reach the operation with compatible membership and operands. |
-| Warp shuffle / subgroup shuffle | Read a value held by another participating lane, without a general shared-memory round trip. The source lane must be valid under the operation's rules. |
+| Warp shuffle / subgroup shuffle | Read a value held by another participating lane, without a general shared-memory round trip. The operation requires a valid source lane and participation mask. |
 | Shuffle up / down / XOR | Select a neighbour at a lower or higher lane index, or a lane whose ID differs by an XOR mask. Boundaries and subgroup width matter. |
 | Broadcast / read-first-lane | Share a selected participating lane's value with the group. Read-first selects according to the API's active-lane rules. |
 | Ballot | Collect one predicate bit per participating lane into a bitset. This is related to CPU movemask, with thread participation semantics. |
 | Vote / any / all | Ask whether some or all participating threads satisfy a predicate. The participating set matters. |
 | Match / elect / leader | Match groups lanes with equal values. Elect chooses one participating lane to perform group work. |
 | Subgroup reduction / scan | Combine thread values or produce prefix results within a participating group. Numerical order and inactive inputs require defined rules. |
-| Barrier | A rendezvous at a specified scope, with the API's memory-ordering guarantees. Every required participant must reach it correctly. |
+| Barrier | A rendezvous at a specified scope, with the API's memory-ordering guarantees. Correct execution requires all specified participants to reach it. |
 | Warp synchronisation / block synchronisation | Coordinate a subgroup or a whole block. A warp barrier cannot synchronise other warps. |
-| Memory fence / acquire / release | Order memory visibility. A fence alone is not a rendezvous that makes other threads wait. |
+| Memory fence / acquire / release | Order memory visibility. Thread rendezvous requires a separate synchronization operation, such as a barrier. |
 | Atomic / read-modify-write / CAS | An indivisible memory operation, such as increment or compare-and-swap, with specified memory order and scope. Contention can serialise accesses. |
 | Scope | The threads or agents covered by an operation's visibility or synchronisation, such as subgroup, workgroup, device or system. |
 | Race / deadlock | A race involves conflicting unsynchronised accesses. Deadlock leaves participants waiting without possible progress. |
@@ -393,14 +393,14 @@ defines barriers, scopes and ordered communication.
 | Constant / read-only memory | Storage or access paths intended for read-only data, with architecture-specific caching and broadcast behaviour. |
 | Texture / image access | An API and hardware path for indexed spatial data, sometimes with filtering or specialised cache behaviour. |
 | Coalescing / coalesced access | Combine nearby lane memory requests into transactions. Alignment, element size and the address pattern determine the transactions. |
-| Memory transaction / sector | A hardware transfer unit for memory requests. Four-byte lane accesses do not imply four-byte transactions. |
+| Memory transaction / sector | A hardware transfer unit for memory requests. Its size and the access pattern determine how lane requests combine into transactions. |
 | Gather / scatter | Each lane loads or stores an indexed address. These can be coalesced when the resulting addresses are close enough. |
 | Bank / bank conflict | Shared memory is partitioned into banks. Different addresses in the same bank can force extra service steps. Same-address broadcasts have separate rules. |
 | Padding / tiling / transpose | Change a layout or process blocks of data to improve locality, coalescing or bank use. The improvement depends on the actual mapping. |
 | Async copy / double buffering | Start a transfer and overlap useful calculation. Alternating buffers let loading and processing advance separately, with completion synchronisation. |
-| Unified memory / migration | A managed address space with data placement or movement handled by the runtime. A shared address does not imply free access or no transfer. |
-| Pinned memory / DMA | Host memory fixed for device transfers, and direct memory access. Pinning does not itself eliminate transfer time. |
-| CUDA stream / command queue | An ordered sequence of submitted operations, such as transfers and kernel launches. This is a queue of work, distinct from the data streams traversed above. Separate queues do not guarantee overlap. |
+| Unified memory / migration | A managed address space with data placement or movement handled by the runtime. Access costs include any required migration and transfer. |
+| Pinned memory / DMA | Host memory fixed for device transfers, and direct memory access. Transfer time depends on the interconnect, byte count and access pattern. |
+| CUDA stream / command queue | An ordered sequence of submitted operations, such as transfers and kernel launches. This is a queue of work, distinct from a data stream. Dependencies and available device resources determine overlap between queues. |
 | Event | A completion marker used to observe progress or establish dependencies between submitted operations. |
 | Tensor core / matrix engine | Hardware for supported matrix operations and precisions. It has a different data and execution contract from ordinary lane arithmetic. |
 | MMA / WMMA / matrix fragment | Matrix multiply-accumulate, a warp-level interface, and the distributed piece of a matrix held by participants. Fragment layout can be opaque or architecture-specific. |
@@ -436,12 +436,12 @@ have their own participation and layout requirements.
 | Occupancy / residency | Resident warps relative to supported capacity, and the groups currently kept on an execution unit. Registers and shared memory can limit residency. |
 | Theoretical / achieved occupancy | A resource-based limit for a launch, and occupancy observed during execution. Inputs and scheduling affect the observed value. |
 | Utilisation / active-lane efficiency | How much execution capacity performs useful work. Lane participation and overall device utilisation are separate measurements. |
-| Register pressure / spill | Demand for per-thread registers and movement of values to device-backed local storage when necessary. Zero stack size alone does not prove absence of spills. |
+| Register pressure / spill | Demand for per-thread registers and movement of values to device-backed local storage when necessary. Spill checks inspect memory instructions and data flow as well as stack and local-storage reports. |
 | Latency hiding | Run independent warps while others wait for memory or dependencies. It requires enough eligible work. |
-| Load balancing / work distribution | Spread work so some groups do not remain busy long after others finish. Divergence and unequal task sizes can both cause imbalance. |
+| Load balancing / work distribution | Spread work so groups finish at similar times. Divergence and unequal task sizes can both cause imbalance. |
 | Grid-stride loop / persistent kernel | A thread revisits elements separated by the grid size, or a long-lived kernel consumes successive work. These can preserve parallel lane mapping. |
 | Serial lane emulation | One thread loops over elements that were meant to execute across lanes. This differs from a grid-stride loop with simultaneous work in all threads. |
-| Throughput / FLOPS / bandwidth | Completed work per time, floating operations per second and bytes transferred per second. Peak device specifications are not achieved application rates. |
+| Throughput / FLOPS / bandwidth | Completed work per time, floating operations per second and bytes transferred per second. Device specifications give peak rates, and application measurements give achieved rates. |
 | GPU compute / GPGPU | General-purpose calculation on a graphics processor, using compute kernels rather than requiring graphics rendering. |
 | Arithmetic intensity / roofline | Work per transferred byte, and a model relating bandwidth and arithmetic ceilings. Launch and host-transfer costs can matter separately. |
 | Launch overhead / transfer overhead | Costs of submitting kernels and moving data. Tiny workloads can spend more time here than calculating. |

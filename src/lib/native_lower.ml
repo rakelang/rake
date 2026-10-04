@@ -194,13 +194,30 @@ let ir_scan = function
   | Ast.RMax -> Some Ir.Scan_max
   | Ast.RAnd | Ast.ROr -> None
 
+let integer_fold_operation loc element operation =
+  match operation, element with
+  | Ast.RAdd, (Ir.I32 | Ir.U32) -> Ok (Ir.Add, 0L)
+  | Ast.RMul, (Ir.I32 | Ir.U32) -> Ok (Ir.Mul, 1L)
+  | Ast.RMin, Ir.I32 -> Ok (Ir.Min, 2147483647L)
+  | Ast.RMin, Ir.U32 -> Ok (Ir.Min, 4294967295L)
+  | Ast.RMax, Ir.I32 -> Ok (Ir.Max, -2147483648L)
+  | Ast.RMax, Ir.U32 -> Ok (Ir.Max, 0L)
+  | _ -> error loc "integer folds require arithmetic on an i32s or u32s rack"
+
 (** Integer elements of racks that integer arithmetic and comparison take. *)
 let is_integer_element = function Ir.U8 | Ir.I16 | Ir.I32 | Ir.U32 | Ir.I64 -> true | _ -> false
 
-(** A literal typed by the rack it meets: an integer splat in the rack's
-    element, or an f32 constant for an f32 rack. *)
+(** A literal takes the element and scalar/rack shape of its other operand. *)
 let typed_literal state loc provenance typ value =
   match typ with
+  | Ir.Scalar Ir.F32 ->
+      Ok (emit state loc provenance typ
+        (Ir.Const (Ir.Float32_bits (Int32.bits_of_float (Int64.to_float value)))))
+  | Ir.Scalar ((Ir.I32 | Ir.U32) as element) ->
+      let* splat = integer_splat loc (Ir.Rack element) value in
+      (match splat with
+       | Ir.Rack_splat literal -> Ok (emit state loc provenance typ (Ir.Const literal))
+       | _ -> error loc "an integer uniform requires a typed literal")
   | Ir.Rack Ir.F32 -> Ok (rack_constant state loc provenance (Int64.to_float value))
   | Ir.Rack Ir.U8 when value >= 0L && value <= 255L ->
       Ok (emit state loc provenance typ (Ir.Rack_splat (Ir.Uint8 (Int64.to_int value))))
@@ -210,6 +227,41 @@ let typed_literal state loc provenance typ value =
       | Ok splat -> Ok (emit state loc provenance typ splat)
       | Error _ as failure -> failure)
   | _ -> errorf loc "integer literal %Ld does not fit a lane of %s" value (Ir.string_of_typ typ)
+
+(** Arithmetic on uniform results still uses full-width packed instructions.
+    Only the completed result crosses back to a scalar value. A partial mask
+    cannot select which lane supplies that uniform. *)
+let uniform_arithmetic state provenance loc operation left right =
+  let* left, right = expect_same loc "uniform arithmetic" left right in
+  let* element = match snd left, operation with
+    | Ir.Scalar Ir.F32, (Add | Sub | Mul | Div) -> Ok Ir.F32
+    | Ir.Scalar ((Ir.I32 | Ir.U32) as element), (Add | Sub | Mul) -> Ok element
+    | typ, _ -> errorf loc "uniform %s arithmetic on %s is not supported"
+        (show_binop operation) (Ir.string_of_typ typ) in
+  if provenance.Ir.through <> None then
+    error loc "uniform arithmetic is not defined under a partial lane mask"
+  else
+    let broadcast value = emit state loc provenance (Ir.Rack element) (Ir.Broadcast (fst value)) in
+    let left = broadcast left and right = broadcast right in
+    let operation = Option.get (ir_binary operation) in
+    let computed = emit state loc provenance (Ir.Rack element)
+      (Ir.Binary (operation, fst left, fst right)) in
+    let lane = emit state loc Ir.source (Ir.Scalar Ir.I32) (Ir.Const (Ir.Int32 0l)) in
+    Ok (emit state loc provenance (Ir.Scalar element)
+      (Ir.Extract { rack = fst computed; lane = fst lane }))
+
+let uniform_negation state provenance loc operand =
+  let* element = match snd operand with
+    | Ir.Scalar ((Ir.F32 | Ir.I32) as element) -> Ok element
+    | typ -> errorf loc "uniform negation on %s is not supported" (Ir.string_of_typ typ) in
+  if provenance.Ir.through <> None then
+    error loc "uniform negation is not defined under a partial lane mask"
+  else
+    let broadcast = emit state loc provenance (Ir.Rack element) (Ir.Broadcast (fst operand)) in
+    let negated = emit state loc provenance (Ir.Rack element) (Ir.Unary (Ir.Neg, fst broadcast)) in
+    let lane = emit state loc Ir.source (Ir.Scalar Ir.I32) (Ir.Const (Ir.Int32 0l)) in
+    Ok (emit state loc provenance (Ir.Scalar element)
+      (Ir.Extract { rack = fst negated; lane = fst lane }))
 
 (** Rake's exp, log, log2 and tanh on an f32 rack: the binary32 operations
     of {!Rake_math}, lane by lane, special cases chosen by vector select. *)
@@ -332,6 +384,7 @@ let rec lower_expr state provenance (expr : expr) =
       let* left, right = lower_operands state provenance left right in
       let* left, right = expect_same expr.loc "arithmetic" left right in
       (match snd left with
+       | Ir.Scalar _ -> uniform_arithmetic state provenance expr.loc operation left right
        | Ir.Rack element when is_integer_element element -> (
            match operation with
            | Add | Sub ->
@@ -366,17 +419,25 @@ let rec lower_expr state provenance (expr : expr) =
            Ok (emit state expr.loc provenance Ir.Mask (Ir.Compare (comparison, fst left, fst right))))
   | EBinop (left, ((And | Or) as operation), right) ->
       let* left = lower_expr state provenance left in
-      let* right = lower_expr state provenance right in
-      let* () = expect_type expr.loc "mask operation" Ir.Mask left in
-      let* () = expect_type expr.loc "mask operation" Ir.Mask right in
+      let scalar_left = snd left = Ir.Scalar Ir.I1 in
+      let* left = condition_mask state provenance expr.loc left in
+      let right_provenance = if scalar_left
+        then logical_right_provenance state provenance expr.loc operation (fst left)
+        else provenance in
+      let* right = lower_expr state right_provenance right in
+      let scalar = scalar_left && snd right = Ir.Scalar Ir.I1 in
+      let* right = condition_mask state right_provenance expr.loc right in
       let operation = match operation with And -> Ir.And | Or -> Ir.Or | _ -> assert false in
-      Ok (emit state expr.loc provenance Ir.Mask (Ir.Mask_binary (operation, fst left, fst right)))
+      let value = emit state expr.loc provenance Ir.Mask (Ir.Mask_binary (operation, fst left, fst right)) in
+      if scalar then Ok (emit state expr.loc provenance (Ir.Scalar Ir.I1) (Ir.Reduce (Ir.Reduce_and, fst value)))
+      else Ok value
   | EBinop (_, operation, _) ->
       errorf expr.loc "binary operator %s is not supported by native scratch lowering"
         (show_binop operation)
   | EUnop ((Neg | FNeg), operand) ->
       let* operand = lower_expr state provenance operand in
       (match snd operand with
+       | Ir.Scalar _ -> uniform_negation state provenance expr.loc operand
        | Ir.Rack element when is_integer_element element && element <> Ir.U8 ->
            Ok (emit state expr.loc provenance (snd operand) (Ir.Unary (Ir.Neg, fst operand)))
        | _ ->
@@ -435,7 +496,7 @@ let rec lower_expr state provenance (expr : expr) =
                 match parameter with
                 | PScalar (_, Some typ) ->
                     let* expected = ir_typ_of_annotation typ in
-                    lower_scalar state argument expected
+                    lower_scalar ~provenance state argument expected
                 | PRack (_, Some typ) when integer_literal argument <> None ->
                     let* expected = ir_typ_of_annotation typ in
                     typed_literal state argument.loc provenance expected (Option.get (integer_literal argument))
@@ -472,7 +533,7 @@ let rec lower_expr state provenance (expr : expr) =
                if lane_value < 0L || lane_value >= Int64.of_int lanes then
                  errorf lane.loc "lane %Ld is outside a %d-lane rack" lane_value lanes
                else
-                 let* value = lower_scalar state inserted (Ir.Scalar element) in
+                 let* value = lower_scalar ~provenance state inserted (Ir.Scalar element) in
                  let lane = emit state expr.loc Ir.source (Ir.Scalar Ir.I32) (Ir.Const (Ir.Int32 (Int64.to_int32 lane_value))) in
                  Ok (emit state expr.loc provenance (snd rack) (Ir.Insert { rack = fst rack; inserted = fst value; lane = fst lane }))
            | typ -> errorf expr.loc "insert takes a rack, got %s" (Ir.string_of_typ typ)))
@@ -485,8 +546,11 @@ let rec lower_expr state provenance (expr : expr) =
       | _ -> errorf expr.loc "bitcast reinterprets a rack as a rack of another element")
   | EUnop (Not, operand) ->
       let* operand = lower_expr state provenance operand in
-      let* () = expect_type expr.loc "mask not" Ir.Mask operand in
-      Ok (emit state expr.loc provenance Ir.Mask (Ir.Mask_not (fst operand)))
+      let scalar = snd operand = Ir.Scalar Ir.I1 in
+      let* operand = condition_mask state provenance expr.loc operand in
+      let value = emit state expr.loc provenance Ir.Mask (Ir.Mask_not (fst operand)) in
+      if scalar then Ok (emit state expr.loc provenance (Ir.Scalar Ir.I1) (Ir.Reduce (Ir.Reduce_and, fst value)))
+      else Ok value
   | ECall ("sqrt", [ operand ]) ->
       let* operand = lower_expr state provenance operand in
       let* () = expect_type expr.loc "sqrt" (Ir.Rack Ir.F32) operand in
@@ -632,6 +696,26 @@ let rec lower_expr state provenance (expr : expr) =
         if snd operand = Ir.Mask && (operation = RAnd || operation = ROr) then
           Ok (emit state expr.loc provenance (Ir.Scalar Ir.I1)
                 (Ir.Reduce ((if operation = RAnd then Ir.Reduce_and else Ir.Reduce_or), fst operand)))
+        else if snd operand = Ir.Rack Ir.I32 || snd operand = Ir.Rack Ir.U32 then
+          let element = match snd operand with Ir.Rack element -> element | _ -> assert false in
+          let* operation, _ = integer_fold_operation expr.loc element operation in
+          let lanes = (Target.info state.profile).f32_lanes in
+          (* Wrapping arithmetic and integer extrema are associative. Butterfly
+             shuffles combine disjoint groups until every lane has the result.
+             Only that completed result crosses the scalar ABI. *)
+          let rec combine distance rack =
+            if distance >= lanes then rack
+            else
+              let indices = List.init lanes (fun lane -> lane lxor distance) in
+              let shuffled = emit state expr.loc provenance (snd operand)
+                (Ir.Shuffle { racks = [ fst rack ]; indices }) in
+              let combined = emit state expr.loc provenance (snd operand)
+                (Ir.Binary (operation, fst rack, fst shuffled)) in
+              combine (distance * 2) combined in
+          let combined = combine 1 operand in
+          let lane = emit state expr.loc Ir.source (Ir.Scalar Ir.I32) (Ir.Const (Ir.Int32 0l)) in
+          Ok (emit state expr.loc provenance (Ir.Scalar element)
+                (Ir.Extract { rack = fst combined; lane = fst lane }))
         else
         let* () = expect_type expr.loc "f32 reduction" (Ir.Rack Ir.F32) operand in
         (match ir_reduction operation with
@@ -645,13 +729,33 @@ let rec lower_expr state provenance (expr : expr) =
         error expr.loc "prefix scans are forbidden in predicated regions"
       else
         let* operand = lower_expr state provenance operand in
-        let* () = expect_type expr.loc "f32 prefix scan" (Ir.Rack Ir.F32) operand in
-        (match ir_scan operation with
-        | Some operation ->
-            Ok
-              (emit state expr.loc provenance (Ir.Rack Ir.F32)
-                 (Ir.Scan (operation, fst operand)))
-        | None -> error expr.loc "logical prefix scans are not defined")
+        (match snd operand with
+        | Ir.Rack ((Ir.I32 | Ir.U32) as element) ->
+          let* operation, identity = integer_fold_operation expr.loc element operation in
+          let* neutral = typed_literal state expr.loc provenance (snd operand) identity in
+          let lanes = (Target.info state.profile).f32_lanes in
+          (* Each stage combines adjacent prefixes at twice the previous
+             distance. Neutral lanes preserve the start of the rack, including
+             across the physical register's 128-bit subdivisions. *)
+          let rec combine distance rack =
+            if distance >= lanes then rack
+            else
+              let indices = List.init lanes (fun lane ->
+                if lane < distance then lanes else lane - distance) in
+              let shifted = emit state expr.loc provenance (snd operand)
+                (Ir.Shuffle { racks = [ fst rack; fst neutral ]; indices }) in
+              let combined = emit state expr.loc provenance (snd operand)
+                (Ir.Binary (operation, fst rack, fst shifted)) in
+              combine (distance * 2) combined in
+          Ok (combine 1 operand)
+        | _ ->
+            let* () = expect_type expr.loc "f32 prefix scan" (Ir.Rack Ir.F32) operand in
+            (match ir_scan operation with
+            | Some operation ->
+                Ok
+                  (emit state expr.loc provenance (Ir.Rack Ir.F32)
+                     (Ir.Scan (operation, fst operand)))
+            | None -> error expr.loc "logical prefix scans are not defined"))
   | EShuffle (operand, indices) ->
       let rack_exprs = match operand.v with ETuple racks -> racks | _ -> [ operand ] in
       let rec lower_racks reversed = function
@@ -707,8 +811,8 @@ and lower_operands state provenance left right =
       let* right = lower_expr state provenance right in
       Ok (left, right)
 
-(** A uniform scalar of the given type: a scalar name, or a literal. *)
-and lower_scalar state (expr : expr) typ =
+(** A uniform expression of the context's scalar type. *)
+and lower_scalar ?(provenance = Ir.source) state (expr : expr) typ =
   match (expr.v, typ) with
   | (EScalarVar name | EBroadcast { v = EScalarVar name; _ } | EVar name), _ ->
       let* value = find_binding state expr.loc name in
@@ -730,7 +834,18 @@ and lower_scalar state (expr : expr) typ =
       Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Float32_bits (Int32.bits_of_float (Int64.to_float value)))))
   | (EBool value | EBroadcast { v = EBool value; _ }), Ir.Scalar Ir.I1 ->
       Ok (emit state expr.loc Ir.source typ (Ir.Const (Ir.Bool value)))
-  | _ -> errorf expr.loc "a uniform %s is written <name> or a literal" (Ir.string_of_typ typ)
+  | EBinop (left, ((Add | Sub | Mul | Div) as operation), right),
+      Ir.Scalar (Ir.F32 | Ir.I32 | Ir.U32) ->
+      let* left = lower_scalar ~provenance state left typ in
+      let* right = lower_scalar ~provenance state right typ in
+      uniform_arithmetic state provenance expr.loc operation left right
+  | EUnop ((Neg | FNeg), operand), Ir.Scalar (Ir.F32 | Ir.I32) ->
+      let* operand = lower_scalar ~provenance state operand typ in
+      uniform_negation state provenance expr.loc operand
+  | _ ->
+      let* value = lower_expr state provenance expr in
+      let* () = expect_type expr.loc "a uniform scalar" typ value in
+      Ok value
 
 (** Whether an expression is a uniform condition: comparisons of uniform
     scalars and literals, or a uniform bool. *)
@@ -738,16 +853,47 @@ and is_uniform (expr : expr) =
   match expr.v with
   | EScalarVar _ | EInt _ | EFloat _ | EBool _ | EBroadcast { v = EScalarVar _ | EInt _ | EFloat _ | EBool _; _ } -> true
   | EBinop (l, (Lt | Le | Gt | Ge | Eq | Ne), r) -> is_uniform l && is_uniform r
+  | EBinop (l, (And | Or), r) -> is_uniform l && is_uniform r
+  | EUnop (Not, e) -> is_uniform e
   | _ -> false
+
+and condition_mask state provenance loc value =
+  match snd value with
+  | Ir.Mask -> Ok value
+  | Ir.Scalar Ir.I1 -> Ok (emit state loc provenance Ir.Mask (Ir.Broadcast (fst value)))
+  | _ -> error loc "a condition must be a Boolean uniform or a lane mask"
+
+and logical_right_provenance state provenance loc operation left =
+  let active = if operation = And then left
+    else fst (emit state loc provenance Ir.Mask (Ir.Mask_not left)) in
+  let active = match provenance.Ir.through with
+    | None -> active
+    | Some outer -> fst (emit state loc provenance Ir.Mask (Ir.Mask_binary (Ir.And, outer, active))) in
+  { provenance with through = Some active }
 
 and uniform_condition state provenance (expr : expr) =
   match expr.v with
-  | EBroadcast { v = EBool value; _ } ->
+  | EBool value | EBroadcast { v = EBool value; _ } ->
       Ok (emit state expr.loc provenance (Ir.Scalar Ir.I1) (Ir.Const (Ir.Bool value)))
   | EScalarVar name | EBroadcast { v = EScalarVar name; _ } ->
       let* value = find_binding state expr.loc name in
-      let* () = expect_type expr.loc "a uniform condition" (Ir.Scalar Ir.I1) value in
-      Ok value
+      (match snd value with
+       | Ir.Scalar Ir.I1 | Ir.Mask -> Ok value
+       | _ -> error expr.loc "a uniform condition must be Boolean")
+  | EUnop (Not, operand) ->
+      let* value = uniform_condition state provenance operand in
+      let* value = condition_mask state provenance operand.loc value in
+      Ok (emit state expr.loc provenance Ir.Mask (Ir.Mask_not (fst value)))
+  | EBinop (left, ((And | Or) as operation), right) ->
+      let* left_value = uniform_condition state provenance left in
+      let* left_value = condition_mask state provenance left.loc left_value in
+      (* Uniform logic short-circuits. A skipped right-hand comparison gets
+         benign operands, including when it holds a signalling NaN. *)
+      let right_provenance = logical_right_provenance state provenance expr.loc operation (fst left_value) in
+      let* right_value = uniform_condition state right_provenance right in
+      let* right_value = condition_mask state right_provenance right.loc right_value in
+      Ok (emit state expr.loc provenance Ir.Mask
+        (Ir.Mask_binary ((if operation = And then Ir.And else Ir.Or), fst left_value, fst right_value)))
   | EBinop (l, ((Lt | Le | Gt | Ge | Eq | Ne) as comparison), r) ->
       let scalar_of (e : expr) =
         match e.v with
@@ -830,11 +976,9 @@ let lower_binding state provenance loc name annotation expression =
   (* A scalar result retains its uniform value; rack use still broadcasts.
      Reductions and calls produce their own scalar IR through lower_expr. *)
   let* value = match annotation, expression.v with
-    | Some ({ v = TScalar _; _ } as annotation),
-      (EScalarVar _ | EVar _ | EFloat _ | EInt _
-       | EBroadcast { v = EScalarVar _ | EFloat _ | EInt _; _ }) ->
+    | Some ({ v = TScalar _; _ } as annotation), _ ->
         let* typ = ir_typ_of_annotation annotation in
-        lower_scalar state expression typ
+        lower_scalar ~provenance state expression typ
     | _ -> lower_expr state provenance expression
   in
   let* () = check_annotation annotation (snd value) in
@@ -872,7 +1016,11 @@ let rec lower_statement_in state ~through active_fused (statement : stmt) =
       let* _ = lower_expr state plain expression in
       Ok None
   | SUniform binding ->
-      let* value = lower_expr state plain binding.bind_expr in
+      let* value = match binding.bind_type with
+        | Some ({ v = TScalar _; _ } as annotation) ->
+            let* typ = ir_typ_of_annotation annotation in
+            lower_scalar ~provenance:plain state binding.bind_expr typ
+        | _ -> lower_expr state plain binding.bind_expr in
       (match snd value with
        | Ir.Scalar _ ->
            let* () = check_annotation binding.bind_type (snd value) in
@@ -1388,11 +1536,11 @@ let callee_table definitions =
       | _ -> table)
     StringMap.empty definitions
 
-(** One pure expression of a run as a function of its free names, lowered by
-    the same rules as a scratch body. [mask] names a parameter whose lanes are
+(** A run's ordered immutable bindings and result, lowered by the same rules
+    as a scratch body. [mask] names a parameter whose lanes are
     the only active ones: a traversal's tail, under whose predication every
     exception-capable operation is sanitised. *)
-let lower_expression ?(profile = Target.Wasm_simd128) ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
+let lower_expression ?(profile = Target.Wasm_simd128) ?(condition_bindings = []) ?(expression_bindings = []) ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
   callees := callee_table definitions;
   global_tines := definitions;
   let state =
@@ -1427,6 +1575,15 @@ let lower_expression ?(profile = Target.Wasm_simd128) ~definitions ~name ~parame
         Ok (Some (fst mask))
   in
   let provenance = { Ir.fused = (if fused then Some 0 else None); through } in
+  let* () = List.fold_left (fun previous (name, condition) ->
+    let* () = previous in
+    let* value = uniform_condition state provenance condition in
+    let* value = condition_mask state provenance condition.loc value in
+    bind state condition.loc name value) (Ok ()) condition_bindings in
+  let* () = List.fold_left (fun previous (name, (expression : expr)) ->
+    let* () = previous in
+    let* _ = lower_binding state provenance expression.loc name None expression in
+    Ok ()) (Ok ()) expression_bindings in
   let* value = lower_expr state provenance expression in
   let func =
     {

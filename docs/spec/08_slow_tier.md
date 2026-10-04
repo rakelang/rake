@@ -14,16 +14,15 @@ A program with any slow, run, record, union, state, embed, const or extern
 definition is a whole program. On `wasm-simd128` it compiles to one C
 translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
-`wasm-simd128-relaxed` in the 0.6.0-beta tag. The unreleased development
-compiler also emits native C and objects combining slow orchestration and
+`wasm-simd128-relaxed`. Rake 0.7.0 also emits native C and objects combining slow orchestration and
 register kernels on x86-64 and AArch64. SSE2, AVX2, AVX-512 and NEON additionally support the
 [native stream subset](02_packs_and_run.md#native-cpu-streams). General native
 runs remain work in progress.
 
 ### Native kernel calls
 
-On the development compiler, a native register kernel called from slow code
-takes uniform `f32`, `i32` or `u32` parameters and returns `f32`, `bool`, `i32`
+In Rake 0.7.0, a native register kernel called from slow code
+takes uniform `f32`, `bool`, `i32` or `u32` parameters and returns `f32`, `bool`, `i32`
 or `u32`. Rake selects and allocates
 the kernel's instructions. The generated C contains its opaque assembly,
 and the final object is checked against the selected profile. The platform C
@@ -63,7 +62,7 @@ code receives C `bool` and can branch on it.
 
 ### Process arguments
 
-The development compiler after 0.6.0-beta accepts either `slow main() -> i32`
+Rake 0.7.0 accepts either `slow main() -> i32`
 or a process entry with an argument count and a pointer to byte strings:
 
 <!-- rake-check: run 1 -->
@@ -124,7 +123,7 @@ slow main() -> i32:
 ```
 
 `rakec --interpret program.rk` runs `main` in Rake's executable semantics and
-prints its result. `rakec --emit-asm --target wasm-simd128 -o program.c
+prints its result. `rakec --emit-c --target wasm-simd128 -o program.c
 program.rk` writes the C unit, and `--verify-native` compiles it and checks
 every scratch, rake and run in the object (see [Verification](#verification)).
 
@@ -176,7 +175,7 @@ block refer only to scalar loops inside that block.
 Scratches, rakes and fused regions remain pure vector kernels and reject slow
 blocks. Put scalar orchestration in the run that calls them. Blocks and whole
 programs with memory runs currently compile for WebAssembly only. The
-development compiler also supports native slow functions and register kernels.
+compiler also supports native slow functions and register kernels.
 
 ## Definitions
 
@@ -186,7 +185,7 @@ development compiler also supports native slow functions and register kernels.
 | `extern slow name(parameters) -> T from "header.h"` | a C function |
 | `record Name { T: field, field; }` | a record with Rake's layout |
 | `record Name from "header.h" { T: field; }` | a C struct |
-| `union Name from "header.h" { T: field; }` | a C union, available in the development compiler |
+| `union Name from "header.h" { T: field; }` | a C union |
 | `state name: T := constant`, `state name: T` | module state |
 | `embed name from "file"` | a file's bytes |
 | `const name: T = constant` | a compile-time constant |
@@ -198,7 +197,7 @@ in any order and recurse.
 A record declared with a header is a C struct whose layout C owns: the unit
 includes the header, and each declared scalar, pointer or scalar-array field
 gets a `_Static_assert` that its C size matches. Function-pointer fields are
-also checked in the development compiler. Other records have Rake's
+also checked. Other records have Rake's
 layout. A record can't contain itself, directly or through other records.
 
 ### Opaque C pointer types
@@ -220,7 +219,7 @@ construction are rejected. Empty Rake-owned records are rejected too.
 
 ### C unions
 
-The development compiler after 0.6.0-beta accepts header-backed unions. All
+Rake 0.7.0 accepts header-backed unions. All
 their members overlap the same storage. C owns their size, alignment and ABI,
 including a union embedded in a struct, passed to an imported function or
 returned by value. An ordinary slow parameter borrows the union, just as it
@@ -266,7 +265,7 @@ static. `const` binds a compile-time value computed from literals. Vector code
 may use an integer or float constant as a literal.
 
 `extern slow` declares a C function from a header. Its parameters are
-scalars, pointers and records passed by value. The development compiler also
+scalars, pointers and records passed by value. Rake 0.7.0 also
 accepts typed function pointers.
 
 ## Types
@@ -278,8 +277,8 @@ accepts typed function pointers.
 | `[]T` | a view: a borrowed run of elements with an `i32` count |
 | `ptr T` | a C pointer, for extern interoperation |
 | `ptr const T` | a C pointer through which the pointed-to object is read-only |
-| `ptr ()` | an opaque C `void *`, available in the development compiler |
-| `slow(T, ...) -> U` | a typed C function pointer, available in the development compiler |
+| `ptr ()` | an opaque C `void *` |
+| `slow(T, ...) -> U` | a typed C function pointer |
 | `Name` | a record |
 | `mut T` | in a parameter list: a view, stack, array or record the callee writes |
 
@@ -332,7 +331,7 @@ operand's precision.
 | `bitcast(T, x)` | the same bits as a numeric type of the same width |
 | `if c then a else b` | evaluates `c`, then only the chosen branch |
 | `a[i]` | checked element: traps unless `0 <= i < count` |
-| `a[unchecked i]` | element under the caller's promise that `i` is in bounds |
+| `a[unchecked i]` | element at `i`, with bounds the caller checks |
 | `r.field`, `p.field` | a record's field, directly or through a pointer |
 | `Name { field: e, ... }` | a record literal naming every field |
 | `[a, b, c]`, `[e; n]` | array literals |
@@ -363,7 +362,7 @@ a NaN give a NaN. Of two zeros, `min` gives negative zero if either is, and
 
 ### Read-only pointers
 
-The development compiler after 0.6.0-beta preserves C pointer qualifiers.
+Rake 0.7.0 preserves C pointer qualifiers.
 `ptr const T` corresponds to `const T *`: it prevents writes through that
 pointer. Another writable alias may still change the same object. An immutable
 `let` binding prevents replacement of the pointer itself, which is a separate
@@ -379,8 +378,8 @@ read-only pointers implicitly.
 `unchecked_view` preserves its pointer's access. A view formed from
 `ptr const T` is `[]T`, and a writable view may be borrowed as `[]T` without
 copying its elements. Erasing and restoring a pointer through `ptr ()` or
-`ptr const ()` must preserve read-only access. These checks do not establish
-the pointer's lifetime, bounds or alignment.
+`ptr const ()` preserves read-only access. The caller remains responsible for
+the pointer's lifetime, bounds and alignment.
 
 <!-- rake-check: run 11 -->
 ```rake
@@ -396,7 +395,7 @@ slow main() -> i32:
 
 ## Function pointers and callbacks
 
-The development compiler after 0.6.0-beta supports C function pointers in
+Rake 0.7.0 supports C function pointers in
 slow code. Write `slow(i32) -> i32` for a pointer to a function taking an
 `i32` and returning an `i32`. Write `-> ()` for a callback returning C
 `void`. Function-pointer arguments and results use the platform C ABI.
@@ -492,7 +491,7 @@ traps before the run starts.
   marked at their declaration and use, broadcasts are explicit, and a
   computation the target can't keep in racks is rejected.
 
-## How the tier keeps vector code's promises
+## Vector boundaries
 
 - One rack is one `v128`. A run may keep that virtual value alive across a
   slow block, but the block can't capture it or turn it into scalar lanes.
@@ -533,7 +532,7 @@ rejecting a program that breaks it.
 
 ## The C unit
 
-Ordinary slow functions have external C linkage in the development compiler,
+Ordinary slow functions have external C linkage,
 including on WebAssembly, so independently compiled C can call them. Extracted
 block helpers remain internal. A parameterless entry is `int main(void)`,
 and a process entry uses the adapter described above.
@@ -542,13 +541,13 @@ Checked arithmetic, conversions, indexing and slices are small inline helpers
 that call `__builtin_trap`. Each run is an external, never-inlined `void`
 function.
 
-On the development compiler's native path, slow functions use the platform
+On the native path, slow functions use the platform
 C ABI. Scalar and pointer
 arguments pass by value, array and record arguments are borrowed pointers,
 and record results return by value. Header-backed records retain their C
 layout, including native pointer widths and padding. Rake emits checked
 scalar C; the platform compiler owns its register allocation and calling
-convention. This does not delegate vector kernel compilation to C.
+convention. Rake selects and verifies the vector kernels' instructions.
 
 Header-backed unions use the same C boundary, with the access contract above.
 Native slow frames are
@@ -561,7 +560,7 @@ a never-inlined scalar helper. Its captured uniforms are scalar parameters,
 and its captured views are passed as pointer/count pairs, so the run needs no
 C stack frame. Rack values never cross that helper boundary.
 
-The development compiler groups a slow function's aggregate locals into one
+The compiler groups a slow function's aggregate locals into one
 frame. The platform C compiler supplies its actual size and alignment,
 including header-backed records, unions, nested aggregates and padding.
 Frames of at most 256 bytes stay on the host stack through an aligned GNU C
@@ -582,7 +581,7 @@ where an overflow could overwrite that data without a trap.
 On native targets, each thread allocates an arena on its first active framed
 call and frees it when the outermost framed call returns. Nested calls and
 synchronous C callbacks share that thread's arena. Only the pointer and cursor
-occupy TLS, so the arena does not impose a 4 MiB minimum on host worker stacks.
+occupy TLS. The arena's storage is allocated separately from host worker stacks.
 Allocation failure traps. Nonlocal exits such as C `longjmp` bypass frame
 cleanup and are unsupported across active Rake frames.
 

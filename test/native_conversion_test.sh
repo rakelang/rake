@@ -31,10 +31,15 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     -Wno-unused-function "${flags[@]}" -DLANES="$lanes" "$root/test/native_conversion_runtime.c" \
     "$tmp/conversion.o" -lm -o "$tmp/conversion"
   "${runner[@]}" "$tmp/conversion"
+  "$rakec" --emit-c --target "$profile" -o "$tmp/conversion.c" "$root/test/abi/native_conversions.rk"
+  "$compiler" -std=gnu11 -O1 -fno-fast-math -ffp-contract=off -Wall -Wextra -Werror \
+    -Wno-unused-function "${flags[@]}" -DLANES="$lanes" "$root/test/native_conversion_runtime.c" \
+    "$tmp/conversion.c" -lm -o "$tmp/conversion-c"
+  "${runner[@]}" "$tmp/conversion-c"
   printf '%s conversion C oracle passed\n' "$profile"
 done
 for addressing in barrier plain; do
-  "$rakec" --emit-asm --target wasm-simd128 --wasm-addressing "$addressing" \
+  "$rakec" --emit-c --target wasm-simd128 --wasm-addressing "$addressing" \
     -o "$tmp/conversions.c" "$root/test/abi/native_conversions.rk"
   clang --target=wasm32 -msimd128 -O2 -ffreestanding -nostdlib -Wall -Wextra -Werror \
     -DRAKE_WASM_LINKAGE= -Wno-unused-function -Wl,--no-entry -Wl,--export=test \

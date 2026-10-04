@@ -34,6 +34,7 @@ type operation =
   | Neg_i32 of { dst : vector_register; source : vector_register }
   | Abs_i32 of { dst : vector_register; source : vector_register }
   | Shift_i32 of { dst : vector_register; source : vector_register; count : Native_ir.I32_shift_count.t; shift : Native_ir.shift }
+  | Shift_uniform_i32 of { dst : vector_register; source : vector_register; count : vector_register; normalized : vector_register; shift : Native_ir.shift }
   | Compare_i32 of { dst : vector_register; predicate : Native_ir.comparison; unsigned : bool; left : vector_register; right : vector_register }
   | Fmul of { dst : vector_register; left : vector_register; right : vector_register }
   | Fdiv of { dst : vector_register; left : vector_register; right : vector_register }
@@ -272,6 +273,7 @@ let allocate_function ?parameter_assignment func =
             | M.Broadcast_word32 { source; _ } -> [ source ]
             | M.Broadcast_bool { source; _ } -> [ source ]
             | M.Insert_word32 { previous; _ } -> [ previous ]
+            | M.Shift_uniform_i32 { source; _ } -> [ source ]
             | M.Fma { addend; _ } -> [ addend ]
             | M.Select { mask; if_false; if_true; _ } -> [ mask; if_false; if_true ]
             | _ -> operands
@@ -282,7 +284,7 @@ let allocate_function ?parameter_assignment func =
               let p = physical in
               let scratch_count = match instruction with
                 | M.Convert_word_f32 { conversion = (Native_ir.F32_to_i32 | Native_ir.F32_to_u32); _ } -> 4
-                | M.Reduce_mask _ -> 1 | _ -> 0 in
+                | M.Reduce_mask _ | M.Shift_uniform_i32 _ -> 1 | _ -> 0 in
               let occupied = occupied !allocation in
               let scratch = List.filter (fun register ->
                 register <> dst && not (S.mem register occupied)) allocatable_registers
@@ -321,6 +323,8 @@ let allocate_function ?parameter_assignment func =
               | M.Abs_i32 { source; _ } -> emit loc provenance (Abs_i32 { dst; source = p source })
               | M.Shift_i32 { source; count; shift; _ } ->
                   emit loc provenance (Shift_i32 { dst; source = p source; count; shift })
+              | M.Shift_uniform_i32 { source; count; shift; _ } ->
+                  emit loc provenance (Shift_uniform_i32 { dst; source = p source; count = p count; normalized = List.hd scratch; shift })
               | M.Compare_i32 { predicate; unsigned; left; right; _ } ->
                   emit loc provenance (Compare_i32 { dst; predicate; unsigned; left = p left; right = p right })
               | M.Fmul { left; right; _ } -> emit loc provenance (Fmul { dst; left = p left; right = p right })

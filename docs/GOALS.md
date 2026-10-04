@@ -2,8 +2,8 @@
 
 Rake is a language for SIMD programs. It lets a programmer state the vector
 structure of an algorithm, its registers, masks and data layout, without
-writing intrinsics or assembly. This page sets out the promises the language
-makes. A compiler may reject a program or a profile it can't compile under
+writing intrinsics or assembly. This page defines the language's compilation
+rules. The compiler rejects a program or profile it can't compile under
 them, and it never keeps a program by weakening a rack, a fused region or a
 rake into scalar code. Each section ends with what the compiler does today.
 
@@ -43,8 +43,8 @@ reserved and unavailable.
 Tines describe lane masks, either locally or as reusable typed global
 predicates. A through block computes under one. Without `else`, its result
 is defined only there, and the checker refuses reads outside that mask.
-A sweep picks each lane's result in priority order. Its arms must provably
-cover every lane, using `gaps` or a final `_` where needed. A vector backend
+A sweep picks each lane's result in priority order. The checker proves that
+its arms cover every lane, using `gaps` or a final `_` where needed. A vector backend
 keeps these choices as vector predication,
 with masked instructions or benign operands, and never turns them into
 branches for each lane. An inactive lane raises no floating-point exception,
@@ -114,15 +114,14 @@ their boundaries and checked tails.
 A program's scalar work, its records, state, control flow and calls to C, is
 slow code, marked `slow`. A run enters it explicitly with `slow { ... }` and
 resumes vector mode at `}`. Slow code can't hold a rack, and reaches vector
-work only through calls whose uniform arguments are marked, so the promises
-above hold unchanged around it. The compiler guarantees vector lowering,
-not a particular elapsed time or the fastest possible algorithm.
+work only through calls whose uniform arguments are marked. The vector
+lowering rules above apply unchanged around those calls.
 
 Today: whole programs compile on `wasm-simd128`, as [the slow
 tier](spec/08_slow_tier.md) describes. The unreleased development compiler
 also compiles slow orchestration with register kernels into native objects.
 Their C unit embeds Rake-selected assembly, which remains opaque to the
-platform C compiler. Slow callers can pass uniform `f32`, `i32` and `u32`
+platform C compiler. Slow callers can pass uniform `f32`, `bool`, `i32` and `u32`
 arguments and receive `f32`, `bool`, `i32` or `u32` results. Native runs beyond
 the stream subset and other scalar kernel boundaries remain work in progress.
 
@@ -134,16 +133,17 @@ encodes what it is given. Explicit slow code uses the platform C compiler.
 On WebAssembly, Rake owns selection of the virtual machine instructions and the
 shape of its `v128` values. The WebAssembly runtime owns their eventual
 physical registers. Every compiler stage can be inspected, and the compiler
-proves the properties it claims for an accepted program. When it can't prove
+proves the profile's properties for an accepted program. When it can't prove
 one, it fails with the source construct, profile and obligation that failed.
 A benchmark result is reported with its source, profile, compiler version,
 command, input size and baseline.
 
 Today: on SSE2, AVX2, AVX-512 and NEON the compiler selects instructions,
 allocates registers without spills and writes the assembly, and
-`--emit-native-ir` and `--emit-asm` show its work. On `wasm-simd128` it
-selects the instructions and writes each as one intrinsic in C, and clang
-encodes them, choosing locals and occasionally an equivalent instruction,
+`--emit-native-ir` and `--emit-asm` show its work. `--emit-c` writes a C unit
+embedding that assembly. On `wasm-simd128` it selects the instructions, and
+`--emit-c` writes each as one intrinsic in C. Clang encodes them, choosing
+locals and occasionally an equivalent instruction,
 which `--verify-native` checks.
 
 ## GPU work keeps its parallel structure
@@ -156,21 +156,21 @@ synchronisation scopes will be explicit parts of the profile.
 
 The hardware schedules warps. Rake will preserve and verify the declared lane
 mapping and permitted control flow, including programmer-selected partial
-masks. It cannot promise that arbitrary inputs keep all lanes active. In
-regions with a strict resource contract, forbidden spills, reloads and helper
+masks. Lane activity depends on the inputs. In regions with a strict
+resource contract, forbidden spills, reloads and helper
 paths cause rejection.
 
 The initial NVIDIA PTX route delegates final physical allocation and
 instruction scheduling to NVIDIA, then verifies the exact cubin. Portable
 SPIR-V could preserve the same source-level contract, with device-specific
-evidence for final-code claims. A later direct physical backend is a stronger
-ownership option, rather than a prerequisite for useful GPU guarantees.
+evidence for its final-code properties. A later direct physical backend
+would give Rake ownership of physical allocation and instruction scheduling.
 
 Register count, memory address structure and absence of forbidden lowering
 can be checked. Achieved occupancy, cache behaviour and elapsed time require
-measurement. No-spill does not mean fastest: retaining more registers may
-reduce resident warps. Another resource policy must be an explicit profile,
-never a silent fallback.
+measurement. Retaining more registers may reduce resident warps. Each
+resource policy has an explicit profile, and the compiler refuses a program
+that would require a different policy.
 
 Today: GPU support is a design. [GPU profiles](GPU.md) defines the first
 proposed NVIDIA profile, its artifact verifier and runtime boundary.

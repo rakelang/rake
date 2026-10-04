@@ -29,7 +29,7 @@ the same computation as `| moved <| positions + velocities * <0.5>`.
 
 Every rack on the implemented profiles lives in one physical CPU register or
 one WebAssembly `v128` value, with no source-visible spills. A fused
-binding adds a promise about its expression: it is pure data flow that the
+binding requires its expression to be pure data flow that the
 compiler can emit as one contiguous run of vector instructions. The compiler
 proves that or rejects the binding. It never falls back to something weaker.
 
@@ -78,9 +78,8 @@ factoring, distribution and the sharing of subexpressions aren't implemented.
 Integer multiply and add retain their wrapping integer semantics. This
 floating-point rewrite doesn't apply to them.
 
-`fma(a, b, c)` says the program needs `a * b + c` rounded once. It is for
-correctness, not speed: the compiler forms fused multiply-adds by itself
-where it may. On AVX2, AVX-512 and NEON it is one fused instruction,
+`fma(a, b, c)` requires `a * b + c` rounded once. The compiler also forms fused multiply-adds
+where the source permits contraction. On AVX2, AVX-512 and NEON it is one fused instruction,
 and `--verify-native` checks that the object holds exactly the fused
 multiply-adds the compiler selected, both contracted and explicit.
 SSE2 and `wasm-simd128` reject `fma`. Rake has no slower, stricter arithmetic mode: a

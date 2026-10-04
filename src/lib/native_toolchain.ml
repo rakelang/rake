@@ -35,14 +35,6 @@ let status_text = function
   | Unix.WSIGNALED signal -> Printf.sprintf "signal %d" signal
   | Unix.WSTOPPED signal -> Printf.sprintf "stop signal %d" signal
 
-let assembler_command = function
-  | Target.Aarch64_neon -> ("aarch64-unknown-linux-gnu-as", [])
-  | Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512 -> ("as", [ "--64" ])
-  | profile ->
-      invalid_arg
-        (Printf.sprintf "no assembler configured for profile '%s'"
-           (Target.profile_name profile))
-
 let run_encoder ~stage ~program ~arguments ~source ~log =
   let input = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
   let output =
@@ -77,9 +69,13 @@ let run_encoder ~stage ~program ~arguments ~source ~log =
           })
 
 let run_assembler ~profile ~source ~assembly ~object_ ~log =
-  let program, prefix = assembler_command profile in
-  run_encoder ~stage:Assemble ~program
-    ~arguments:(prefix @ [ "-o"; object_; assembly ]) ~source ~log
+  let program, prefix = Native_tool_selection.assembler profile in
+  match run_encoder ~stage:Assemble ~program
+    ~arguments:(prefix @ [ "-o"; object_; assembly ]) ~source ~log with
+  | Ok () -> Ok ()
+  | Error error ->
+      Error { error with detail = error.detail ^ "\n" ^
+        Native_tool_selection.requirement ~profile ~operation:`Assemble }
 
 let assemble ?(profile = Target.X86_avx2) ~source assembly_text =
   let assembly = Filename.temp_file "rake-native-" ".s" in
@@ -107,7 +103,10 @@ let compile_program ~profile ~source ~include_dir c_source =
     | Target.X86_sse2 -> ("gcc", [ "-march=x86-64"; "-msse2"; "-mno-avx" ])
     | Target.X86_avx2 -> ("gcc", [ "-march=x86-64"; "-mavx2"; "-mfma" ])
     | Target.X86_avx512 -> ("gcc", [ "-march=x86-64"; "-mavx512f" ])
-    | Target.Aarch64_neon -> ("aarch64-unknown-linux-gnu-gcc", [ "-march=armv8-a" ])
+    | Target.Aarch64_neon ->
+        (Native_tool_selection.select ~variable:"RAKE_AARCH64_CC"
+          [ "aarch64-linux-gnu-gcc"; "aarch64-unknown-linux-gnu-gcc";
+            "aarch64-none-linux-gnu-gcc" ], [ "-march=armv8-a" ])
     | _ -> invalid_arg "native C emission requires a physical SIMD profile"
   in
   let program = Option.value (Sys.getenv_opt "RAKE_NATIVE_CC") ~default:default_compiler in

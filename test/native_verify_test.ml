@@ -61,6 +61,42 @@ let check_conversion_instruction_boundaries () =
       Rake.Target.Aarch64_neon, ".arch armv8-a+simd",
         "    fcvtnu v0.4s, v0.4s", "    fcvtnu v0.2s, v0.2s" ]
 
+let check_uniform_shift_sequences () =
+  List.iter (fun (profile, prefix, sequence, bare, wrong_count, narrowed) ->
+    let source = "uniform-shift-sequence" in
+    let check ?(authorized = true) body =
+      let assembly = prefix ^ "\n.text\n.globl shifted\nshifted:\n" ^ body ^ "\n    ret\n" in
+      Rake.Native_verify.verify ~profile ~source ~functions:["shifted"]
+        ~uniform_shift_counts:(if authorized then ["shifted", 1] else [])
+        (assemble ~profile ~source assembly) in
+    expect_ok (check sequence);
+    expect_obligation "uniform shift selection" (check ~authorized:false sequence);
+    List.iter (fun body -> match check body with
+      | Error _ -> ()
+      | Ok () -> failwith "an unnormalized or narrowed runtime shift passed object verification")
+      [bare; wrong_count; narrowed];
+    expect_obligation "uniform shift selection" (check ""))
+    [ Rake.Target.X86_sse2, ".intel_syntax noprefix",
+        "    movaps xmm2, xmm1\n    psllq xmm2, 59\n    psrlq xmm2, 59\n    pslld xmm0, xmm2",
+        "    pslld xmm0, xmm1",
+        "    psllq xmm2, 58\n    psrlq xmm2, 58\n    pslld xmm0, xmm2",
+        "    psllq xmm2, 59\n    psrlq xmm2, 59\n    pslld xmm0, xmm3";
+      Rake.Target.X86_avx2, ".intel_syntax noprefix",
+        "    vpsllq ymm2, ymm1, 59\n    vpsrlq ymm2, ymm2, 59\n    vpsrld ymm0, ymm0, xmm2",
+        "    vpsrld ymm0, ymm0, xmm1",
+        "    vpsllq ymm2, ymm1, 58\n    vpsrlq ymm2, ymm2, 58\n    vpsrld ymm0, ymm0, xmm2",
+        "    vpsllq ymm2, ymm1, 59\n    vpsrlq ymm2, ymm2, 59\n    vpsrld xmm0, xmm0, xmm2";
+      Rake.Target.X86_avx512, ".intel_syntax noprefix",
+        "    vpsllq zmm2, zmm1, 59\n    vpsrlq zmm2, zmm2, 59\n    vpsrad zmm0, zmm0, xmm2",
+        "    vpsrad zmm0, zmm0, xmm1",
+        "    vpsllq zmm2, zmm1, 58\n    vpsrlq zmm2, zmm2, 58\n    vpsrad zmm0, zmm0, xmm2",
+        "    vpsllq zmm2, zmm1, 59\n    vpsrlq zmm2, zmm2, 59\n    vpsrad ymm0, ymm0, xmm2";
+      Rake.Target.Aarch64_neon, ".arch armv8-a+simd",
+        "    dup v2.4s, v1.s[0]\n    shl v2.4s, v2.4s, #27\n    ushr v2.4s, v2.4s, #27\n    neg v2.4s, v2.4s\n    sshl v0.4s, v0.4s, v2.4s",
+        "    sshl v0.4s, v0.4s, v1.4s",
+        "    dup v2.4s, v1.s[0]\n    shl v2.4s, v2.4s, #26\n    ushr v2.4s, v2.4s, #26\n    neg v2.4s, v2.4s\n    sshl v0.4s, v0.4s, v2.4s",
+        "    dup v2.4s, v1.s[0]\n    shl v2.4s, v2.4s, #27\n    ushr v2.4s, v2.4s, #27\n    neg v2.4s, v2.4s\n    sshl v0.2s, v0.2s, v2.2s" ]
+
 let valid =
   {|
 .intel_syntax noprefix
@@ -539,6 +575,34 @@ shuffle_indices:
     [ Rake.Target.X86_avx2, "ymm", "YMMWORD", 32;
       Rake.Target.X86_avx512, "zmm", "ZMMWORD", 64 ];
   let neon_profile = Rake.Target.Aarch64_neon in
+  (* Object disassembly annotates a literal address with a symbol. That symbol
+     must not count as a register; actual stack and rack-memory operands must. *)
+  let check_neon_literal function_name instruction =
+    let source = "neon-literal-symbol-fixture" in
+    let assembly = Printf.sprintf {|
+.arch armv8-a+simd
+.text
+.globl %s
+.type %s, %%function
+%s:
+    %s
+    ret
+.size %s, .-%s
+.section .rodata.cst16,"aM",%%progbits,16
+.p2align 4
+.Lneon_literal:
+    .long 0x3f800000, 0x3f800000, 0x3f800000, 0x3f800000
+.section .note.GNU-stack,"",%%progbits
+|} function_name function_name function_name instruction function_name function_name in
+    Rake.Native_verify.verify ~profile:neon_profile ~source ~functions:[ function_name ]
+      (assemble ~profile:neon_profile ~source assembly) in
+  List.iter (fun function_name ->
+    expect_ok (check_neon_literal function_name "ldr q0, .Lneon_literal"))
+    [ "spread"; "sp"; "x29"; "q8"; "v8.4s"; "narrow.2s" ];
+  List.iter (fun instruction ->
+    expect_obligation "no stack use" (check_neon_literal "spread" instruction))
+    [ "ldr q0, [sp]"; "ldr q0, [x29]"; "add w29, w0, #1"; "add wsp, w0, #1" ];
+  expect_obligation "literal rack loads only" (check_neon_literal "spread" "ldr q0, [x0]");
   let neon_valid =
     assemble ~profile:neon_profile ~source:"neon-valid-verifier-fixture"
       neon_valid
@@ -617,4 +681,5 @@ neon_unselected_lane:
       ~functions:[ "neon_unselected_lane" ] ~cross_lane_functions:[ "neon_unselected_lane" ] neon_unselected_lane);
   check_integer_argument_boundaries ();
   check_conversion_instruction_boundaries ();
+  check_uniform_shift_sequences ();
   print_endline "native object-code verification test passed"

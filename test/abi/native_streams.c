@@ -63,12 +63,23 @@ extern void widened_destination(const rake_stack_Compact_v1 *, int64_t,
 extern void signed_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
 extern void unsigned_words(const rake_stack_Words_v1 *, int64_t, uint32_t, uint32_t, uint32_t *);
 extern void shifted_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
+extern void runtime_shifted_words(const rake_stack_Words_v1 *, int32_t, uint32_t, int32_t *);
+extern void runtime_unsigned_words(const rake_stack_Words_v1 *, int64_t, uint32_t, uint32_t *);
+extern void runtime_update_words(const rake_mut_stack_Words_v1 *, int32_t, uint32_t);
+extern void runtime_write_words(const rake_stack_Words_v1 *, int64_t, const rake_mut_stack_WordResults_v1 *, uint32_t);
 extern void reinterpreted_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
 extern void reinterpreted_unsigned(const rake_stack_Words_v1 *, int32_t, uint32_t *);
 extern void selected_words(const rake_stack_Words_v1 *, int64_t, bool, int32_t *);
 extern void update_words(const rake_mut_stack_Words_v1 *, int32_t, int32_t);
 extern void write_words(const rake_stack_Words_v1 *, int64_t, const rake_mut_stack_WordResults_v1 *, bool);
 extern void paired_roots(const rake_stack_Paired_v1 *, int32_t, float *);
+extern void repeated_roots(const rake_stack_Paired_v1 *, int64_t, int32_t, float *);
+extern void repeated_words(const rake_stack_Words_v1 *, int32_t, int32_t *);
+extern void repeated_destination(const rake_stack_Words_v1 *, int64_t,
+    const rake_mut_stack_WordResults_v1 *);
+extern void compound_roots(const rake_stack_Paired_v1 *, int64_t, bool, float, float, float *);
+extern void compound_update(const rake_mut_stack_Paired_v1 *, int32_t, bool, float);
+extern void bound_comparison(const rake_stack_Paired_v1 *, int32_t, bool, float, float *);
 extern void absolute_rows(const rake_stack_Paired_v1 *, int32_t, float *);
 extern void minimum_rows(const rake_stack_Paired_v1 *, int64_t, float *);
 extern void maximum_rows(const rake_stack_Paired_v1 *, int64_t, float *);
@@ -150,6 +161,78 @@ static uint32_t bits(float value)
 static float root(float value)
 {
     return value >= 0.0f ? sqrtf(value) : 0.0f;
+}
+
+static void check_repeated_streams(unsigned char *const storage[5], size_t page)
+{
+    const float inputs[] = { -4.0f, -0.0f, 0.0f, 1.0f, 25.0f, INFINITY, -INFINITY, NAN };
+    const uint32_t words[] = { 0, 1, 0x7fffffffu, 0x80000000u, UINT32_MAX };
+    const int32_t limits[] = { -2, 1, 3 };
+    for (size_t count = 0; count <= 65; ++count) {
+        float *values = (float *)(storage[0] + page) - count;
+        float *output = (float *)(storage[1] + page) - count;
+        int32_t *signed_values = (int32_t *)(storage[2] + page) - count;
+        uint32_t *unsigned_values = (uint32_t *)(storage[3] + page) - count;
+        uint32_t *word_output = (uint32_t *)(storage[4] + page) - count;
+        const rake_stack_Paired_v1 input = { values, NULL, NULL, NULL, NULL };
+        const rake_stack_Words_v1 word_input = { NULL, signed_values, NULL, unsigned_values, NULL };
+        rake_mut_stack_WordResults_v1 destination = { NULL, NULL, word_output };
+        for (size_t i = 0; i < count; ++i) {
+            values[i] = inputs[(i + count) % 8];
+            const uint32_t word = words[(i + count) % 5];
+            memcpy(&signed_values[i], &word, sizeof word);
+            unsigned_values[i] = word;
+        }
+        for (size_t scenario = 0; scenario < 3; ++scenario) {
+            const int32_t limit = limits[scenario];
+            feclearexcept(FE_ALL_EXCEPT);
+            repeated_roots(&input, (int64_t)count, limit, output);
+            if (fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW)) abort();
+            for (size_t i = 0; i < count; ++i) {
+                const float first = root(values[i]);
+                float total = first;
+                for (int step = -1; step < 2; ++step) {
+                    float inner = total;
+                    for (int j = 0; j < 2; ++j) inner += first;
+                    total = step < limit ? inner : total + first;
+                }
+                if (bits(output[i]) != bits(total + first)) abort();
+            }
+        }
+        repeated_words(&word_input, (int32_t)count, (int32_t *)word_output);
+        for (size_t i = 0; i < count; ++i) {
+            uint32_t expected;
+            memcpy(&expected, &signed_values[i], sizeof expected);
+            expected *= 59049u;
+            if (word_output[i] != expected) abort();
+        }
+        repeated_destination(&word_input, (int64_t)count, &destination);
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t incremented = unsigned_values[i] + 1u;
+            if (word_output[i] != incremented * incremented) abort();
+        }
+        destination.unsigned_value = unsigned_values;
+        repeated_destination(&word_input, (int64_t)count, &destination);
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t incremented = words[(i + count) % 5] + 1u;
+            if (unsigned_values[i] != incremented * incremented) abort();
+        }
+        repeated_roots(&input, (int64_t)count, 1, values);
+        for (size_t i = 0; i < count; ++i) {
+            const float first = root(inputs[(i + count) % 8]);
+            float total = first;
+            for (int step = -1; step < 2; ++step) {
+                float inner = total;
+                for (int j = 0; j < 2; ++j) inner += first;
+                total = step < 1 ? inner : total + first;
+            }
+            if (bits(values[i]) != bits(total + first)) abort();
+        }
+    }
+    repeated_roots(NULL, 0, INT32_MIN, NULL);
+    repeated_roots(NULL, -1, INT32_MAX, NULL);
+    repeated_words(NULL, INT32_MIN, NULL);
+    repeated_destination(NULL, 0, NULL);
 }
 
 static void check_widened_columns(unsigned char *const storage[5], size_t page)
@@ -251,6 +334,29 @@ static void check_integer_columns(unsigned char *const storage[5], size_t page)
         shifted_words(&input, (int32_t)count, (int32_t *)output);
         for (size_t i = 0; i < count; ++i)
             if (output[i] != (first[i] < 0 ? UINT32_MAX : 0)) abort();
+        for (unsigned shift = 0; shift < 32; ++shift) {
+            const uint32_t amount = 0xffffffe0u + shift;
+            runtime_shifted_words(&input, (int32_t)count, amount, (int32_t *)output);
+            for (size_t i = 0; i < count; ++i) {
+                uint32_t shifted = original_first[i] >> shift;
+                if (shift != 0 && first[i] < 0) shifted |= UINT32_MAX << (32 - shift);
+                if (output[i] != shifted + original_first[i]) abort();
+            }
+            runtime_unsigned_words(&input, (int64_t)count, amount, output);
+            for (size_t i = 0; i < count; ++i)
+                if (output[i] != ((words[i] << shift) >> shift) + words[i]) abort();
+            runtime_update_words(&mutable_input, (int32_t)count, amount);
+            for (size_t i = 0; i < count; ++i) {
+                uint32_t shifted = original_first[i] >> shift, actual;
+                if (shift != 0 && first[i] < 0) shifted |= UINT32_MAX << (32 - shift);
+                memcpy(&actual, &second[i], sizeof actual);
+                if (actual != shifted) abort();
+                memcpy(&second[i], &original_second[i], sizeof(int32_t));
+            }
+            runtime_write_words(&input, (int64_t)count, &destination, amount);
+            for (size_t i = 0; i < count; ++i)
+                if (output[i] != words[i] << shift) abort();
+        }
         unsigned_words(&input, (int64_t)count, low, offset, output);
         for (size_t i = 0; i < count; ++i) {
             uint32_t bounded = words[i] < low ? low : words[i];
@@ -306,6 +412,10 @@ static void check_integer_columns(unsigned char *const storage[5], size_t page)
     signed_words(NULL, INT32_MIN, NULL);
     unsigned_words(NULL, -1, low, offset, NULL);
     shifted_words(NULL, -1, NULL);
+    runtime_shifted_words(NULL, -1, UINT32_MAX, NULL);
+    runtime_unsigned_words(NULL, 0, UINT32_MAX, NULL);
+    runtime_update_words(NULL, INT32_MIN, UINT32_MAX);
+    runtime_write_words(NULL, -1, NULL, UINT32_MAX);
     selected_words(NULL, 0, true, NULL);
     update_words(NULL, -1, INT32_MIN);
     write_words(NULL, 0, NULL, true);
@@ -509,6 +619,40 @@ int main(void)
             parameters[4], parameters[5], parameters[6], parameters[7], columns[0]);
         for (size_t i = 0; i < count; ++i)
             if (bits(columns[0][i]) != bits(expected_four[i])) abort();
+        const uint32_t compound_signaling_bits = 0x7f812345u;
+        float compound_signaling;
+        memcpy(&compound_signaling, &compound_signaling_bits, sizeof compound_signaling);
+        for (int scenario = 0; scenario < 4; ++scenario) {
+            const bool enabled = scenario != 0;
+            const float left = scenario < 2 ? compound_signaling : 0.0f;
+            const float right = scenario == 2 ? 1.0f : 0.0f;
+            const bool take = scenario != 2;
+            for (size_t i = 0; i < count; ++i)
+                columns[0][i] = take ? 9.0f : -9.0f;
+            feclearexcept(FE_ALL_EXCEPT);
+            compound_roots(&stack, (int64_t)count, enabled, left, right, columns[4]);
+            if (!!fetestexcept(FE_INVALID) != (count > 0 && scenario == 1)
+                || fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT)) abort();
+            for (size_t i = 0; i < count; ++i)
+                if (bits(columns[4][i]) != bits(take ? 3.0f : -3.0f)) abort();
+        }
+        for (int enabled = 0; enabled < 2; ++enabled) {
+            for (size_t i = 0; i < count; ++i)
+                columns[0][i] = enabled ? -9.0f : 9.0f;
+            feclearexcept(FE_ALL_EXCEPT);
+            compound_update(&mutable_stack, (int32_t)count, enabled, compound_signaling);
+            if (!!fetestexcept(FE_INVALID) != (count > 0 && enabled)
+                || fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT)) abort();
+            for (size_t i = 0; i < count; ++i)
+                if (bits(columns[1][i]) != bits(enabled ? -3.0f : 3.0f)) abort();
+        }
+        for (size_t i = 0; i < count; ++i) columns[0][i] = -9.0f;
+        feclearexcept(FE_ALL_EXCEPT);
+        bound_comparison(&stack, (int32_t)count, false, compound_signaling, columns[4]);
+        if (!!fetestexcept(FE_INVALID) != (count > 0)
+            || fetestexcept(FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT)) abort();
+        for (size_t i = 0; i < count; ++i)
+            if (bits(columns[4][i]) != bits(-3.0f)) abort();
         for (int scenario = 0; scenario < 3; ++scenario) {
             const int positive = scenario == 0;
             const float mode = positive ? 1.0f : scenario == 1 ? -1.0f : NAN;
@@ -613,6 +757,7 @@ int main(void)
     write_roots(NULL, -1, NULL, NAN, NAN);
     check_integer_columns(storage, page);
     check_widened_columns(storage, page);
+    check_repeated_streams(storage, page);
     for (size_t column = 0; column < 5; ++column)
         if (munmap(storage[column], page * 2)) abort();
     puts("native multi-column guard-page and scalar-oracle checks passed");

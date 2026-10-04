@@ -45,7 +45,9 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     done
     printf 'scratch uniform_fused(a: f32s, b: f32s, <mode: f32>) -> f32s:\n  | shifted <| a + <1.0>\n  | chosen <| if <mode> > <0.0> then shifted else b\n  chosen + shifted\n\n' >> "$source"
     printf 'scratch boolean_choice(a: f32s, <first: bool>, b: f32s) -> f32s:\n  if <first> then a else b\n\nscratch boolean_fused(a: f32s, b: f32s, <first: bool>) -> f32s:\n  | chosen <| if <first> then a else b\n  chosen + a + b\n\nscratch boolean_any(a: f32s, b: f32s) -> f32s:\n  let <take: bool> = any(a > <0.0>)\n  if <take> then a else b\n\nscratch boolean_all(a: f32s, b: f32s) -> f32s:\n  if all(a > <0.0>) then a else b\n\nscratch boolean_identity(<value: bool>) -> bool:\n  <value>\n\nscratch boolean_guarded_roots(values: f32s, <positive: bool>) -> f32s:\n  if <positive> then sqrt(values) else -sqrt(-values)\n\nrake boolean_nested(values: f32s, <root: bool>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive into selected:\n    if <root> then sqrt(values) else values / <2.0>\n  sweep:\n    | #positive => selected\n    | #positive gaps => <0.0>\n\nscratch boolean_six_slots(<a: bool>, <b: bool>, <c: bool>, <d: bool>, <e: bool>, <f: bool>) -> f32s:\n  let first = if <a> then <1.0> else <0.0>\n  let second = if <b> then <2.0> else <0.0>\n  let third = if <c> then <4.0> else <0.0>\n  let fourth = if <d> then <8.0> else <0.0>\n  let fifth = if <e> then <16.0> else <0.0>\n  let sixth = if <f> then <32.0> else <0.0>\n  first + second + third + fourth + fifth + sixth\n\nscratch boolean_eight_vectors(a: f32s, b: f32s, c: f32s, d: f32s, e: f32s, f: f32s, g: f32s, h: f32s, <first: bool>) -> f32s:\n  if <first> then a + b + c + d + e + f + g + h else h\n\n' >> "$source"
+    printf 'scratch boolean_and(<left: bool>, <right: bool>) -> bool:\n  <left> and <right>\n\nscratch boolean_or(<left: bool>, <right: bool>) -> bool:\n  <left> or <right>\n\nscratch boolean_not(<value: bool>) -> bool:\n  not <value>\n\nscratch mixed_and(values: f32s, <enabled: bool>) -> u32:\n  bitmask((values > <0.0>) and <enabled>)\n\nscratch mixed_or(values: f32s, <enabled: bool>) -> u32:\n  bitmask(<enabled> or (values > <0.0>))\n\n' >> "$source"
     printf 'scratch uniform_literal_right(a: f32s, b: f32s, <value: f32>) -> f32s:\n  if <value> > <0.0> then a else b\n\nscratch uniform_literal_left(a: f32s, b: f32s, <value: f32>) -> f32s:\n  if <0.0> < <value> then a else b\n\nscratch uniform_extracted(a: f32s, b: f32s) -> f32s:\n  let <first: f32> = extract(a, 0)\n  if <first> > <0.0> then a else b\n\nscratch uniform_guarded_roots(values: f32s, <mode: f32>) -> f32s:\n  if <mode> >= <0.0> then sqrt(values) else -sqrt(-values)\n\nrake uniform_nested(values: f32s, <left: f32>, <right: f32>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive else <0.0> into selected:\n    if <left> > <right> then sqrt(values) else values / <right>\n  sweep:\n    | #positive => selected\n    | _ => <0.0>\n\n' >> "$source"
+    printf 'scratch compound_choice(a: f32s, b: f32s, <enabled: bool>, <left: f32>, <right: f32>) -> f32s:\n  if <enabled> and (not (<left> >= <right>) or <left> = <right>) then a else b\n\nscratch compound_and(a: f32s, b: f32s, <enabled: bool>, <value: f32>) -> f32s:\n  if <enabled> and <value> > <0.0> then a else b\n\nscratch compound_or(a: f32s, b: f32s, <enabled: bool>, <value: f32>) -> f32s:\n  if <enabled> or <value> > <0.0> then a else b\n\nrake compound_nested(values: f32s, <enabled: bool>, <value: f32>) -> f32s:\n  tine #positive means values > <0.0>\n  through #positive into selected:\n    if not <enabled> or <value> > <0.0> then sqrt(values) else values / <2.0>\n  sweep:\n    | #positive => selected\n    | #positive gaps => <0.0>\n\n' >> "$source"
     for pattern in reverse rotate repeat identity weave mixed right; do
         indices=()
         for ((lane=0; lane<lanes; ++lane)); do
@@ -71,6 +73,8 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
             printf 'scratch shuffle_same_input(a: f32s) -> f32s:\n  shuffle(a, a, [%s])\n\n' "$joined" >> "$source"
         fi
     done
+    cat "${root}/test/native/uniform_arithmetic.rk" >> "$source"
+    cat "${root}/test/native/bitcast.rk" >> "$source"
     "$rakec" --verify-native --target "$profile" -o "${tmp}/${profile}.o" "$source"
     # A conforming caller may leave bits above the Boolean byte unspecified.
     # Return the raw integer register so the C oracle also checks normalisation.
@@ -119,7 +123,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     done
     # Register insertion has no defined native stream-tail participation yet.
     printf 'pack Values {\n  f32: value;\n}\nrun replace_first(input: stack Values, <count: i32>) -> f32:\n  for row in input using f32s up to <count>:\n    yield insert(row.value, 0, <1.0>)\n' > "${tmp}/stream.rk"
-    if "$rakec" --emit-asm --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
+    if "$rakec" --emit-c --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
         echo "$profile accepted insertion without a native stream-tail contract" >&2
         exit 1
     fi
@@ -145,7 +149,7 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     for ((lane=0; lane<lanes; ++lane)); do indices+=("0"); done
     joined="$(IFS=,; printf '%s' "${indices[*]}")"
     printf 'pack Values {\n  f32: value;\n}\nrun shuffle_rows(input: stack Values, <count: i32>) -> f32:\n  for row in input using f32s up to <count>:\n    yield shuffle(row.value, [%s])\n' "$joined" > "${tmp}/stream.rk"
-    if "$rakec" --emit-asm --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
+    if "$rakec" --emit-c --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
         echo "$profile accepted shuffle without a native stream-tail contract" >&2
         exit 1
     fi

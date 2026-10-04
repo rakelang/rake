@@ -1,0 +1,18 @@
+scratch float_signed_bits(values: f32s) -> i32s:
+  bitcast(i32s, values)
+
+scratch float_unsigned_bits(values: f32s) -> u32s:
+  bitcast(u32s, values)
+
+scratch signed_float_bits(values: i32s) -> f32s:
+  bitcast(f32s, values)
+
+scratch unsigned_float_bits(values: u32s) -> f32s:
+  bitcast(f32s, values)
+
+scratch float_bitcast_round_trip(values: f32s) -> f32s:
+  bitcast(f32s, bitcast(i32s, bitcast(u32s, values)))
+
+scratch bitcast_keep_input(values: f32s) -> u32s:
+  let signed_bits = bitcast(i32s, values)
+  bit_xor(bitcast(u32s, signed_bits), bitcast(u32s, -values))

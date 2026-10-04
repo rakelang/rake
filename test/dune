@@ -14,9 +14,13 @@
  (name native_expected)
  (libraries rake))
 
-(test
+(executable
  (name native_toolchain_test)
  (libraries rake str unix))
+
+(rule
+ (alias runtest-native)
+ (action (run %{exe:native_toolchain_test.exe})))
 
 (test
  (name native_lower_test)
@@ -34,13 +38,21 @@
  (name x86_simd_regalloc_test)
  (libraries rake))
 
-(test
+(executable
  (name x86_simd_asm_test)
  (libraries rake str unix))
 
-(test
+(rule
+ (alias runtest-native)
+ (action (run %{exe:x86_simd_asm_test.exe})))
+
+(executable
  (name native_verify_test)
  (libraries rake str unix))
+
+(rule
+ (alias runtest-native)
+ (action (run %{exe:native_verify_test.exe})))
 
 (test
  (name aarch64_neon_isel_test)
@@ -62,6 +74,10 @@
  (name wasm_simd128_test)
  (libraries rake))
 
-(test
+(executable
  (name wasm_simd128_verify_test)
  (libraries rake))
+
+(rule
+ (alias runtest-wasm)
+ (action (run %{exe:wasm_simd128_verify_test.exe})))

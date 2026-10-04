@@ -27,7 +27,7 @@ scratch distance(v: f32s, w: f32s) -> f32s:
   if v > w then v - w else w - v
 ```
 
-A uniform condition chooses one whole rack. The development compiler accepts
+A uniform condition chooses one whole rack. Rake 0.7.0 accepts
 a direct comparison of uniform `f32`, `i32` or `u32` values on every
 production profile. A comparison can also use a literal of the same type
 or an extracted `f32` bound as a uniform.
@@ -46,7 +46,7 @@ scratch pick(near: f32s, far: f32s, <distance: f32>, <limit: f32>) -> f32s:
 Float comparisons with a NaN are false, including `!=`, so an unordered
 condition chooses the `else` arm. Integer comparisons retain their declared
 signed or unsigned order, including values across bit 31. These native
-conditionals are development additions after the 0.6.0-beta tag.
+conditionals are included in Rake 0.7.0.
 
 WebAssembly retains one scalar condition and a whole-rack selection. It
 computes both pure branches before selecting, and has no floating-point
@@ -82,8 +82,8 @@ scratch pick_first(near: f32s, far: f32s) -> f32s:
   pick_enabled(near, far, <true>)
 ```
 
-These native Boolean conditions and C `bool` parameters are development
-additions after the 0.6.0-beta tag. The native `f32`, `i32` and `u32` stream subset also takes
+These native Boolean conditions and C `bool` parameters are included in
+Rake 0.7.0. The native `f32`, `i32` and `u32` stream subset also takes
 `i32`, `u32` and `bool` uniforms within its
 [C register boundary](02_packs_and_run.md#native-cpu-streams).
 
@@ -121,10 +121,17 @@ scratch cube(a: f32s) -> f32s:
 ```
 
 In a run, `repeat` unrolls while its trips times its body's statements stay
-within 4096, and otherwise it stays a loop with the same meaning. Either way
-each rack location stays one `v128` value in a WebAssembly local. In
+within 4096, and otherwise it stays a loop with the same meaning. On
+WebAssembly each rack location stays one `v128` value in a local. In
 `test/program/vector_tier.rk`, a `repeat` of 5000 trips compiles to a loop of
 one `f32x4.mul`, one `f32x4.add` and the counter.
+
+The native stream subset accepts these unrolled repeats too, including
+nested copies and updates to local rack locations or arrays of racks.
+Assignments preserve earlier immutable snapshots, and each traversal chunk
+starts with fresh locations. Repeats beyond the unrolling budget still fail
+native compilation. [Repeated rack updates](02_packs_and_run.md#repeated-rack-updates)
+shows a stream example.
 
 ## Loops and branches in runs
 

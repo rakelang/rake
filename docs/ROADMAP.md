@@ -10,7 +10,7 @@ remain work in progress. This roadmap states what we intend to build next.
 
 ### Compile runs, stacks and whole programs for physical targets
 
-The development compiler after 0.6.0-beta compiles slow orchestration and
+Rake 0.7.0 compiles slow orchestration and
 register kernels into one native object. Its C unit embeds Rake-selected
 assembly, and the final object's kernels pass the existing instruction
 verifier. Slow callers can use uniform `f32`, `i32`, `u32` or `bool` parameters and
@@ -25,13 +25,24 @@ within the platform's C register limits. General native runs and
 the remaining scalar kernel boundaries are still
 work in progress.
 
+Native stream bodies now accept local rack assignments and fixed-count
+`repeat` within the checker's unrolling budget. Each copy retains its local
+scope and earlier immutable snapshots, with rack values held in allocated
+vector registers. Runtime-counted inner loops and state carried between
+traversal chunks remain work in progress.
+
+`--emit-c` now explicitly produces the C translation unit. `--emit-asm`
+produces physical-target register-kernel assembly. C output and C ABI
+interoperation are separate: the former selects an artifact format, while the
+latter defines calls, types and layout across the program boundary.
+
 We will extend `run`, stacks and whole programs from `wasm-simd128` to
 SSE2, AVX2, AVX-512 and NEON. That work includes native traversal, full-rack
 loads and stores, masked tails with benign operands, stable C boundaries and
 runtime tests over empty, short, exact and tail counts. The object verifier
 will confirm vector memory operations and reject scalar cleanup loops.
 
-The development compiler also accepts typed `argc`/`argv` entry, adapting the
+Rake 0.7.0 also accepts typed `argc`/`argv` entry, adapting the
 runtime's C pointer array without incompatible pointer aliasing. The C interface
 supports typed function pointers, noncapturing callbacks and header-backed C
 unions. Rake-owned union layouts and interpreted union storage remain work in
@@ -52,12 +63,20 @@ WebAssembly runtime. Rack work outside a `slow` block uses vector
 instructions or compilation fails. A run's explicit traversal also needs
 uniform address, bounds and loop work.
 
+We will extend WebAssembly's source-derived substitution proofs across
+immutable bindings. Current Clang rewrites include a composed unsigned shift
+pair becoming a mask and AND, and repeated integer additions becoming a
+multiplication. The composed examples execute correctly, but those objects
+remain rejected by the run verifier. Support will require operand-identity
+and wrapping-arithmetic proofs, without widening its instruction allow-list
+for unrelated expressions.
+
 ### Add and validate target profiles
 
 SSE2 and AVX-512F now compile `f32s` scratches and rakes, alongside AVX2 and
 NEON. We will add the explicit scalar fallback and complete CPU operation and
-program coverage before beginning GPU targets. Each physical profile must
-have instruction selection, register allocation, a calling convention,
+program coverage before beginning GPU targets. Each physical profile needs
+instruction selection, register allocation, a calling convention,
 object verification and differential runtime checks.
 
 We will validate relaxed WebAssembly SIMD on the competition runtime before
@@ -78,13 +97,13 @@ and checked costs. Partial masks remain legitimate program choices, and
 occupancy, workload balance and elapsed time still need measurement.
 
 We will later consider portable SPIR-V/Vulkan subgroup profiles, with
-device-specific evidence for physical resource claims, and a direct physical
+device-specific evidence for physical resource use, and a direct physical
 profile for a sufficiently documented ISA. All are designs today.
 [GPU profiles](GPU.md) owns the detailed contract and acceptance checks.
 
 ### Complete physical CPU operation coverage
 
-The development compiler now lowers `f32s` absolute values to vector bitwise
+Rake 0.7.0 lowers `f32s` absolute values to vector bitwise
 operations on SSE2, AVX2, AVX-512F and NEON. Independent bit-pattern checks
 cover signed zeros, subnormals, infinities and NaNs, including masked use.
 Lane-wise `min` and `max` also compile on all four physical profiles,
@@ -100,6 +119,16 @@ subnormals and nonfinite values, and guarded stream checks cover masked tails.
 Float reductions and scans now compile on NEON too. All four physical profiles
 preserve the specified left-to-right fold, including each binary32 rounding.
 The shared scalar oracle checks NaNs at every position and signed-zero extrema.
+
+The four arithmetic reductions now also accept signed and unsigned 32-bit
+racks on every CPU profile. Tree-shaped packed operations retain wrapping
+addition and multiplication and signed or unsigned extrema, with the result
+returned through the scalar C ABI. Inclusive scans also compile for both
+types, combining prefixes across the full rack, including AVX register
+subdivisions. A sequential C fold checks overflow bits, every prefix and
+retained input racks. Scans and reductions at other integer widths remain
+work in progress. These are per-rack scans. State carried between native
+traversal chunks remains work in progress.
 
 Literal-index extraction and insertion now compile on all four physical
 profiles for floats and signed or unsigned 32-bit integers.
@@ -121,7 +150,15 @@ produce a Boolean, and `bitmask` a bitset with one bit per float lane.
 Packed bitwise reductions retain their temporary values in vector registers,
 then cross the scalar C ABI through a checked terminal transfer. Independent
 C checks every lane-mask pattern and ordered comparisons containing quiet
-NaNs. Native scalar arithmetic over those results remains work in progress.
+NaNs. Register kernels now also compute on numeric uniform results, including
+`bitmask`, reductions and extraction. Physical profiles broadcast the
+operands into full racks and use packed arithmetic before retaining the
+completed scalar value. `f32` arithmetic rounds at each binary32 step, and
+32-bit integer arithmetic wraps. Unary minus also accepts float and signed
+32-bit uniforms, including reduced or extracted results. Float negation
+flips the sign bit, while signed negation wraps. Independent C checks rounding,
+overflow, retained racks and mixed-program calls. Arithmetic under a partial lane mask
+and further scalar operations remain work in progress.
 
 Direct uniform `f32` comparisons now choose a whole rack on all four physical
 profiles. The comparison uses broadcasts and vector masks, with protected
@@ -136,8 +173,15 @@ and protected roots nested inside through masks. Deliberately set upper
 argument bits check the C ABI boundary. Float streams also accept Boolean
 uniforms, with guard-page checks for nested protected branches and tails.
 
+Compound uniform conditions now use `and`, `or` and `not` in register kernels
+and native streams. Streams also retain chained immutable Boolean bindings.
+Short-circuit comparisons keep their inactive floating-point operands benign.
+Independent C checks lane choices and signalling-NaN exception flags,
+including outer masks and guarded tails. Other scalar expressions in native
+runs remain work in progress.
+
 We will bring the physical profiles up to the language's published operation
-set. The development compiler now supports 32-bit integer wrapping add/subtract/multiply
+set. Rake 0.7.0 supports 32-bit integer wrapping add/subtract/multiply
 and bitwise AND/OR/XOR/AND-NOT on all four physical profiles, along with signed
 negation and absolute value. Lane-wise `min` and `max` support both signed
 and unsigned 32-bit racks. Both `i32s` and `u32s` comparisons produce
@@ -177,8 +221,15 @@ profiles use direct unsigned extrema instructions. Independent C checks
 values across bit 31, full-width unsigned literals, nested clamps and
 masked selection while retaining live inputs. Interpreter and WebAssembly
 goldens check unsigned extrema and literal broadcasts too.
-Runtime shift counts, other integer operations and native streams at other lane widths
-remain work in progress.
+Runtime uniform `u32` shift counts now compile on all four physical profiles,
+in register kernels and native streams. Vector normalisation takes the count
+modulo 32, with one temporary included in allocation pressure. Independent C
+checks every resulting count, high input bits, extracted counts, masked
+selection and retained inputs. Guarded streams cover updates, separate
+destinations and counts across multiple racks. Final-object fixtures require
+the selected normalisation sequence and reject narrowed data operands.
+Other integer operations and native streams at other lane widths remain
+work in progress.
 
 Native register kernels now take signed and unsigned 32-bit uniforms through
 the platform's integer argument registers. Entry imports use allocated vector
@@ -205,6 +256,11 @@ bitcasts keep the rack's bits and selected profile width. Independent C
 checks all four compact types, updates and destinations against guarded
 arrays. WebAssembly verifies its packed widening in both addressing modes,
 with source bounds required for narrower comparisons or extending multiplies.
+Register kernels now also bitcast between `f32s`, `i32s` and `u32s`.
+The same vector register can hold either interpretation, with a register copy
+when the original remains live. Independent C byte comparisons check all
+four physical profiles, including signalling NaNs, zero signs and random
+bit patterns, without floating-point exceptions.
 Signed `i32s`/`f32s` and unsigned `u32s`/`f32s` numerical conversions
 now compile on every physical profile, in register kernels and streams.
 An independent integer-bit oracle
@@ -234,8 +290,9 @@ and its object verifier proves the selected vector sequence.
 
 We will fill the gaps shared by every profile. These include lane movement,
 transcendental functions, float remainder, `f64s`, the remaining integer and
-boolean rack types, unsigned comparisons and extrema at other widths, integer reductions,
-widening conversions, scalar arithmetic over rack results, scatter,
+boolean rack types, unsigned comparisons and extrema at other widths,
+integer scans and reductions at other widths,
+widening conversions, further scalar operations over rack results, scatter,
 compression and expansion.
 
 An operation may lower to several vector instructions when a profile publishes
@@ -276,10 +333,9 @@ that the language can accept or deliberately rejects as planned work.
 ### Design modules and separate compilation
 
 We will design one coherent system for modules, imports, namespaces, packages
-and separate compilation. The design must preserve Rake's explicit target
+and separate compilation. The design will preserve Rake's explicit target
 contract and produce stable boundaries that native and WebAssembly callers can
-inspect. We will not add isolated import syntax before that system is defined
-end to end.
+inspect. Import syntax will be part of that complete design.
 
 ### Teach the vector notation at the point of use
 

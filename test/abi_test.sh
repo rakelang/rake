@@ -8,7 +8,7 @@ rakec="${RAKEC:-${root}/_build/default/src/bin/main.exe}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 for addressing in barrier plain; do
-  "${rakec}" --emit-asm --target wasm-simd128 --wasm-addressing "${addressing}" -o "${tmp}/runs.c" "${test_dir}/abi/runs.rk"
+  "${rakec}" --emit-c --target wasm-simd128 --wasm-addressing "${addressing}" -o "${tmp}/runs.c" "${test_dir}/abi/runs.rk"
   clang --target=wasm32 -msimd128 -O2 -ffreestanding -nostdlib -Wl,--no-entry -Wl,--export=test \
     -o "${tmp}/abi.wasm" "${tmp}/runs.c" "${test_dir}/abi/harness.c"
   result="$(wasmtime run --invoke test "${tmp}/abi.wasm" 2>/dev/null)" \
@@ -16,7 +16,7 @@ for addressing in barrier plain; do
   test "${result}" = 0 || { echo "abi (${addressing}): check ${result} failed" >&2; exit 1; }
 done
 # Slow code calling C (interop.rk): its main returns 0, or the failing check.
-"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/interop.c" "${test_dir}/abi/interop.rk"
+"${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/interop.c" "${test_dir}/abi/interop.rk"
 clang --target=wasm32 -msimd128 -O2 -ffreestanding -nostdlib -Wl,--no-entry -Wl,--export=__main_void \
   -I"${test_dir}/abi" -o "${tmp}/interop.wasm" "${tmp}/interop.c" "${test_dir}/abi/interop.c"
 result="$(wasmtime run --invoke __main_void "${tmp}/interop.wasm" 2>/dev/null)" \
@@ -26,20 +26,20 @@ test "${result}" = 0 || { echo "interop: check ${result} failed" >&2; exit 1; }
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/interop.o" "${test_dir}/abi/interop.rk"
 
 # Typed function pointers cross the independent C header in both directions.
-"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/callbacks.c" "${test_dir}/abi/callbacks.rk"
+"${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/callbacks.c" "${test_dir}/abi/callbacks.rk"
 clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdlib \
   -Wl,--no-entry -Wl,--export=__main_void -I"${test_dir}/abi" \
   -o "${tmp}/callbacks.wasm" "${tmp}/callbacks.c" "${test_dir}/abi/callbacks.c"
 test "$(wasmtime run --invoke __main_void "${tmp}/callbacks.wasm" 2>/dev/null)" = 0
 "${rakec}" --verify-native --target wasm-simd128 -o "${tmp}/callbacks.o" "${test_dir}/abi/callbacks.rk"
 
-"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/opaque.c" "${test_dir}/abi/opaque.rk"
+"${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/opaque.c" "${test_dir}/abi/opaque.rk"
 clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdlib \
   -Wl,--no-entry -Wl,--export=__main_void -I"${test_dir}/abi" \
   -o "${tmp}/opaque.wasm" "${tmp}/opaque.c" "${test_dir}/abi/opaque.c"
 test "$(wasmtime run --invoke __main_void "${tmp}/opaque.wasm" 2>/dev/null)" = 0
 
-"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/unions.c" "${test_dir}/abi/unions.rk"
+"${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/unions.c" "${test_dir}/abi/unions.rk"
 clang --target=wasm32 -msimd128 -O2 -Wall -Wextra -Werror -ffreestanding -nostdlib \
   -Wl,--no-entry -Wl,--export=__main_void -I"${test_dir}/abi" \
   -o "${tmp}/unions.wasm" "${tmp}/unions.c" "${test_dir}/abi/unions.c"
@@ -49,7 +49,7 @@ test "$(wasmtime run --invoke __main_void "${tmp}/unions.wasm" 2>/dev/null)" = 0
 # Process arguments use WASI's real command startup, including argv[argc].
 : "${RAKE_WASI_LIBC:?process startup checks need WASI libc from the development shell}"
 : "${RAKE_WASI_LIBC_DEV:?process startup checks need WASI headers from the development shell}"
-"${rakec}" --emit-asm --target wasm-simd128 -o "${tmp}/arguments.c" "${test_dir}/abi/process_arguments.rk"
+"${rakec}" --emit-c --target wasm-simd128 -o "${tmp}/arguments.c" "${test_dir}/abi/process_arguments.rk"
 for source in arguments argument-oracle; do
   input="${tmp}/arguments.c"
   if [[ "${source}" = argument-oracle ]]; then input="${test_dir}/abi/process_arguments.c"; fi
