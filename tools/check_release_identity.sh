@@ -7,6 +7,13 @@ tree_sitter_root="${TREE_SITTER_RAKE_DIR:-${project_root}/../tree-sitter-rake}"
 website_root="${RAKE_WEBSITE_DIR:-${project_root}/../rake-lang.org}"
 version_file="${project_root}/src/lib/version.ml"
 
+check_website=true
+case "$#:$*" in
+  0:) ;;
+  1:--compiler-only) check_website=false ;;
+  *) echo 'usage: tools/check_release_identity.sh [--compiler-only]' >&2; exit 2 ;;
+esac
+
 fail() {
   echo "release identity: $*" >&2
   exit 1
@@ -76,10 +83,14 @@ expect_literal "${tree_sitter_root}/package.json" \
 expect_literal "${tree_sitter_root}/tree-sitter.json" \
   "https://github.com/rakelang/tree-sitter-rake"
 
-expect_literal "${website_root}/public/index.html" "Rake ${version}."
-expect_literal "${website_root}/public/index.html" "https://github.com/rakelang/rake"
+repositories=("${project_root}" "${tree_sitter_root}")
+if "$check_website"; then
+  expect_literal "${website_root}/public/index.html" "Rake ${version}."
+  expect_literal "${website_root}/public/index.html" "https://github.com/rakelang/rake"
+  repositories+=("${website_root}")
+fi
 
-for repo in "${project_root}" "${tree_sitter_root}" "${website_root}"; do
+for repo in "${repositories[@]}"; do
   git -C "${repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || fail "expected a Git working tree at ${repo}"
   expect_absent_maintained "${repo}" \

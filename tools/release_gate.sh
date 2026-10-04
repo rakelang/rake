@@ -20,7 +20,11 @@ run() {
 
 run "build" dune build -j "${RAKE_BUILD_JOBS:-1}"
 run "capability evidence" bash test/check_capability_evidence.sh
-run "release identity" bash tools/check_release_identity.sh
+if "$check_website"; then
+  run "release identity" bash tools/check_release_identity.sh
+else
+  run "release identity" bash tools/check_release_identity.sh --compiler-only
+fi
 run "frontend and native-object conformance" bash test/conformance_test.sh
 run "documentation examples" bash tools/check_documentation_examples.sh
 run "portable compiler tests" dune runtest -j "${RAKE_BUILD_JOBS:-1}" --force

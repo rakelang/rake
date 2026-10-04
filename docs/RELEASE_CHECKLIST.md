@@ -25,9 +25,14 @@ website, from sibling checkouts of `rake`, `tree-sitter-rake` and
 7. Build the release archives from the exact source commits. In a clean opam
    switch outside the development shell, install the compiler archive with
    `opam install . --with-test --with-doc` and run the installed `rakec`.
-   Run the opam metadata linter too. Test the exact source and checksums in
-   the repository submission, including any patches, before pushing that
-   submission.
+   Enable opam's build, install and removal sandbox hooks. Repeat the archive
+   installation in a fresh switch using the
+   [opam repository's lower-bound solver](https://github.com/ocaml/opam-repository/wiki/Lower-bound-check---DYI):
+   `opam install . --solver=builtin-0install --criteria='+removed,+count[version-lag,solution]' --with-test --with-doc`.
+   Record the dependency versions selected by `opam list --installed`.
+   Run the opam metadata linter too. Build the Nix package and its installed
+   backend checks. Test the exact source and checksums in each repository
+   submission, including any patches, before pushing that submission.
 8. Run the grammar's package checks on the actual npm tarball, Python source
    archive and repaired wheel, and Cargo crate in fresh consumers. The
    grammar's `Check generated bindings` workflow owns these checks. Its
@@ -35,7 +40,8 @@ website, from sibling checkouts of `rake`, `tree-sitter-rake` and
 9. Push source changes and require green compiler and grammar GitHub checks
    for those exact commits before tagging or uploading packages. The compiler
    workflow installs through opam on its supported host matrix, runs object
-   checks with their toolchains, and compares its parser with Tree-sitter.
+   checks with their toolchains, tests lower-bound dependencies on every
+   supported OCaml version, and compares its parser with Tree-sitter.
    Registry acceptance is an additional check, never our first smoke suite.
 10. Tag the checked compiler and grammar commits as `vVERSION`, so Go's module
     tooling recognises the grammar release. Publish the packages and update
