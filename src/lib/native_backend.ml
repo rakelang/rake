@@ -49,10 +49,6 @@ let require_backend (config : Target.config) =
 
 let lower ~config program =
   let* () = require_backend config in
-  Native_lower.relaxed := config.Target.profile = Target.Wasm_simd128_relaxed;
-  Native_ir.floating_point_exceptions := not (Target.is_wasm config.Target.profile);
-  Wasm_simd128_c.relaxed := !Native_lower.relaxed;
-  Wasm_simd128_toolchain.relaxed := !Native_lower.relaxed;
   match Native_lower.lower_program ~profile:config.profile program with
   | Ok native_ir -> (
       match Native_optimize.optimize ~profile:config.profile native_ir with
@@ -68,7 +64,7 @@ let lower ~config program =
 type allocated =
   | X86 of Target.profile * X86_simd_regalloc.func list
   | Neon of Aarch64_neon_regalloc.func list
-  | Wasm of Wasm_simd128_isel.func list  (** WebAssembly locals need no register allocation *)
+  | Wasm of Target.profile * Wasm_simd128_isel.func list  (** WebAssembly locals need no register allocation *)
 
 let allocate_x86 ~profile ?parameter_assignment native_ir =
   match X86_simd_isel.select ~profile native_ir with
@@ -107,9 +103,9 @@ let allocate ~config native_ir =
   match config.Target.profile with
   | (Target.X86_sse2 | Target.X86_avx2 | Target.X86_avx512) as profile -> allocate_x86 ~profile native_ir
   | Target.Aarch64_neon -> allocate_neon native_ir
-  | Target.Wasm_simd128 | Target.Wasm_simd128_relaxed -> (
+  | (Target.Wasm_simd128 | Target.Wasm_simd128_relaxed) as profile -> (
       match Wasm_simd128_isel.select native_ir with
-      | Ok selected -> Ok (Wasm selected)
+      | Ok selected -> Ok (Wasm (profile, selected))
       | Error error ->
           Error { stage = Instruction_selection; message = Wasm_simd128_isel.format_error error })
   | profile ->
@@ -126,8 +122,8 @@ let compile ~config program =
   allocate ~config native_ir
 
 let emit_allocated ~source = function
-  | Wasm selected -> (
-      match Wasm_simd128_c.emit ~source selected with
+  | Wasm (profile, selected) -> (
+      match Wasm_simd128_c.emit ~profile ~source selected with
       | source -> Ok source
       | exception Wasm_simd128_c.Emission_error message -> Error { stage = Assembly; message })
   | X86 (profile, allocated) -> (
@@ -186,7 +182,7 @@ let fma_count = function
   | Wasm _ -> 0
 
 let function_names = function
-  | Wasm selected -> List.map (fun (func : Wasm_simd128_isel.func) -> func.name) selected
+  | Wasm (_, selected) -> List.map (fun (func : Wasm_simd128_isel.func) -> func.name) selected
   | X86 (_, allocated) ->
       List.map (fun (func : X86_simd_regalloc.func) -> func.name) allocated
   | Neon allocated ->
@@ -238,8 +234,8 @@ let integer_result_function_names =
 let verify_allocated_object ~source ~(config : Target.config) allocated object_bytes =
   let functions = function_names allocated in
   match allocated with
-  | Wasm _ -> (
-      match Wasm_simd128_toolchain.verify ~functions object_bytes with
+  | Wasm (profile, _) -> (
+      match Wasm_simd128_toolchain.verify ~relaxed:(profile = Target.Wasm_simd128_relaxed) ~functions object_bytes with
       | Ok () -> Ok object_bytes
       | Error error -> Error { stage = Verify; message = Wasm_simd128_toolchain.format_error error })
   | X86 _ | Neon _ ->

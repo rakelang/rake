@@ -139,16 +139,8 @@ jobs:
           extra_nix_config: |
             max-jobs = 2
             cores = 2
-      - name: Install the pinned AVX-512 instruction emulator
-        shell: bash
-        run: |
-          curl --fail --location --retry 3 \
-            https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-lin.tar.xz \
-            -o "$RUNNER_TEMP/intel-sde.tar.xz"
-          echo "94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50  $RUNNER_TEMP/intel-sde.tar.xz" | sha256sum --check
-          tar -xJf "$RUNNER_TEMP/intel-sde.tar.xz" -C "$RUNNER_TEMP"
-          echo "RAKE_SDE=$RUNNER_TEMP/sde-external-10.13.1-2026-07-28-lin/sde64" >> "$GITHUB_ENV"
-          sudo sysctl -w kernel.yama.ptrace_scope=0
+      - name: Allow the flake-pinned AVX-512 emulator to attach to its tests
+        run: sudo sysctl -w kernel.yama.ptrace_scope=0
       - name: Run the canonical compiler gate with the locked toolchain
         shell: bash
         run: |

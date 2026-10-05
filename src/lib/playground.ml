@@ -91,10 +91,7 @@ let checked_program source =
 
 let whole_program_code target program =
   let profile = target_profile target in
-  let execution_target =
-    if Target.is_wasm profile then Tier_c.WebAssembly
-    else Tier_c.Native_program profile
-  in
+  let execution_target = Tier_c.execution_target profile in
   match Tier_check.check ~base_dir:"." program with
   | Error message -> Error message
   | Ok checked -> (

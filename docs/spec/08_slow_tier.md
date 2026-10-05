@@ -578,12 +578,12 @@ WebAssembly reserves the arena in linear memory, keeping those large locals
 off the C stack. wasm-ld places the default 64 KiB stack after static data,
 where an overflow could overwrite that data without a trap.
 
-On native targets, each thread allocates an arena on its first active framed
-call and frees it when the outermost framed call returns. Nested calls and
-synchronous C callbacks share that thread's arena. Only the pointer and cursor
-occupy TLS. The arena's storage is allocated separately from host worker stacks.
-Allocation failure traps. Nonlocal exits such as C `longjmp` bypass frame
-cleanup and are unsupported across active Rake frames.
+On native targets, each thread allocates an arena on its first framed call
+and keeps it until the thread exits, when a C11 thread-specific key frees it.
+Nested calls and synchronous C callbacks share that thread's arena. Only the
+pointer and cursor occupy TLS. The arena's storage is allocated separately
+from host worker stacks. Allocation failure traps. Nonlocal exits such as C
+`longjmp` bypass frame cleanup and are unsupported across active Rake frames.
 
 ## Verification
 

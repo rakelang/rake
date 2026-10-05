@@ -227,9 +227,10 @@ let allocate_function ?(profile = Target.X86_avx2) ?parameter_assignment func =
     List.iter (fun (transfer : Native_register_assignment.integer_transfer) ->
       emit func.loc Native_ir.source (Integer_parameter { dst = transfer.register; argument = transfer.argument })) integer_transfers;
     (* C leaves bits above a Boolean's value unspecified. Import every argument
-       first, then retain only bit zero using packed shifts in its vector slot. *)
+       first, then retain only bit zero using packed shifts in its vector slot.
+       A traversal normalises its persistent uniforms once, before its loop. *)
     List.iter2 (fun (assigned : Native_register_assignment.parameter) parameter ->
-      if parameter.M.argument_class = Native_register_assignment.Boolean then (
+      if parameter.M.argument_class = Native_register_assignment.Boolean && not assigned.persistent then (
         let count = Option.get (Native_ir.I32_shift_count.of_int32 31l) in
         let dst = assigned.register in
         emit func.loc Native_ir.source (Shift_i32 { dst; source = dst; count; shift = Native_ir.Shift_left });

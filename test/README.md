@@ -66,7 +66,7 @@ scalar results, including ordered reductions, masked partial operations and
 NaNs. All six comparison operators agree with scalar ordered predicates
 without raising invalid-operation exceptions for quiet NaNs. SSE2 and AVX2
 execute on the test host. AVX-512 executes on hardware with
-AVX-512F, or through Intel SDE supplied as `RAKE_SDE=/absolute/path/to/sde64`.
+AVX-512F, or through the Intel SDE that the development shell pins as `RAKE_SDE`.
 The suite fails if neither is available, rather than treating object
 verification as runtime agreement.
 

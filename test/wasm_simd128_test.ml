@@ -99,7 +99,7 @@ let integer_kernel =
   }
 
 let () =
-  let source = C.emit ~source:"requantise.rk" [ select integer_kernel ] in
+  let source = C.emit ~profile:Rake.Target.Wasm_simd128 ~source:"requantise.rk" [ select integer_kernel ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
     [ "v128_t requantise(v128_t pair_, v128_t weights_, v128_t sums_, v128_t scale_)";
@@ -117,16 +117,16 @@ let () =
           failwith "a scratch local is read before it is written"
       | _ -> ())
     selected.instructions;
-  let source = C.emit ~source:"shared.rk" [ selected ] in
+  let source = C.emit ~profile:Rake.Target.Wasm_simd128 ~source:"shared.rk" [ selected ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
     [ "wasm_f32x4_add(a_, b_)"; "wasm_f32x4_mul(step0, step0)"; "wasm_f32x4_gt(step0, a_)";
       "wasm_v128_bitselect(step1, b_, step2)" ];
-  let source = C.emit ~source:"extremes.rk" [ select float_extremes ] in
+  let source = C.emit ~profile:Rake.Target.Wasm_simd128 ~source:"extremes.rk" [ select float_extremes ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
     [ "wasm_f32x4_max(a_, b_)"; "wasm_f32x4_min(step0, b_)" ];
-  let source = C.emit ~source:"side_bits.rk" [ select side_bits ] in
+  let source = C.emit ~profile:Rake.Target.Wasm_simd128 ~source:"side_bits.rk" [ select side_bits ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
     [ "uint32_t side_bits(v128_t a_, v128_t b_)";
@@ -159,7 +159,7 @@ let bits_kernel =
   }
 
 let () =
-  let source = C.emit ~source:"spread.rk" [ select bits_kernel ] in
+  let source = C.emit ~profile:Rake.Target.Wasm_simd128 ~source:"spread.rk" [ select bits_kernel ] in
   List.iter
     (fun expected -> if not (contains expected source) then failwith ("missing " ^ expected ^ " in:\n" ^ source))
     [ "v128_t spread_east(v128_t here_, v128_t open_, v128_t board_, uint32_t wrap_)";

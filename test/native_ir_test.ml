@@ -21,7 +21,7 @@ let valid_function =
   }
 
 let expect_valid module_ =
-  match verify module_ with
+  match verify ~floating_point_exceptions:true module_ with
   | Ok () -> ()
   | Error errors -> failwith (String.concat "\n" (List.map format_error errors))
 
@@ -34,7 +34,7 @@ let contains substring string =
   at 0
 
 let expect_error substring module_ =
-  match verify module_ with
+  match verify ~floating_point_exceptions:true module_ with
   | Ok () -> failwith ("expected verifier error containing: " ^ substring)
   | Error errors ->
       let rendered = String.concat "\n" (List.map format_error errors) in

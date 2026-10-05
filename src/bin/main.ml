@@ -149,10 +149,7 @@ let tier_check filename program =
 
 let whole_program_c ~addressing ~profile filename program =
   let checked = tier_check filename program in
-  let execution_target =
-    if Rake.Target.is_wasm profile then Rake.Tier_c.WebAssembly
-    else Rake.Tier_c.Native_program profile
-  in
+  let execution_target = Rake.Tier_c.execution_target profile in
   match Rake.Tier_c.emit ~addressing ~execution_target ~source:filename checked with
   | text, facts, native_kernels -> (checked, text, facts, native_kernels)
   | exception Rake.Tier_c.Emission_error (loc, message) ->
@@ -164,7 +161,7 @@ let whole_program_object filename c_source =
   | Ok bytes -> bytes
   | Error error -> fail ("native object assembly failed: " ^ Rake.Wasm_simd128_toolchain.format_error error)
 
-let verify_whole_program (checked : Rake.Tier_ir.program) facts object_bytes =
+let verify_whole_program ~profile (checked : Rake.Tier_ir.program) facts object_bytes =
   let scratches =
     List.filter_map
       (fun (d : Rake.Ast.def) -> match d.v with DScratch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> Some name | _ -> None)
@@ -175,7 +172,8 @@ let verify_whole_program (checked : Rake.Tier_ir.program) facts object_bytes =
       (fun name facts acc -> (name, facts) :: acc)
       facts []
   in
-  match Rake.Wasm_simd128_toolchain.verify_program ~scratches ~runs object_bytes with
+  match Rake.Wasm_simd128_toolchain.verify_program
+          ~relaxed:(profile = Rake.Target.Wasm_simd128_relaxed) ~scratches ~runs object_bytes with
   | Ok () -> ()
   | Error error -> fail ("native object verification failed: " ^ Rake.Wasm_simd128_toolchain.format_error error)
 
@@ -320,10 +318,6 @@ let () =
           if mode = Assembly && (whole_program || Rake.Target.is_wasm config.profile) then
             fail "Error: --emit-asm requires physical-target register kernels; use --emit-c for whole programs or WebAssembly";
           if whole_program || (mode = C_source && not (Rake.Target.is_wasm config.profile)) then (
-            Rake.Native_lower.relaxed := config.profile = Rake.Target.Wasm_simd128_relaxed;
-            Rake.Native_ir.floating_point_exceptions := false;
-            Rake.Wasm_simd128_c.relaxed := !Rake.Native_lower.relaxed;
-            Rake.Wasm_simd128_toolchain.relaxed := !Rake.Native_lower.relaxed;
             let checked, c_source, facts, native_kernels = whole_program_c ~addressing:opts.addressing ~profile:config.profile filename program in
             let default extension = Some (match opts.output with Some path -> path | None -> source_stem filename ^ extension) in
             match mode with
@@ -352,7 +346,7 @@ let () =
             | Object -> write_output (whole_program_object filename c_source) (default ".o")
             | _ ->
                 let object_bytes = whole_program_object filename c_source in
-                verify_whole_program checked facts object_bytes;
+                verify_whole_program ~profile:config.profile checked facts object_bytes;
                 write_output object_bytes (default ".o"))
           else
           (match mode with

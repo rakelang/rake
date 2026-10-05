@@ -185,9 +185,10 @@ let allocate_function ?parameter_assignment func =
     List.iter (fun (transfer : Native_register_assignment.integer_transfer) ->
       emit func.loc Native_ir.source (Integer_parameter { dst = transfer.register; argument = transfer.argument })) integer_transfers;
     (* Keep the Boolean's value bit, independently of unspecified upper C ABI
-       bits. All argument transfers stay together at the verified entry. *)
+       bits. All argument transfers stay together at the verified entry. A
+       traversal normalises its persistent uniforms once, before its loop. *)
     List.iter2 (fun (assigned : Native_register_assignment.parameter) parameter ->
-      if parameter.M.argument_class = Native_register_assignment.Boolean then (
+      if parameter.M.argument_class = Native_register_assignment.Boolean && not assigned.persistent then (
         let count = Option.get (Native_ir.I32_shift_count.of_int32 31l) in
         let dst = assigned.register in
         emit func.loc Native_ir.source (Shift_i32 { dst; source = dst; count; shift = Native_ir.Shift_left });

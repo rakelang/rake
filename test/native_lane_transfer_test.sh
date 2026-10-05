@@ -5,13 +5,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 rakec="${RAKEC:-${root}/_build/default/src/bin/main.exe}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
+source "${root}/test/profile.sh"
 for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
-    case "$profile" in
-        x86-sse2) lanes=4; flags=(-msse2 -mno-avx) ;;
-        x86-avx2) lanes=8; flags=(-mavx2 -mfma) ;;
-        x86-avx512) lanes=16; flags=(-mavx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl) ;;
-        aarch64-neon) lanes=4; flags=() ;;
-    esac
+    use_profile "$profile"
     source="${tmp}/${profile}.rk"
     for ((lane=0; lane<lanes; ++lane)); do
         printf 'scratch extract_lane_%d(values: f32s) -> f32:\n  extract(values, %d)\n\n' "$lane" "$lane"
@@ -90,25 +86,9 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     else
         printf '.section .note.GNU-stack,"",@progbits\n' >> "${tmp}/boolean-caller.s"
     fi
-    if [[ "$profile" == aarch64-neon ]]; then
-        aarch64-unknown-linux-gnu-gcc -O1 -Wall -Wextra -Werror -static -ffp-contract=off -DLANES="$lanes" \
-            -isystem "${RAKE_AARCH64_LIBC_DEV}/include" \
-            -B"${RAKE_AARCH64_LIBC}/lib" -L"${RAKE_AARCH64_LIBC_STATIC}/lib" \
-            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
-        qemu-aarch64 "${tmp}/${profile}"
-    else
-        cc -O1 -Wall -Wextra -Werror -ffp-contract=off "${flags[@]}" -DLANES="$lanes" \
-            "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
-        if [[ "$profile" == x86-avx512 ]] && ! grep -qw avx512f /proc/cpuinfo; then
-            if [[ -z "${RAKE_SDE:-}" ]]; then
-                echo "AVX-512 lane-transfer runtime requires AVX-512F or RAKE_SDE" >&2
-                exit 1
-            fi
-            "$RAKE_SDE" -skx -- "${tmp}/${profile}"
-        else
-            "${tmp}/${profile}"
-        fi
-    fi
+    "$compiler" -O1 -Wall -Wextra -Werror -ffp-contract=off "${flags[@]}" -DLANES="$lanes" \
+        "${root}/test/native_lane_transfer_runtime.c" "${tmp}/${profile}.o" "${tmp}/boolean-caller.s" -lm -o "${tmp}/${profile}"
+    "${runner[@]}" "${tmp}/${profile}"
     for operation in extract insert; do
         if [[ "$operation" == extract ]]; then
             printf 'scratch outside(values: f32s) -> f32:\n  extract(values, %d)\n' "$lanes" > "${tmp}/outside.rk"

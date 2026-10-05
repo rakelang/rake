@@ -10,8 +10,6 @@ module Ir = Native_ir
 module StringMap = Map.Make (String)
 module Int32Map = Map.Make (Int32)
 
-let global_tines : def list ref = ref []
-
 let ( let* ) = Result.bind
 
 type error = { loc : loc; message : string }
@@ -30,6 +28,9 @@ type binding = Ir.value * Ir.typ
 
 type state = {
   profile : Target.profile;
+  callees : def StringMap.t;  (** scratches and rakes, inlined at their calls *)
+  global_tines : def list;
+  mutable inline_depth : int;
   mutable next_value : int;
   mutable next_fused_region : int;
   mutable instructions_rev : Ir.instruction list;
@@ -39,6 +40,34 @@ type state = {
   mutable mask_constants : binding option * binding option;
   mutable locations : unit StringMap.t;  (** names bound with :=, which <- may rebind *)
 }
+
+(** WebAssembly keeps no floating-point exception state, so its inactive lanes
+    need no benign operands. *)
+let floating_point_exceptions state = not (Target.is_wasm state.profile)
+
+let callee_table definitions =
+  List.fold_left
+    (fun table (definition : def) ->
+      match definition.v with
+      | DScratch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> StringMap.add name definition table
+      | _ -> table)
+    StringMap.empty definitions
+
+let new_state ~profile ~definitions ~parameter_count =
+  {
+    profile;
+    callees = callee_table definitions;
+    global_tines = definitions;
+    inline_depth = 0;
+    next_value = parameter_count;
+    next_fused_region = 0;
+    instructions_rev = [];
+    bindings = StringMap.empty;
+    tines = StringMap.empty;
+    rack_constants = Int32Map.empty;
+    mask_constants = (None, None);
+    locations = StringMap.empty;
+  }
 
 let element_bytes = function
   | Ir.U8 -> 1 | Ir.I16 -> 2 | Ir.I32 | Ir.U32 | Ir.F32 -> 4 | Ir.I64 | Ir.F64 -> 8 | Ir.I1 -> 16
@@ -144,7 +173,7 @@ let mask_constant state loc value =
 let sanitize_operand state loc provenance benign ((value, typ) as operand) =
   match provenance.Ir.through with
   | None -> operand
-  | Some _ when not !Ir.floating_point_exceptions -> operand
+  | Some _ when not (floating_point_exceptions state) -> operand
   | Some mask ->
       let benign = rack_constant state loc provenance benign in
       emit state loc provenance typ
@@ -353,11 +382,6 @@ let expand_math state loc name x =
 
 (* Inlining of user scratches and rakes: set by the lowering entry points,
    implemented once the statement lowering below exists. *)
-let callees : def StringMap.t ref = ref StringMap.empty
-
-(** The opt-in relaxed profile: relaxed-SIMD operations lower only under it. *)
-let relaxed = ref false
-
 let inline_call :
     (state -> Ir.provenance -> loc -> def -> binding list -> (binding, error) result) ref =
   ref (fun _ _ loc _ _ -> error loc "inlining is not initialised")
@@ -444,7 +468,7 @@ let rec lower_expr state provenance (expr : expr) =
            let* () = expect_type expr.loc "negation" (Ir.Rack Ir.F32) operand in
            Ok (emit state expr.loc provenance (Ir.Rack Ir.F32) (Ir.Unary (Ir.Neg, fst operand))))
   | ECall (("relaxed_madd" | "relaxed_nmadd" | "relaxed_min" | "relaxed_max") as name, arguments) ->
-      if not !relaxed then
+      if state.profile <> Target.Wasm_simd128_relaxed then
         errorf expr.loc "%s is a relaxed-SIMD operation, which only --target wasm-simd128-relaxed selects; the online judge hasn't been shown to accept relaxed SIMD" name
       else if provenance.Ir.through <> None then
         errorf expr.loc "%s is not defined under predication" name
@@ -477,8 +501,8 @@ let rec lower_expr state provenance (expr : expr) =
        | Ir.Rack (Ir.U8 | Ir.I16 | Ir.I32 | Ir.I64), Ir.Abs ->
            Ok (emit state expr.loc provenance (snd operand) (Ir.Unary (Ir.Abs, fst operand)))
        | typ, _ -> errorf expr.loc "%s of %s is not available" name (Ir.string_of_typ typ))
-  | ECall (name, arguments) when StringMap.mem name !callees ->
-      let callee = StringMap.find name !callees in
+  | ECall (name, arguments) when StringMap.mem name state.callees ->
+      let callee = StringMap.find name state.callees in
       let parameters =
         match callee.v with
         | DScratch (_, parameters, _, _) | DRake (_, parameters, _, _, _, _, _) -> parameters
@@ -624,7 +648,7 @@ let rec lower_expr state provenance (expr : expr) =
       let* () = expect_type expr.loc name operand x in
       let x = if element <> Ir.F32 then sanitize_operand state expr.loc provenance 0.0 x
         else match provenance.Ir.through with
-          | Some mask when !Ir.floating_point_exceptions ->
+          | Some mask when floating_point_exceptions state ->
               let literal = if operand = Ir.Rack Ir.U32 then Ir.Uint32 0l else Ir.Int32 0l in
               let zero = emit state expr.loc provenance operand (Ir.Rack_splat literal) in
               emit state expr.loc provenance operand (Ir.Sanitize { mask; active = fst x; benign = fst zero })
@@ -1118,20 +1142,8 @@ let result_annotation result body =
         { statement with v = SLet { binding with bind_type = result.result_type } }
     | _ -> statement) body
 
-let lower_scratch ~profile definition_loc name parameters result body =
-  let state =
-    {
-      profile;
-      next_value = List.length parameters;
-      next_fused_region = 0;
-      instructions_rev = [];
-      bindings = StringMap.empty;
-      tines = StringMap.empty;
-      rack_constants = Int32Map.empty;
-      mask_constants = (None, None);
-      locations = StringMap.empty;
-    }
-  in
+let lower_scratch ~profile ~definitions definition_loc name parameters result body =
+  let state = new_state ~profile ~definitions ~parameter_count:(List.length parameters) in
   let rec add_parameters index reversed = function
     | [] -> Ok (List.rev reversed)
     | parameter :: rest ->
@@ -1173,7 +1185,7 @@ let lower_scratch ~profile definition_loc name parameters result body =
       loc = ir_location definition_loc;
     }
   in
-  match Ir.verify_function func with
+  match Ir.verify_function ~floating_point_exceptions:(floating_point_exceptions state) func with
   | Ok () -> Ok func
   | Error errors ->
       errorf definition_loc "generated invalid native IR: %s"
@@ -1210,7 +1222,7 @@ let rec lower_predicate state (predicate : predicate) =
       | Some value -> Ok value
       | None -> errorf predicate.loc "undefined or forward tine reference '#%s'" name)
   | PTineCall _ ->
-      (try lower_predicate state (Tines.expand_calls !global_tines predicate)
+      (try lower_predicate state (Tines.expand_calls state.global_tines predicate)
        with Tines.Error (loc, message) -> error loc message)
 
 let lower_tine_ref state loc = function
@@ -1373,20 +1385,8 @@ let lower_sweep ?outer state definition_loc (sweep : sweep) =
   let* () = bind state definition_loc sweep.sweep_binding result in
   Ok result
 
-let lower_rake ~profile definition_loc name parameters result setup tines throughs sweep =
-  let state =
-    {
-      profile;
-      next_value = List.length parameters;
-      next_fused_region = 0;
-      instructions_rev = [];
-      bindings = StringMap.empty;
-      tines = StringMap.empty;
-      rack_constants = Int32Map.empty;
-      mask_constants = (None, None);
-      locations = StringMap.empty;
-    }
-  in
+let lower_rake ~profile ~definitions definition_loc name parameters result setup tines throughs sweep =
+  let state = new_state ~profile ~definitions ~parameter_count:(List.length parameters) in
   let rec add_parameters index reversed = function
     | [] -> Ok (List.rev reversed)
     | parameter :: rest ->
@@ -1450,7 +1450,7 @@ let lower_rake ~profile definition_loc name parameters result setup tines throug
       loc = ir_location definition_loc;
     }
   in
-  match Ir.verify_function func with
+  match Ir.verify_function ~floating_point_exceptions:(floating_point_exceptions state) func with
   | Ok () -> Ok func
   | Error errors ->
       errorf definition_loc "generated invalid native rake IR: %s"
@@ -1460,8 +1460,6 @@ let lower_rake ~profile definition_loc name parameters result setup tines throug
     in the caller's function, with its parameters bound to the arguments and
     its operations under the caller's predication. Vector code calls no
     function at run time. *)
-let inline_depth = ref 0
-
 let inline_definition state (provenance : Ir.provenance) loc (callee : def) values =
   let bind_parameters parameters =
     let rec go = function
@@ -1481,9 +1479,9 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
     in
     go (parameters, values)
   in
-  if !inline_depth > 32 then error loc "scratch calls nest more than 32 deep; recursion has no vector meaning"
+  if state.inline_depth > 32 then error loc "scratch calls nest more than 32 deep; recursion has no vector meaning"
   else (
-    incr inline_depth;
+    state.inline_depth <- state.inline_depth + 1;
     let saved_bindings = state.bindings and saved_locations = state.locations and saved_tines = state.tines in
     state.bindings <- StringMap.empty;
     state.locations <- StringMap.empty;
@@ -1520,7 +1518,7 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
           Ok value
       | _ -> error loc "only scratches and rakes are inlined"
     in
-    decr inline_depth;
+    state.inline_depth <- state.inline_depth - 1;
     state.bindings <- saved_bindings;
     state.locations <- saved_locations;
     state.tines <- saved_tines;
@@ -1528,34 +1526,12 @@ let inline_definition state (provenance : Ir.provenance) loc (callee : def) valu
 
 let () = inline_call := inline_definition
 
-let callee_table definitions =
-  List.fold_left
-    (fun table (definition : def) ->
-      match definition.v with
-      | DScratch (name, _, _, _) | DRake (name, _, _, _, _, _, _) -> StringMap.add name definition table
-      | _ -> table)
-    StringMap.empty definitions
-
 (** A run's ordered immutable bindings and result, lowered by the same rules
     as a scratch body. [mask] names a parameter whose lanes are
     the only active ones: a traversal's tail, under whose predication every
     exception-capable operation is sanitised. *)
 let lower_expression ?(profile = Target.Wasm_simd128) ?(condition_bindings = []) ?(expression_bindings = []) ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
-  callees := callee_table definitions;
-  global_tines := definitions;
-  let state =
-    {
-      profile;
-      next_value = List.length parameters;
-      next_fused_region = 0;
-      instructions_rev = [];
-      bindings = StringMap.empty;
-      tines = StringMap.empty;
-      rack_constants = Int32Map.empty;
-      mask_constants = (None, None);
-      locations = StringMap.empty;
-    }
-  in
+  let state = new_state ~profile ~definitions ~parameter_count:(List.length parameters) in
   let parameters =
     List.mapi (fun index (parameter_name, typ) -> { Ir.id = index; typ; name = Some parameter_name }) parameters
   in
@@ -1594,52 +1570,50 @@ let lower_expression ?(profile = Target.Wasm_simd128) ?(condition_bindings = [])
       loc = ir_location loc;
     }
   in
-  match Ir.verify_function func with
+  match Ir.verify_function ~floating_point_exceptions:(floating_point_exceptions state) func with
   | Ok () -> Ok func
   | Error errors ->
       errorf loc "generated invalid native IR: %s" (String.concat "; " (List.map Ir.format_error errors))
 
-let lower_definition ?(profile = Target.Wasm_simd128) (definition : def) =
+let lower_definition ?(profile = Target.Wasm_simd128) ?(definitions = []) (definition : def) =
   match definition.v with
   | DScratch (name, parameters, result, body) ->
-      lower_scratch ~profile definition.loc name parameters result body
+      lower_scratch ~profile ~definitions definition.loc name parameters result body
   | DPack _ -> error definition.loc "pack definitions are not supported by native lowering"
   | DSingle _ -> error definition.loc "single definitions are not supported by native lowering"
   | DType _ -> error definition.loc "type aliases are not supported by native lowering"
   | DTine _ -> error definition.loc "a global tine is instantiated in a rake, not emitted as a function"
   | DRake (name, parameters, result, setup, tines, throughs, sweep) ->
-      lower_rake ~profile definition.loc name parameters result setup tines throughs sweep
+      lower_rake ~profile ~definitions definition.loc name parameters result setup tines throughs sweep
   | DRun _ -> error definition.loc "run definitions are not supported by native lowering"
   | DRecord _ | DUnion _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
       errorf definition.loc "%s is lowered by the slow tier, not native scratch lowering"
         (Capabilities.id (Capabilities.feature_of_def definition.v))
 
-let lower_module ~profile module_ =
+let lower_module ~profile ~definitions module_ =
   let rec lower reversed = function
     | [] -> Ok (List.rev reversed)
     | ({ v = (DPack _ | DSingle _ | DType _ | DTine _); _ } : def) :: rest ->
         lower reversed rest
     | definition :: rest ->
-        let* func = lower_definition ~profile definition in
+        let* func = lower_definition ~profile ~definitions definition in
         lower (func :: reversed) rest
   in
   lower [] module_.mod_defs
 
 let lower_program ?(profile = Target.Wasm_simd128) program =
   let definitions = List.concat_map (fun (m : module_) -> m.mod_defs) program in
-  callees := callee_table definitions;
-  global_tines := definitions;
   let rec lower reversed = function
     | [] ->
         let functions = List.rev reversed in
-        (match Ir.verify functions with
+        (match Ir.verify ~floating_point_exceptions:(not (Target.is_wasm profile)) functions with
         | Ok () -> Ok functions
         | Error errors ->
             error Ast.dummy_loc
               ("generated invalid native module: "
               ^ String.concat "; " (List.map Ir.format_error errors)))
     | module_ :: rest ->
-        let* functions = lower_module ~profile module_ in
+        let* functions = lower_module ~profile ~definitions module_ in
         lower (List.rev_append functions reversed) rest
   in
   lower [] program

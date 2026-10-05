@@ -26,7 +26,12 @@ open Tier_ir
 
 type addressing = Barrier | Plain
 
-type execution_target = WebAssembly | Native_program of Target.profile
+type execution_target = WebAssembly of Target.profile | Native_program of Target.profile
+
+let execution_target profile =
+  if Target.is_wasm profile then WebAssembly profile else Native_program profile
+
+let target_profile = function WebAssembly profile | Native_program profile -> profile
 
 type native_selection = {
   registers : Native_backend.allocated option;
@@ -852,7 +857,7 @@ let pure_call u rs loc name ty (pure : Ast.expr) fused =
   let fname = Printf.sprintf "rake__%s__%d" rs.run.run_name !(rs.counter) in
   let renamed = rename cname pure in
   match
-    Native_lower.lower_expression ~definitions:u.program.vector_defs ~name:fname ~parameters ?mask ~fused loc renamed
+    Native_lower.lower_expression ~profile:(target_profile u.execution_target) ~definitions:u.program.vector_defs ~name:fname ~parameters ?mask ~fused loc renamed
   with
   | Error error -> fail loc "%s" (Native_lower.format_error error)
   | Ok func -> (
@@ -1552,13 +1557,16 @@ let frame_threshold = 256
     Keeping only the native pointer and cursor in TLS avoids inflating the
     minimum host-thread stack. Nested calls and C callbacks share the arena. *)
 let frame_helpers u =
-  let storage, allocate, release = match u.execution_target with
-    | WebAssembly ->
-        ("static uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\nstatic size_t rake_frame_top;\n", "", "")
+  let storage, allocate = match u.execution_target with
+    | WebAssembly _ ->
+        ("static uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\nstatic size_t rake_frame_top;\n", "")
     | Native_program _ ->
-        ("#include <stdlib.h>\nstatic _Thread_local uint8_t *rake_frames;\nstatic _Thread_local size_t rake_frame_top;\n",
-         "    if (!rake_frames) {\n        rake_frames = malloc(RAKE_FRAME_BYTES);\n        if (!rake_frames) __builtin_trap();\n    }\n",
-         "    if (rake_frame_top == 0) {\n        free(rake_frames);\n        rake_frames = NULL;\n    }\n")
+        (* A thread allocates its arena once, on its first framed call. The C11
+           thread-specific key frees it when that thread exits. *)
+        ("#include <stdlib.h>\n#include <threads.h>\nstatic _Thread_local uint8_t *rake_frames;\nstatic _Thread_local size_t rake_frame_top;\n\
+          static tss_t rake_frames_owner;\nstatic once_flag rake_frames_once = ONCE_FLAG_INIT;\n\
+          static void rake_frames_create_owner(void)\n{\n    if (tss_create(&rake_frames_owner, free) != thrd_success) __builtin_trap();\n}\n",
+         "    if (!rake_frames) {\n        call_once(&rake_frames_once, rake_frames_create_owner);\n        rake_frames = malloc(RAKE_FRAME_BYTES);\n        if (!rake_frames || tss_set(rake_frames_owner, rake_frames) != thrd_success) __builtin_trap();\n    }\n")
   in
   helper u "rake_frame"
     (Printf.sprintf {|#include <stddef.h>
@@ -1580,8 +1588,8 @@ let frame_helpers u =
 static inline void rake_frame_leave(size_t mark)
 {
     rake_frame_top = mark;
-%s}
-|} storage allocate release)
+}
+|} storage allocate)
 
 let slow_function u (f : slow_func) =
   let scope = new_scope () in
@@ -1730,8 +1738,8 @@ let vector_definitions ~source u =
             | Ok assembly -> assembly
             | Error error -> fail Ast.dummy_loc "%s" (Native_backend.format_error error) in
           (native_assembly_literal ~profile assembly, Some allocated)
-      | WebAssembly ->
-      match Native_lower.lower_program program with
+      | WebAssembly profile ->
+      match Native_lower.lower_program ~profile program with
       | Error error -> raise (Emission_error (error.loc, Native_lower.format_error error))
       | Ok native -> (
           match Wasm_simd128_isel.select native with
@@ -1776,14 +1784,14 @@ let boundaries u =
         match t.v with
         | TScalar PFloat -> "float"
         | TScalar PInt -> "int32_t"
-        | TScalar PBool when u.execution_target <> WebAssembly -> "bool"
+        | TScalar PBool when not (Target.is_wasm (target_profile u.execution_target)) -> "bool"
         | TScalar (PInt64 | PUint64) -> "uint64_t"
         | _ -> "uint32_t"
       in
       let ps = List.mapi (fun i p -> match p with Ast.PScalar (_, Some t) -> Printf.sprintf "%s a%d" (c_of t) i | _ -> "") params in
       let r = match result.result_type with Some t -> c_of t | None -> "float" in
       let prototype = match u.execution_target with
-        | WebAssembly -> ""
+        | WebAssembly _ -> ""
         | Native_program _ ->
             if not (List.for_all (function Ast.PScalar (_, Some { v = TScalar (PFloat | PBool | PInt | PUint); _ }) -> true | _ -> false) params
               && (match result.result_type with Some { v = TScalar (PFloat | PBool | PInt | PUint); _ } -> true | _ -> false)) then
@@ -1796,9 +1804,9 @@ let boundaries u =
           (if ps = [] then "void" else String.concat ", " ps) name (String.concat ", " (List.mapi (fun i _ -> Printf.sprintf "a%d" i) params)))
     called ""
 
-let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (program : program) =
+let emit ?(addressing = Barrier) ?(execution_target = WebAssembly Target.Wasm_simd128) ~source (program : program) =
   (match execution_target with
-   | WebAssembly -> ()
+   | WebAssembly _ -> ()
    | Native_program profile ->
        if not (Target.is_x86 profile || profile = Target.Aarch64_neon) then
          fail Ast.dummy_loc "native programs require an x86 or AArch64 profile");
@@ -1865,7 +1873,7 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
     program.embeds;
   let vectors, registers = vector_definitions ~source u in
   let runs, traversals = match execution_target, program.runs with
-    | WebAssembly, _ -> List.map (run_function u) program.runs, None
+    | WebAssembly _, _ -> List.map (run_function u) program.runs, None
     | Native_program _, [] -> [], None
     | Native_program profile, _ ->
         let selected = try Native_traversal.compile ~profile program with
@@ -1889,14 +1897,14 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly) ~source (prog
     "#include <stdlib.h>\n#include <stddef.h>\n_Static_assert(sizeof(int) == sizeof(int32_t), \"Rake main requires a 32-bit C int\");\n" in
   let prologue, vector_prologue, vector_epilogue =
     match execution_target with
-    | WebAssembly ->
+    | WebAssembly profile ->
         ( Printf.sprintf
             "/* Generated by rakec --target wasm-simd128 from %s. Runs are Rake's loops, loads and\n   stores; every intrinsic is one Rake-selected WebAssembly SIMD instruction. */\n"
             (Filename.basename source)
           ^ "#pragma STDC FP_CONTRACT OFF\n#include <stdint.h>\n#include <stdbool.h>\n#include <wasm_simd128.h>\n",
           "\n#ifndef RAKE_WASM_LINKAGE\n#define RAKE_WASM_LINKAGE static inline __attribute__((always_inline))\n#endif\n\n"
-          ^ Wasm_simd128_c.relaxed_prologue (),
-          Wasm_simd128_c.relaxed_epilogue () )
+          ^ Wasm_simd128_c.relaxed_prologue profile,
+          Wasm_simd128_c.relaxed_epilogue profile )
     | Native_program profile ->
         ( Printf.sprintf
             "/* Generated by rakec --target %s from %s. Rake-selected kernels are opaque\n   assembly. The platform C compiler owns only slow lowering and the C ABI. */\n"

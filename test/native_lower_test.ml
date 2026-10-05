@@ -62,7 +62,7 @@ let () =
     | Ok func -> func
     | Error error -> failwith (Native_lower.format_error error)
   in
-  (match Native_ir.verify_function lowered with
+  (match Native_ir.verify_function ~floating_point_exceptions:false lowered with
   | Ok () -> ()
   | Error errors -> failwith (String.concat "\n" (List.map Native_ir.format_error errors)));
   if lowered.loc.file <> "native_lower_test.rk" || lowered.loc.line <> 1 then

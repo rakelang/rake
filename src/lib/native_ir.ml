@@ -182,7 +182,14 @@ let constant_i32_definitions (func : func) =
 
 type environment = typ IntMap.t
 
-type verifier = { function_name : string; mutable errors : error list }
+(** [floating_point_exceptions]: whether the target keeps floating-point
+    exception state. WebAssembly has none: its floating-point instructions never
+    trap or set flags, so an inactive lane needs no sanitising. *)
+type verifier = {
+  function_name : string;
+  floating_point_exceptions : bool;
+  mutable errors : error list;
+}
 
 let complain (verifier : verifier) context message =
   verifier.errors <- { function_name = verifier.function_name; context; message } :: verifier.errors
@@ -340,11 +347,6 @@ let check_fused_contiguity verifier context (instructions : instruction list) =
       (None, IntSet.empty) instructions
   in
   ignore closed
-
-(** Whether the target keeps floating-point exception state. WebAssembly has
-    none: its floating-point instructions never trap or set flags, so an
-    inactive lane can't raise anything and needs no sanitising. *)
-let floating_point_exceptions = ref true
 
 (** Equal-width numerical conversions preserve signedness and participation. *)
 type word_conversion = I32_to_f32 | U32_to_f32 | F32_to_i32 | F32_to_u32
@@ -622,7 +624,7 @@ and verify_block verifier context ~expected_result ~yielding environment block =
     (fun (instruction : instruction) ->
       match instruction.provenance.through with
       | None -> ()
-      | Some mask when !floating_point_exceptions && (match instruction.op with
+      | Some mask when verifier.floating_point_exceptions && (match instruction.op with
           | Convert { element = F32; _ } -> true | _ -> false) ->
           (match instruction.op with
           | Convert { operand; _ } ->
@@ -633,7 +635,7 @@ and verify_block verifier context ~expected_result ~yielding environment block =
                   | _ -> complain verifier context "masked integer-to-f32 conversion requires benign integer zero")
               | _ -> complain verifier context "masked integer-to-f32 conversion requires sanitized participation")
           | _ -> assert false)
-      | Some _ when (match instruction.op with Load _ | Store _ | Gather _ | Scatter _ -> false | op -> not (!floating_point_exceptions && float_operands (operands op))) -> ()
+      | Some _ when (match instruction.op with Load _ | Store _ | Gather _ | Scatter _ -> false | op -> not (verifier.floating_point_exceptions && float_operands (operands op))) -> ()
       | Some mask ->
           (match instruction.op with
           | Unary (Sqrt, operand) -> require_sanitized mask 0x3f800000l operand
@@ -682,8 +684,8 @@ and verify_block verifier context ~expected_result ~yielding environment block =
   | _ -> complain verifier context "block has more than one terminator");
   environment
 
-let verify_function (func : func) =
-  let verifier = { function_name = func.name; errors = [] } in
+let verify_function ~floating_point_exceptions (func : func) =
+  let verifier = { function_name = func.name; floating_point_exceptions; errors = [] } in
   if String.trim func.name = "" then complain verifier [] "function name must not be empty";
   let environment =
     List.fold_left
@@ -697,7 +699,7 @@ let verify_function (func : func) =
   ignore (verify_block verifier [ "entry" ] ~expected_result:func.result ~yielding:false environment func.body);
   match List.rev verifier.errors with [] -> Ok () | errors -> Error errors
 
-let verify module_ =
+let verify ~floating_point_exceptions module_ =
   let _, errors =
     List.fold_left
       (fun (names, errors) (func : func) ->
@@ -707,7 +709,7 @@ let verify module_ =
             { function_name = func.name; context = []; message = "function is defined more than once" } :: errors
           else errors
         in
-        let errors = match verify_function func with Ok () -> errors | Error found -> List.rev_append found errors in
+        let errors = match verify_function ~floating_point_exceptions func with Ok () -> errors | Error found -> List.rev_append found errors in
         (func.name :: names, errors))
       ([], []) module_
   in

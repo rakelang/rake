@@ -49,10 +49,10 @@ The retained [4 October measurement](measurement-20261004.tsv), on a Ryzen
 
 | Kernel | Milliseconds |
 | --- | ---: |
-| C, vectoriser disabled | 3.872908252 |
-| C, automatic vectorisation | 0.142762499 |
-| C, AVX2 intrinsics | 0.143335001 |
-| Rake, verified AVX2 traversal | 0.144302499 |
+| C, vectoriser disabled | 3.87 |
+| C, automatic vectorisation | 0.143 |
+| C, AVX2 intrinsics | 0.143 |
+| Rake, verified AVX2 traversal | 0.144 |
 
 The three vector implementations have similar times. Rake verifies the
 selected vector instructions and the complete traversal.

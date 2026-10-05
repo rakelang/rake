@@ -17,7 +17,7 @@ let check_object ~name ~source ~func ~parameters ~selected ~forbidden =
     | Error error -> failwith (T.format_error error)
   in
   let verify alternatives =
-    T.verify_program ~scratches:[]
+    T.verify_program ~relaxed:false ~scratches:[]
       ~runs:
         [
           ( name,

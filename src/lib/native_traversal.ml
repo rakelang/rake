@@ -121,6 +121,17 @@ let uniform_register profile index =
   in
   first + index
 
+(* C leaves bits above a Boolean's value unspecified. The register allocator
+   leaves persistent uniforms to the traversal, which keeps only bit zero once,
+   before its loop, with the same packed shifts as a kernel entry. *)
+let boolean_normalisation profile uniforms =
+  let count = Option.get (Native_ir.I32_shift_count.of_int32 31l) in
+  List.concat (List.mapi (fun index (_, scalar) ->
+    if scalar <> Types.SBool then []
+    else
+      let dst = uniform_register profile index in
+      [ dst, count, Native_ir.Shift_left; dst, count, Native_ir.Shift_right ]) uniforms)
+
 let compile_body ~profile program run traverse uniforms output ~tail =
   let bindings = ref [] and conditions = ref [] and columns = ref [] and result = ref None in
   let expressions = ref [] and locations = ref [] and next_binding = ref 0 in
@@ -186,7 +197,6 @@ let compile_body ~profile program run traverse uniforms output ~tail =
     @ List.mapi (fun index _ ->
         { Native_register_assignment.register = uniform_register profile index; persistent = true }) uniforms
     @ (if tail then [ { Native_register_assignment.register = List.length !columns; persistent = false } ] else []) in
-  Native_ir.floating_point_exceptions := true;
   let func = match Native_lower.lower_expression ~profile ~definitions:program.vector_defs
     ~condition_bindings:!conditions ~expression_bindings:(List.rev !expressions)
     ~name:run.run_name ~parameters ?mask ~fused:false run.run_loc expression with
@@ -324,6 +334,11 @@ let emit_x86_run ~profile program buffer (run : run) =
     if scalar <> Types.SFloat then
       emit "%smovd xmm%d, %s" (if sse2 then "" else "v") (uniform_register profile index)
         (List.nth [ "edi"; "esi"; "edx"; "ecx"; "r8d"; "r9d" ] slot)) arguments;
+  List.iter (fun (dst, count, shift) ->
+    X86_simd_asm.emit_instruction profile pool buffer
+      { X86_simd_regalloc.operation = Shift_i32 { dst; source = dst; count; shift };
+        loc = Native_ir.unknown_location; provenance = Native_ir.source })
+    (boolean_normalisation profile uniforms);
   Option.iter (fun slot ->
     let source = List.nth [ "rdi"; "rsi"; "rdx"; "rcx"; "r8"; "r9" ] slot in
     if source <> "rdx" then emit "mov rdx, %s" source) output_slot;
@@ -484,6 +499,11 @@ let emit_neon_run program buffer (run : run) =
     if scalar = Types.SFloat then
       emit "dup v%d.4s, v%d.s[0]" (uniform_register profile index) slot
     else emit "fmov s%d, w%d" (uniform_register profile index) slot) arguments;
+  List.iter (fun (dst, count, shift) ->
+    Aarch64_neon_asm.emit_instruction pool buffer
+      { Aarch64_neon_regalloc.operation = Shift_i32 { dst; source = dst; count; shift };
+        loc = Native_ir.unknown_location; provenance = Native_ir.source })
+    (boolean_normalisation profile uniforms);
   Option.iter (fun slot -> if slot <> 2 then emit "mov x2, x%d" slot) output_slot;
   List.iteri (fun index (_, _, field, _) ->
     let displacement = column_offset schema field in

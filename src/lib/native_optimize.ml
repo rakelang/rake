@@ -170,4 +170,4 @@ let rec remove_dead (func : N.func) =
 
 let optimize ~profile module_ =
   let optimized = List.map (fun func -> remove_dead (simplify_selects (optimize_function ~profile func))) module_ in
-  match N.verify optimized with Ok () -> Ok optimized | Error errors -> Error errors
+  match N.verify ~floating_point_exceptions:(not (Target.is_wasm profile)) optimized with Ok () -> Ok optimized | Error errors -> Error errors

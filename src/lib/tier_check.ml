@@ -877,13 +877,21 @@ let constant_value ctx (e : expr) =
 
 (* ─── Runs ──────────────────────────────────────────────────────────── *)
 
-(** Names a statement's normalisation has bound so far (see [bound] below). *)
-let bound_names : binding SM.t ref = ref SM.empty
-
 (** The traversal a run statement sits in: chunk name, pack, domain. *)
 type traversal_scope = { chunk : string; chunk_pack : pack; domain : scalar; outer : traversal_scope option }
 
-type run_env = { env : env; scope : traversal_scope option; emit : rstmt list ref }
+(** [bound] holds the names one statement's normalisation has hoisted so far;
+    the statement's checker folds them into its environment. [in_branch]
+    counts the enclosing if branches, where a hoisted read would happen for
+    lanes and cases the branch doesn't take. Copies of a run environment share
+    both. *)
+type run_env = {
+  env : env;
+  scope : traversal_scope option;
+  emit : rstmt list ref;
+  bound : binding SM.t ref;
+  in_branch : int ref;
+}
 
 let emit renv loc r = renv.emit := { r; rloc = loc } :: !(renv.emit)
 
@@ -916,7 +924,7 @@ let infer_pure renv (e : Ast.expr) =
   SM.iter
     (fun name b ->
       match types_of_ty b.bty with Some t -> Hashtbl.replace tc.vars name t | None -> ())
-    !bound_names;
+    !(renv.bound);
   ty_of_types e.loc (Typecheck.infer_expr tc e)
 
 let rec mask_element renv (e : Ast.expr) =
@@ -955,12 +963,8 @@ let constant_int renv (e : Ast.expr) what =
 (** A-normal form: hoist every load, gather, scalar read and chunk column
     out of a rack expression, leaving a pure expression over named racks,
     masks and uniform scalars. *)
-(** Inside an if's branches, where a hoisted read would happen for lanes and
-    cases the branch doesn't take. *)
-let in_branch = ref 0
-
-let refuse_branch_read loc =
-  if !in_branch > 0 then
+let refuse_branch_read renv loc =
+  if !(renv.in_branch) > 0 then
     fail loc "an if's branches compute on values: read memory before the if, with let, so the read is visibly unconditional"
 
 let rec normalise renv (e : Ast.expr) : Ast.expr =
@@ -1006,10 +1010,10 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
       match inner.v with
       | EInt _ | EFloat _ -> e
       | EVar name -> normalise renv (re (EScalarVar name))
-      | EIndex _ -> refuse_branch_read loc; hoist_uniform (check_uniform renv.env e)
+      | EIndex _ -> refuse_branch_read renv loc; hoist_uniform (check_uniform renv.env e)
       | _ -> fail loc "a uniform scalar is written <name>, <literal> or <view[index]>")
   | EIndex ({ v = EVar base; _ }, index, unchecked) -> (
-      (match (lookup renv.env loc base).bty with View _ -> refuse_branch_read loc | _ -> ());
+      (match (lookup renv.env loc base).bty with View _ -> refuse_branch_read renv loc | _ -> ());
       match (lookup renv.env loc base).bty with
       | Rack_array (n, _) ->
           let k = constant_int renv index "a rack array index" in
@@ -1054,9 +1058,9 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
   | EIf (c, a, b) ->
       (* A uniform condition stays a scalar; a mask condition is a rack. *)
       let c = if mentions_racks renv.env c then normalise renv c else hoist_uniform (check_uniform renv.env c) in
-      incr in_branch;
+      incr renv.in_branch;
       let branches = try Ok (normalise renv a, normalise renv b) with error -> Error error in
-      decr in_branch;
+      decr renv.in_branch;
       (match branches with Ok (a, b) -> re (EIf (c, a, b)) | Error error -> raise error)
   | EConvert (kind, t, a) -> re (EConvert (kind, t, normalise renv a))
   | EFma (a, b, c) -> re (EFma (normalise renv a, normalise renv b, normalise renv c))
@@ -1102,26 +1106,20 @@ and chunk_column renv loc chunk field widened =
   | _ -> fail loc "%s is not a traversal chunk here" chunk
 
 and renv_bind_rack renv name ty =
-  renv.env.vars |> ignore;
-  bound := SM.add name { bty = ty; bmut = false; buniform = false; bconst = None } !bound
+  renv.bound := SM.add name { bty = ty; bmut = false; buniform = false; bconst = None } !(renv.bound)
 
 and renv_bind_uniform renv name ty =
-  ignore renv;
-  bound := SM.add name { bty = ty; bmut = false; buniform = true; bconst = None } !bound
-
-(* Names bound while one statement is normalised; the statement's checker
-   folds them into its environment. *)
-and bound : binding SM.t ref = bound_names
+  renv.bound := SM.add name { bty = ty; bmut = false; buniform = true; bconst = None } !(renv.bound)
 
 let with_bound renv =
-  let env = { renv.env with vars = SM.union (fun _ a _ -> Some a) !bound renv.env.vars } in
-  bound := SM.empty;
+  let env = { renv.env with vars = SM.union (fun _ a _ -> Some a) !(renv.bound) renv.env.vars } in
+  renv.bound := SM.empty;
   { renv with env }
 
 (** Normalise and type one rack expression; hoisted names are visible to the
     pure expression's checker. *)
 let rack_value renv (e : Ast.expr) =
-  bound := SM.empty;
+  renv.bound := SM.empty;
   let pure = normalise renv e in
   let renv = with_bound renv in
   let ty = infer_pure renv pure in
@@ -1389,7 +1387,7 @@ let check_run_body env params stream body loc =
         | Run_rack (name, s) -> bind env loc name { bty = Rack s; bmut = false; buniform = false; bconst = None })
       env params
   in
-  let renv = { env; scope = None; emit = ref [] } in
+  let renv = { env; scope = None; emit = ref []; bound = ref SM.empty; in_branch = ref 0 } in
   let _, stmts = check_run_block renv body ~yield_last:false in
   (match stream with
    | Some element -> (

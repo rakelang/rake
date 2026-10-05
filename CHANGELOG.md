@@ -5,6 +5,18 @@ website. Releases before 1.0 may still change the source language and the binary
 boundaries between versions. A design in the documentation gets a version
 only when the compiler implements it and the tests cover it.
 
+## Unreleased
+
+- The development shell pins Intel SDE, so the full suite runs the AVX-512
+  checks on hosts without AVX-512F. One test helper selects each profile's
+  C compiler, flags and runner.
+- Relaxed SIMD and floating-point exception state follow the selected profile
+  explicitly rather than process-wide flags. Run expressions under
+  `wasm-simd128-relaxed` lower with that profile.
+- Native slow-frame arenas are allocated once per thread and freed when the
+  thread exits, instead of on every outermost framed call.
+- Traversals keep only bit zero of a Boolean uniform once, before their loop.
+
 ## 0.7.0
 
 - Package tests run without target assemblers or disassemblers. Separate

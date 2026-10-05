@@ -11,9 +11,6 @@ type error = { message : string }
 
 let format_error error = error.message
 
-(** The relaxed profile: only then may an object hold relaxed-SIMD instructions. *)
-let relaxed = ref false
-
 let compiler () = Option.value (Sys.getenv_opt "RAKE_WASM_CC") ~default:"clang"
 let disassembler () = Option.value (Sys.getenv_opt "RAKE_WASM_OBJDUMP") ~default:"llvm-objdump"
 
@@ -48,8 +45,8 @@ let contains text part =
   from 0
 
 (** Locals, constants and register-to-register work; no memory, calls or control flow. *)
-let allowed_instruction name =
-  ((not (contains name "relaxed")) || !relaxed) && (
+let allowed_instruction ~relaxed name =
+  ((not (contains name "relaxed")) || relaxed) && (
   List.mem name [ "local.get"; "local.set"; "local.tee"; "i32.const"; "i64.const"; "f32.const"; "f32.reinterpret_i32"; "end"; "select"; "i32.select"; "i64.select"; "f32.select"; "v128.select" ]
   (* Scalar register work: a uniform condition, and the scalar arithmetic
      clang substitutes for arithmetic on splats of uniforms. *)
@@ -93,7 +90,7 @@ let canonical_mnemonic = function
   | mnemonic -> mnemonic
 
 (** Function name to instruction mnemonics, from llvm-objdump's wasm disassembly. *)
-let disassembled_functions listing =
+let disassembled_functions ~relaxed listing =
   let functions = Hashtbl.create 8 in
   let current = ref None in
   String.split_on_char '\n' listing
@@ -112,7 +109,7 @@ let disassembled_functions listing =
                let instruction = String.trim (String.sub trimmed (colon + 1) (String.length trimmed - colon - 1)) in
                (* With raw bytes shown (the relaxed profile), the bytes come first, then a tab. *)
                let raw, instruction =
-                 if !relaxed then
+                 if relaxed then
                    match String.index_opt instruction '\t' with
                    | Some tab -> (String.sub instruction 0 tab, String.trim (String.sub instruction (tab + 1) (String.length instruction - tab - 1)))
                    | None -> ("", instruction)
@@ -133,23 +130,23 @@ let disassembled_functions listing =
            | _ -> ());
   functions
 
-let verify ~functions object_bytes =
+let verify ~relaxed ~functions object_bytes =
   let object_path = Filename.temp_file "rake-wasm-verify-" ".o" in
   Out_channel.with_open_bin object_path (fun channel -> output_string channel object_bytes);
   Fun.protect
     ~finally:(fun () -> Sys.remove object_path)
     (fun () ->
       let* listing =
-        run (Printf.sprintf "%s -d%s %s" (disassembler ()) (if !relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path))
+        run (Printf.sprintf "%s -d%s %s" (disassembler ()) (if relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path))
       in
-      let disassembled = disassembled_functions listing in
+      let disassembled = disassembled_functions ~relaxed listing in
       List.fold_left
         (fun result name ->
           let* () = result in
           match Hashtbl.find_opt disassembled name with
           | None -> Error { message = Printf.sprintf "function %s is missing from the encoded object" name }
           | Some mnemonics -> (
-              match List.find_opt (fun mnemonic -> not (allowed_instruction mnemonic)) mnemonics with
+              match List.find_opt (fun mnemonic -> not (allowed_instruction ~relaxed mnemonic)) mnemonics with
               | Some forbidden ->
                   Error
                     {
@@ -278,14 +275,14 @@ let equivalent selected name =
   || (name = "v128.store" && any_of [ "v128.store" ])
   || (List.mem name [ "v128.not"; "v128.andnot"; "v128.and"; "v128.or" ] && any_of [ "v128.bitselect"; "v128.and"; "v128.or"; "v128.andnot"; "v128.not"; "v128.xor" ])
 
-let verify_program ~scratches ~runs object_bytes =
+let verify_program ~relaxed ~scratches ~runs object_bytes =
   let object_path = Filename.temp_file "rake-wasm-verify-" ".o" in
   Out_channel.with_open_bin object_path (fun channel -> output_string channel object_bytes);
   Fun.protect
     ~finally:(fun () -> Sys.remove object_path)
     (fun () ->
-      let* listing = run (Printf.sprintf "%s -dr%s %s" (disassembler ()) (if !relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path)) in
-      let disassembled = disassembled_functions listing in
+      let* listing = run (Printf.sprintf "%s -dr%s %s" (disassembler ()) (if relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path)) in
+      let disassembled = disassembled_functions ~relaxed listing in
       let calls = relocated_calls listing in
       let find name =
         match Hashtbl.find_opt disassembled name with
@@ -297,7 +294,7 @@ let verify_program ~scratches ~runs object_bytes =
           (fun result name ->
             let* () = result in
             let* mnemonics = find name in
-            match List.find_opt (fun m -> not (allowed_instruction m)) mnemonics with
+            match List.find_opt (fun m -> not (allowed_instruction ~relaxed m)) mnemonics with
             | Some forbidden ->
                 Error { message = Printf.sprintf "function %s contains %s, outside the wasm-simd128 register-only allow-list" name forbidden }
             | None -> Ok ())
@@ -319,7 +316,7 @@ let verify_program ~scratches ~runs object_bytes =
             List.find_opt
               (fun m ->
                 List.mem m [ "call_indirect"; "return_call"; "return_call_indirect"; "global.get"; "global.set" ]
-                || (contains m "relaxed" && not !relaxed))
+                || (contains m "relaxed" && not relaxed))
               mnemonics
           with
           | Some m when contains m "relaxed" -> fail (Printf.sprintf "contains %s, a relaxed-SIMD instruction outside the wasm-simd128-relaxed profile" m)
@@ -340,10 +337,3 @@ let verify_program ~scratches ~runs object_bytes =
                   else Ok ()))
         (Ok ()) runs)
 
-(** Every function of a disassembled object and its instruction mnemonics. *)
-let listing_of object_bytes =
-  let object_path = Filename.temp_file "rake-wasm-listing-" ".o" in
-  Out_channel.with_open_bin object_path (fun channel -> output_string channel object_bytes);
-  Fun.protect
-    ~finally:(fun () -> Sys.remove object_path)
-    (fun () -> run (Printf.sprintf "%s -d%s %s" (disassembler ()) (if !relaxed then "" else " --no-show-raw-insn") (Filename.quote object_path)))

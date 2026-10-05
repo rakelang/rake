@@ -140,7 +140,7 @@ let next_virtual (func : N.func) =
 
 let select_function (func : N.func) =
   try
-    (match N.verify_function func with
+    (match N.verify_function ~floating_point_exceptions:true func with
     | Ok () -> ()
     | Error errors ->
         fail func.name

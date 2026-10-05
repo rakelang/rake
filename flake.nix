@@ -16,6 +16,21 @@
       ocamlPackages = pkgs.ocamlPackages;
       aarch64Cross = pkgs.pkgsCross.aarch64-multiplatform;
       wasiCross = pkgs.pkgsCross.wasi32;
+      # Intel SDE runs the AVX-512 runtime checks on hosts without AVX-512F.
+      # It is the release the CI workflow downloads.
+      intelSde = pkgs.stdenvNoCC.mkDerivation {
+        pname = "intel-sde";
+        version = "10.13.1-2026-07-28";
+        src = pkgs.fetchurl {
+          url = "https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-lin.tar.xz";
+          sha256 = "94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50";
+        };
+        nativeBuildInputs = [pkgs.autoPatchelfHook];
+        buildInputs = [pkgs.stdenv.cc.cc.lib];
+        autoPatchelfIgnoreMissingDeps = true;
+        dontStrip = true;
+        installPhase = "cp -r . $out";
+      };
     in {
       devShells.default = pkgs.mkShell {
         buildInputs = with ocamlPackages;
@@ -75,6 +90,7 @@
             aarch64Cross.buildPackages.binutils
             aarch64Cross.stdenv.cc
           ];
+        RAKE_SDE = pkgs.lib.optionalString (system == "x86_64-linux") "${intelSde}/sde64";
         RAKE_AARCH64_LIBC = "${aarch64Cross.glibc}";
         RAKE_AARCH64_LIBC_DEV = "${aarch64Cross.glibc.dev}";
         RAKE_AARCH64_LIBC_STATIC = "${aarch64Cross.glibc.static}";
