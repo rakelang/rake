@@ -7,6 +7,28 @@ only when the compiler implements it and the tests cover it.
 
 ## Unreleased
 
+- Runs apply calculations to whole stacks. A stack holds its count and one
+  column per field, and `run name(...) -> stack P` ends with its result:
+  `s with { field: e }`, masked by `where p`, or `compact s where p`. The
+  `for chunk in s using D up to <count>` traversal, `yield`, `mut stack` and
+  nested traversals are removed. General runs over views remain.
+- Stacks move into the run that returns it, which updates their columns in
+  place. Reading a moved stack is a compile error, and `copy(s)` makes an
+  explicit copy from the frame arena. Slow code reads `count(s)` and `s.field`.
+  A call traps when its stacks' counts differ, or when the result's columns
+  overlap other memory except element for element.
+- Compaction compiles on every target: `vcompressps` on AVX-512, `vpermps` by
+  a permutation table on AVX2, a jump to fixed `pshufd` permutations on SSE2,
+  `tbl` on NEON and `i8x16.swizzle` on WebAssembly, for 8-, 16- and 32-bit
+  columns.
+- One native kernel computes every output of a rack, so values the outputs
+  share are computed once.
+- A successful build of stack runs ends with a kernel report on standard
+  error, naming each run's domain, columns, selection and its method, and
+  tail transfers. `--no-report` omits it.
+- Stack descriptors are `struct rake_stack_P_v2`, a leading `int64_t count`
+  followed by the column pointers. The result's descriptor is passed
+  writable, and a compaction writes its count.
 - The development shell pins Intel SDE, so the full suite runs the AVX-512
   checks on hosts without AVX-512F. One test helper selects each profile's
   C compiler, flags and runner.

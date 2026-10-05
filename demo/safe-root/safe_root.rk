@@ -11,6 +11,5 @@ rake safe_root(values: f32s) -> f32s:
     | #valid(values) => rooted
     | #valid(values) gaps => <0.0>
 
-run roots(input: stack Samples, <count: i64>) -> f32:
-  for chunk in input using f32s up to <count>:
-    yield safe_root(chunk.value)
+run roots(input: stack Samples, output: stack Samples) -> stack Samples:
+  output with { value: safe_root(input.value) }

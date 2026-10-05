@@ -43,6 +43,7 @@ let () =
               provenance = fused;
             } ];
       result = Some 3;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations = [ (3, loc 2) ];
     }
@@ -63,6 +64,7 @@ let () =
         [ M.Select
             { dst = 3; mask = 0; if_true = 1; if_false = 2; provenance = source } ];
       result = Some 3;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations = [ (3, loc 11) ];
     }
@@ -81,6 +83,7 @@ let () =
             { dst = 3; mask = 0; if_true = 1; if_false = 2; provenance = source };
           M.And { dst = 4; left = 0; right = 0; provenance = source } ];
       result = Some 3;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations = [ (3, loc 21); (4, loc 22) ];
     }
@@ -111,6 +114,7 @@ let () =
       parameters = List.init 8 parameter;
       instructions = constants @ consumers;
       result = Some 41;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations =
         List.init 17 (fun index -> (8 + index, loc (70 + index)))

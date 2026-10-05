@@ -1,11 +1,18 @@
-pack Paired {
-  f32: first, second, third, fourth;
+~~ Native stack runs checked by native_streams.c against independent scalar C
+~~ for every count from 0 to 65, with each column ending at a guard page.
+
+pack Samples {
+  f32: value;
   u8: tag;
 }
 
 pack Roots {
   u8: tag;
-  f32: value;
+  f32: root;
+}
+
+pack Pair {
+  f32: first, second;
 }
 
 pack Words {
@@ -15,108 +22,20 @@ pack Words {
   f32: value;
 }
 
-pack WordResults {
-  i32: signed_value;
-  u8: tag;
-  u32: unsigned_value;
-}
-
 pack Compact {
   u8: byte;
   i16: small;
   u16: word;
   i8: tiny;
-  i32: value;
+  i32: total;
 }
 
-run widened_words(input: stack Compact, <count: i64>, <offset: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    let byte = bitcast(i32s, widen(row.byte))
-    let small = widen(row.small)
-    let word = bitcast(i32s, widen(row.word))
-    let tiny = widen(row.tiny)
-    yield ((byte + small) + word) + tiny + <offset>
-
-run widened_unsigned(input: stack Compact, <count: i32>) -> u32:
-  for row in input using u32s up to <count>:
-    let byte = widen(row.byte)
-    let word = widen(row.word)
-    let tiny = widen(row.tiny)
-    yield if tiny >= <0> then byte * word else byte + word
-
-run widened_update(input: mut stack Compact, <count: i32>, <offset: i32>):
-  for row in input using i32s up to <count>:
-    let byte = bitcast(i32s, widen(row.byte))
-    let small = widen(row.small)
-    let word = bitcast(i32s, widen(row.word))
-    let tiny = widen(row.tiny)
-    input.value <- ((byte + small) + word) + tiny + <offset>
-
-run widened_destination(input: stack Compact, <count: i64>, result: mut stack WordResults):
-  for row in input using u32s up to <count>:
-    let byte = widen(row.byte)
-    let word = widen(row.word)
-    result.unsigned_value <- byte + word
-
-run signed_words(input: stack Words, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    let first = row.first
-    let second = row.second
-    yield if first < second then first * second else abs(first) + second
-
-run unsigned_words(input: stack Words, <count: i64>, <low: u32>, <offset: u32>) -> u32:
-  for row in input using u32s up to <count>:
-    yield min(max(row.bits, <low>), <4294967294>) + <offset>
-
-run shifted_words(input: stack Words, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    yield shift_bits_right_signed(row.first, 31)
-
-run runtime_shifted_words(input: stack Words, <count: i32>, <amount: u32>) -> i32:
-  for row in input using i32s up to <count>:
-    let first = row.first
-    yield shift_bits_right_signed(first, <amount>) + first
-
-run runtime_unsigned_words(input: stack Words, <count: i64>, <amount: u32>) -> u32:
-  for row in input using u32s up to <count>:
-    let bits = row.bits
-    let moved = shift_bits_left(bits, <amount>)
-    yield shift_bits_right(moved, <amount>) + bits
-
-run runtime_update_words(input: mut stack Words, <count: i32>, <amount: u32>):
-  for row in input using i32s up to <count>:
-    input.second <- shift_bits_right_signed(row.first, <amount>)
-
-run runtime_write_words(input: stack Words, <count: i64>, result: mut stack WordResults, <amount: u32>):
-  for row in input using u32s up to <count>:
-    result.unsigned_value <- shift_bits_left(row.bits, <amount>)
-
-run reinterpreted_words(input: stack Words, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    let bits = row.bits
-    let signed = bitcast(i32s, bits)
-    yield if bits >= <2147483648> then signed else bitcast(i32s, bits + <1>)
-
-run reinterpreted_unsigned(input: stack Words, <count: i32>) -> u32:
-  for row in input using u32s up to <count>:
-    yield bitcast(u32s, row.first) + <1>
-
-run selected_words(input: stack Words, <count: i64>, <enabled: bool>) -> i32:
-  for row in input using i32s up to <count>:
-    let first = row.first
-    let second = row.second
-    let bits = row.bits
-    yield if <enabled> then (if bits >= <2147483648> then first else second) else first + <1>
-
-run update_words(input: mut stack Words, <count: i32>, <increment: i32>):
-  for row in input using i32s up to <count>:
-    input.second <- abs(row.first) + <increment>
-
-run write_words(input: stack Words, <count: i64>, result: mut stack WordResults, <enabled: bool>):
-  for row in input using u32s up to <count>:
-    let value = row.value
-    let bits = row.bits
-    result.unsigned_value <- if <enabled> then (if value >= <0.0> then bits else bits + <1>) else bits
+pack Particle {
+  f32: x, v;
+  u8: alive;
+  i16: charge;
+  u32: id;
+}
 
 rake nonnegative_root(values: f32s) -> f32s:
   tine #valid means values >= <0.0>
@@ -126,266 +45,103 @@ rake nonnegative_root(values: f32s) -> f32s:
     | #valid => rooted
     | _ => <0.0>
 
-run paired_roots(input: stack Paired, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    let first = nonnegative_root(row.first)
-    let second = nonnegative_root(row.second)
-    yield first + second
+~~ Two stacks: a read-only input and the result, another pack.
+run roots(input: stack Samples, output: stack Roots, <scale: f32>, <bias: f32>) -> stack Roots:
+  output with { root: nonnegative_root(input.value) * <scale> + <bias> }
 
-run repeated_roots(input: stack Paired, <count: i64>, <limit: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    let first = nonnegative_root(row.first)
-    total := first
-    let initial = total
-    repeat <i: i32> from <-1> up to <2>:
-      let <take: bool> = <i> < <limit>
-      let before = total
-      inner := before
-      repeat <j: i32> from <0> up to <2>:
-        inner <- inner + first
-      total <- if <take> then inner else before + initial
-    repeat <empty: i32> from <2> up to <2>:
-      total <- total / <0.0>
-    yield total + initial
+~~ Two columns replaced in place.
+run sum_and_difference(pair: stack Pair) -> stack Pair:
+  pair with { first: pair.first + pair.second, second: pair.first - pair.second }
 
-run repeated_words(input: stack Words, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    total := row.first
-    repeat <i: i32> from <0> up to <10>:
-      let before = total
-      total <- total + total
-      total <- total + before
-    yield total
+~~ Compact columns widened to 32-bit lanes.
+run combine(readings: stack Compact, <offset: i32>) -> stack Compact:
+  let byte = bitcast(i32s, widen(readings.byte))
+  let small = widen(readings.small)
+  let word = bitcast(i32s, widen(readings.word))
+  let tiny = widen(readings.tiny)
+  readings with { total: ((byte + small) + word) + tiny + <offset> }
 
-run repeated_destination(input: stack Words, <count: i64>, result: mut stack WordResults):
-  for row in input using u32s up to <count>:
-    values: [2]u32s := row.bits
-    repeat <i: i32> from <0> up to <2>:
-      let before = values[<i>]
-      values[<i>] <- before + <1>
-    result.unsigned_value <- values[<0>] * values[<1>]
+~~ Integer, float and Boolean uniforms in every register class.
+run integer_mix(words: stack Words, <mode: i32>, <scale: f32>, <pivot: u32>, <positive: bool>, <bias: f32>) -> stack Words:
+  let first = words.first
+  let second = words.second
+  let chosen = if <mode> < <0> then first else (if <pivot> >= <2147483648> then first else second)
+  let bits = words.bits
+  words with {
+    second: if <positive> then abs(chosen) + <7> else chosen,
+    bits: shift_bits_right(shift_bits_left(bits, <3>), <3>) + <1>,
+    value: if <positive> then words.value * <scale> + <bias> else words.value
+  }
 
-run compound_roots(input: stack Paired, <count: i64>, <enabled: bool>, <left: f32>, <right: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    let <gate: bool> = <enabled>
-    let <ordered: bool> = <gate> and <left> <= <right>
-    let <take: bool> = not <ordered> or <left> = <right>
-    yield if <take> then sqrt(row.first) else -sqrt(-row.first)
+~~ Eight f32 uniforms preserved across racks.
+run eight_uniforms(pair: stack Pair, <a: f32>, <b: f32>, <c: f32>, <d: f32>, <e: f32>, <f: f32>, <g: f32>, <h: f32>) -> stack Pair:
+  pair with { second: (((((((pair.first + <a>) + <b>) + <c>) + <d>) + <e>) + <f>) + <g>) + <h> }
 
-run compound_update(input: mut stack Paired, <count: i32>, <enabled: bool>, <value: f32>):
-  for row in input using f32s up to <count>:
-    let <gate: bool> = not <enabled>
-    let <take: bool> = <gate> or <value> > <0.0>
-    input.second <- if <take> then sqrt(row.first) else -sqrt(-row.first)
+~~ Repeated updates of a rack location, unrolled.
+run repeated(words: stack Words) -> stack Words:
+  total := words.first
+  repeat <i: i32> from <0> up to <10>:
+    let before = total
+    total <- total + total
+    total <- total + before
+  words with { first: total }
 
-run bound_comparison(input: stack Paired, <count: i32>, <enabled: bool>, <value: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    let <compared: bool> = <value> > <0.0>
-    let <take: bool> = <enabled> and <compared>
-    yield if <take> then sqrt(row.first) else -sqrt(-row.first)
+~~ A masked update: the records outside #alive keep their values.
+run advance(particles: stack Particle, <dt: f32>) -> stack Particle:
+  let alive = widen(particles.alive)
+  tine #alive means alive != <0>
+  particles with { x: particles.x + particles.v * <dt> } where #alive
 
-run absolute_rows(input: stack Paired, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield abs(row.first)
+~~ Compaction of 8-, 16- and 32-bit columns.
+run survivors(particles: stack Particle) -> stack Particle:
+  let alive = widen(particles.alive)
+  tine #alive means alive != <0>
+  compact particles where #alive
 
-run minimum_rows(input: stack Paired, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    yield min(row.first, row.second)
-
-run maximum_rows(input: stack Paired, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    yield max(row.first, row.second)
-
-run floor_rows(input: stack Paired, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield floor(row.first)
-
-run ceil_rows(input: stack Paired, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield ceil(row.first)
-
-run trunc_rows(input: stack Paired, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield trunc(row.first)
-
-run nearest_rows(input: stack Paired, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield nearest(row.first)
-
-run three_roots(input: stack Paired, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    let first = nonnegative_root(row.first)
-    let second = nonnegative_root(row.second)
-    let third = nonnegative_root(row.third)
-    yield (first + second) + third
-
-run four_roots(input: stack Paired, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    let first = nonnegative_root(row.first)
-    let second = nonnegative_root(row.second)
-    let third = nonnegative_root(row.third)
-    let fourth = nonnegative_root(row.fourth)
-    yield ((first + second) + third) + fourth
-
-run weighted_roots(input: stack Paired, <count: i64>, <scale: f32>, <bias: f32>, <threshold: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    let rooted = nonnegative_root(row.first)
-    yield if row.first >= <threshold> then rooted * <scale> + <bias> else <0.0>
-
-run signed_roots(input: stack Paired, <count: i64>, <mode: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield if <mode> >= <0.0> then sqrt(row.first) else -sqrt(-row.first)
-
-run integer_roots(input: stack Paired, <count: i32>, <mode: i32>, <scale: f32>, <pivot: u32>, <positive: bool>, <bias: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    let first = row.first
-    let second = row.second
-    let chosen = if <mode> < <0> then first else (if <pivot> >= <2147483648> then first else second)
-    yield if <positive> then sqrt(chosen) * <scale> + <bias> else -sqrt(-first)
-
-run integer_update(input: mut stack Paired, <count: i64>, <mode: i32>, <a: f32>, <b: f32>, <pivot: u32>, <c: f32>, <enabled: bool>):
-  for row in input using f32s up to <count>:
-    let value = row.first
-    input.first <- if <enabled> then (if <mode> < <0> then (if <pivot> >= <2147483648> then (value + <a>) + <b> + <c> else value) else value) else value
-
-run integer_destination(input: stack Paired, <count: i64>, result: mut stack Roots, <mode: i32>, <scale: f32>, <pivot: u32>, <enabled: bool>):
-  for row in input using f32s up to <count>:
-    let value = row.first
-    result.value <- if <enabled> then (if <mode> < <0> then (if <pivot> >= <2147483648> then value * <scale> else value) else value) else value
-
-run eight_uniforms(input: stack Paired, <count: i64>, <a: f32>, <b: f32>, <c: f32>, <d: f32>, <e: f32>, <f: f32>, <g: f32>, <h: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    let columns = ((row.first + row.second) + row.third) + row.fourth
-    yield (((((((columns + <a>) + <b>) + <c>) + <d>) + <e>) + <f>) + <g>) + <h>
-
-run update_first(input: mut stack Paired, <count: i32>, <scale: f32>, <bias: f32>):
-  for row in input using f32s up to <count>:
-    input.first <- nonnegative_root(row.first) * <scale> + <bias>
-
-run update_second(input: mut stack Paired, <count: i64>, <scale: f32>, <bias: f32>):
-  for row in input using f32s up to <count>:
-    input.second <- nonnegative_root(row.first) * <scale> + <bias>
-
-run update_fourth(input: mut stack Paired, <count: i64>):
-  for row in input using f32s up to <count>:
-    let first = nonnegative_root(row.first)
-    let second = nonnegative_root(row.second)
-    let third = nonnegative_root(row.third)
-    let fourth = nonnegative_root(row.fourth)
-    input.fourth <- ((first + second) + third) + fourth
-
-run write_roots(input: stack Paired, <count: i32>, result: mut stack Roots, <scale: f32>, <bias: f32>):
-  for row in input using f32s up to <count>:
-    result.value <- nonnegative_root(row.first) * <scale> + <bias>
+~~ Compaction of the records a predicate keeps, with a replaced column.
+run fast_survivors(particles: stack Particle, <limit: f32>) -> stack Particle:
+  let alive = widen(particles.alive)
+  tine #alive means alive != <0>
+  tine #fast means particles.v > <limit>
+  compact particles with { x: particles.x + particles.v } where (#alive and #fast)
 
 slow main() -> i32:
-  let a: [9]f32 = [-4.0, 16.0, 25.0, -1.0, 0.0, 4.0, 9.0, 36.0, 49.0]
-  let b: [9]f32 = [9.0, -4.0, 0.0, 1.0, 16.0, 9.0, 4.0, 0.0, 16.0]
-  let tags: [9]u8 = [0; 9]
-  result: [9]f32 := [0.0; 9]
-  paired_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, result)
-  let pair = i32(result[0] + result[8])
-  weighted_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, <2.0>, <3.0>, <0.0>, result)
-  let weighted = i32(result[1])
-  eight_uniforms(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, <2.0>, <3.0>, <4.0>, <5.0>, <6.0>, <7.0>, <8.0>, result)
-  let combined = i32(result[1])
-  working: [9]f32 := [-4.0, 16.0, 25.0, -1.0, 0.0, 4.0, 9.0, 36.0, 49.0]
-  writable_tags: [9]u8 := [0; 9]
-  update_first(stack Paired { first: working, second: working, third: working, fourth: working, tag: writable_tags }, <9>, <2.0>, <3.0>)
-  let updated = i32(working[1])
-  write_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, stack Roots { tag: writable_tags, value: result }, <2.0>, <3.0>)
-  let written = i32(result[1])
-  absolute_rows(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, result)
-  let magnitude_sum = i32(result[0] + result[8])
-  let compound_values: [9]f32 = [9.0; 9]
-  repeated_roots(stack Paired { first: compound_values, second: b, third: a, fourth: b, tag: tags }, <9>, <1>, result)
-  if result[0] != 21.0 or result[8] != 21.0:
+  values: [9]f32 := [-4.0, 16.0, 25.0, -1.0, 0.0, 4.0, 9.0, 36.0, 49.0]
+  tags: [9]u8 := [0; 9]
+  roots_out: [9]f32 := [0.0; 9]
+  root_tags: [9]u8 := [0; 9]
+  let written = roots(stack Samples { value: values, tag: tags }, stack Roots { tag: root_tags, root: roots_out }, <2.0>, <3.0>)
+  if roots_out[0] != 3.0 or roots_out[1] != 11.0 or roots_out[8] != 17.0:
     return 1
-  compound_roots(stack Paired { first: compound_values, second: b, third: a, fourth: b, tag: tags }, <9>, <false>, <0.0>, <1.0>, result)
-  if result[1] != 3.0 or result[8] != 3.0:
-    return 1
-  positives: [9]f32 := [4.0; 9]
-  signed_roots(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, result)
-  if result[0] != 2.0 or result[8] != 2.0:
-    return 1
-  signed_roots(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, <1.0>, positives)
-  if positives[0] != 2.0 or positives[8] != 2.0:
-    return 1
-  integer_roots(stack Paired { first: a, second: b, third: a, fourth: b, tag: tags }, <9>, <-2147483648>, <2.0>, <4294967295>, <true>, <3.0>, result)
-  if result[1] != 11.0 or result[8] != 17.0:
-    return 1
-  integer_update(stack Paired { first: positives, second: positives, third: positives, fourth: positives, tag: writable_tags }, <9>, <-2147483648>, <1.0>, <2.0>, <4294967295>, <3.0>, <true>)
-  if positives[0] != 8.0 or positives[8] != 8.0:
-    return 1
-  integer_destination(stack Paired { first: positives, second: b, third: a, fourth: b, tag: tags }, <9>, stack Roots { tag: writable_tags, value: result }, <-2147483648>, <2.0>, <4294967295>, <true>)
-  if result[0] != 16.0 or result[8] != 16.0:
-    return 1
-  let signed_a: [9]i32 = [-2147483648, -1, 0, 2147483647, -17, 29, 1, -2, 536870912]
-  let signed_b: [9]i32 = [-1, 2147483647, -2147483648, 1, 29, -17, 1, -2, 536870912]
-  let unsigned_a: [9]u32 = [0, 2147483647, 2147483648, 4294967295, 1, 2147483649, 4294967294, 17, 29]
-  signed_output: [9]i32 := [0; 9]
-  unsigned_output: [9]u32 := [0; 9]
-  repeated_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
+  firsts: [9]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+  seconds: [9]f32 := [9.0; 9]
+  pair := sum_and_difference(stack Pair { first: firsts, second: seconds })
+  if firsts[0] != 10.0 or seconds[8] != 0.0:
+    return 2
+  pair <- eight_uniforms(pair, <1.0>, <2.0>, <3.0>, <4.0>, <5.0>, <6.0>, <7.0>, <8.0>)
+  if seconds[0] != 46.0:
+    return 3
+  bytes: [9]u8 := [0, 1, 127, 128, 255, 17, 254, 42, 0]
+  smalls: [9]i16 := [-32768, -1, 0, 1, 32767, 128, -128, 17, -17]
+  words: [9]u16 := [0, 1, 32767, 32768, 65535, 128, 65408, 17, 29]
+  tinies: [9]i8 := [-128, -1, 0, 1, 127, 17, -17, -128, 127]
+  totals: [9]i32 := [0; 9]
+  let combined = combine(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, total: totals }, <5>)
   for i from 0 up to 9:
-    if signed_output[i] != wrap_mul(signed_a[i], 59049):
-      return 1
-  repeated_destination(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output })
-  for i from 0 up to 9:
-    let incremented = wrap_add(unsigned_a[i], 1)
-    if unsigned_output[i] != wrap_mul(incremented, incremented):
-      return 1
-  reinterpreted_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
-  for i from 0 up to 9:
-    let raw = if unsigned_a[i] >= 2147483648 then i64(unsigned_a[i]) else i64(unsigned_a[i]) + 1
-    let expected = if raw >= 2147483648 then raw - 4294967296 else raw
-    if i64(signed_output[i]) != expected:
-      return 1
-  reinterpreted_unsigned(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, unsigned_output)
-  for i from 0 up to 9:
-    let unsigned_value = if signed_a[i] < 0 then i64(signed_a[i]) + 4294967296 else i64(signed_a[i])
-    let expected = (unsigned_value + 1) % 4294967296
-    if i64(unsigned_output[i]) != expected:
-      return 1
-  signed_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
-  for i from 0 up to 9:
-    let magnitude = if signed_a[i] < 0 then wrap_sub(0, signed_a[i]) else signed_a[i]
-    let expected = if signed_a[i] < signed_b[i] then wrap_mul(signed_a[i], signed_b[i]) else wrap_add(magnitude, signed_b[i])
-    if signed_output[i] != expected:
-      return 1
-  unsigned_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, <2147483648>, <4294967295>, unsigned_output)
-  for i from 0 up to 9:
-    let expected = wrap_add(min(max(unsigned_a[i], 2147483648), 4294967294), 4294967295)
-    if unsigned_output[i] != expected:
-      return 1
-  shifted_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, signed_output)
-  for i from 0 up to 9:
-    if signed_output[i] != (if signed_a[i] < 0 then -1 else 0):
-      return 1
-  selected_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, <true>, signed_output)
-  for i from 0 up to 9:
-    if signed_output[i] != (if unsigned_a[i] >= 2147483648 then signed_a[i] else signed_b[i]):
-      return 1
-  update_words(stack Words { tag: writable_tags, first: signed_output, second: signed_output, bits: unsigned_output, value: working }, <9>, <7>)
-  write_words(stack Words { tag: tags, first: signed_a, second: signed_b, bits: unsigned_a, value: a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output }, <true>)
-  for i from 0 up to 9:
-    if unsigned_output[i] != (if a[i] >= 0.0 then unsigned_a[i] else wrap_add(unsigned_a[i], 1)):
-      return 1
-  let bytes: [9]u8 = [0, 1, 127, 128, 255, 17, 254, 42, 0]
-  let smalls: [9]i16 = [-32768, -1, 0, 1, 32767, 128, -128, 17, -17]
-  let words: [9]u16 = [0, 1, 32767, 32768, 65535, 128, 65408, 17, 29]
-  let tinies: [9]i8 = [-128, -1, 0, 1, 127, 17, -17, -128, 127]
-  widened_words(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, value: signed_a }, <9>, <2147483647>, signed_output)
-  for i from 0 up to 9:
-    let expected = wrap_add(((i32(bytes[i]) + i32(smalls[i])) + i32(words[i])) + i32(tinies[i]), 2147483647)
-    if signed_output[i] != expected:
-      return 1
-  widened_unsigned(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, value: signed_a }, <9>, unsigned_output)
-  for i from 0 up to 9:
-    let expected = if tinies[i] >= 0 then u32(bytes[i]) * u32(words[i]) else u32(bytes[i]) + u32(words[i])
-    if unsigned_output[i] != expected:
-      return 1
-  widened_destination(stack Compact { byte: bytes, small: smalls, word: words, tiny: tinies, value: signed_a }, <9>, stack WordResults { signed_value: signed_output, tag: writable_tags, unsigned_value: unsigned_output })
-  for i from 0 up to 9:
-    if unsigned_output[i] != u32(bytes[i]) + u32(words[i]):
-      return 1
-  return pair + weighted + combined + updated + written + magnitude_sum
+    if totals[i] != ((i32(bytes[i]) + i32(smalls[i])) + i32(words[i])) + i32(tinies[i]) + 5:
+      return 4
+  xs: [9]f32 := [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+  vs: [9]f32 := [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 5.0]
+  alive: [9]u8 := [1, 0, 1, 1, 0, 1, 1, 0, 1]
+  charges: [9]i16 := [-1, 2, -3, 4, -5, 6, -7, 8, -9]
+  ids: [9]u32 := [10, 11, 12, 13, 14, 15, 16, 17, 18]
+  particles := advance(stack Particle { x: xs, v: vs, alive: alive, charge: charges, id: ids }, <0.5>)
+  if xs[0] != 0.5 or xs[1] != 1.0 or xs[8] != 10.5:
+    return 5
+  particles <- survivors(particles)
+  if count(particles) != 6 or ids[1] != 12 or charges[5] != -9 or particles.id[5] != 18:
+    return 6
+  particles <- fast_survivors(particles, <0.0>)
+  if count(particles) != 4 or particles.id[3] != 18 or particles.x[0] != 1.5:
+    return 7
+  return 160 + i32(count(written)) - 9 + i32(count(combined)) - 9

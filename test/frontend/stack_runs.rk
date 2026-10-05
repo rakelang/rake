@@ -1,0 +1,26 @@
+~~ Stack runs over whole columns, with results in the same or another pack.
+pack Point {
+  f32: x, y;
+}
+
+pack Magnitudes {
+  f32: magnitude;
+}
+
+scratch distance_2d(x: f32s, y: f32s) -> f32s:
+  sqrt(x * x + y * y)
+
+run compute_magnitudes(points: stack Point, out: stack Magnitudes) -> stack Magnitudes:
+  out with { magnitude: distance_2d(points.x, points.y) }
+
+run offset_all(points: stack Point, <offset: f32>) -> stack Point:
+  points with { x: points.x + <offset>, y: points.y + <offset> }
+
+run scale_points(data: stack Point, <scale: f32>) -> stack Point:
+  let scaled_x = data.x * <scale>
+  let scaled_y = data.y * <scale>
+  data with { x: distance_2d(scaled_x, scaled_y) }
+
+run near_points(points: stack Point, <limit: f32>) -> stack Point:
+  tine #near means points.x * points.x + points.y * points.y <= <limit>
+  compact points where #near

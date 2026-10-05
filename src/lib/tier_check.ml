@@ -25,7 +25,7 @@ let format_error (loc : Ast.loc) message =
   Printf.sprintf "%s:%d:%d: Type error: %s" loc.file loc.line loc.col message
 
 type vector_sig =
-  | Sig_run of run_param list * scalar option
+  | Sig_run of run_param list * (string * string) option  (** a stack run's result stack and pack *)
   | Sig_scratch of (string * ty * bool) list * ty  (** name, type, uniform; result *)
 
 type ctx = {
@@ -85,12 +85,10 @@ let rec ty_of ctx (t : Ast.typ) =
       | _ -> Array (n, storable ctx inner))
   | TView inner -> View (storable ctx inner, false)
   | TMut { v = TView inner; _ } -> View (storable ctx inner, true)
-  | TMut { v = TStack name; _ } ->
-      if not (Hashtbl.mem ctx.packs name) then fail t.loc "unknown pack '%s'" name;
-      Stack (name, true)
+  | TMut { v = TStack _; _ } -> fail t.loc "a stack moves into the run that returns it: drop mut"
   | TStack name ->
       if not (Hashtbl.mem ctx.packs name) then fail t.loc "unknown pack '%s'" name;
-      Stack (name, false)
+      Stack name
   | TPtr (inner, access) -> Ptr (pointee ctx inner, access)
   | TFun (args, result) ->
       let abi_type (t : Ast.typ) =
@@ -138,7 +136,7 @@ let rec equal_ty a b =
   | Function_pointer (xs, x), Function_pointer (ys, y) ->
       List.length xs = List.length ys && List.for_all2 equal_ty xs ys && equal_ty x y
   | Record x, Record y -> x = y
-  | Stack (x, w), Stack (y, v) -> x = y && w = v
+  | Stack x, Stack y -> x = y
   | Str, Str | Void, Void -> true
   | _ -> false
 
@@ -260,8 +258,6 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
             (match bty with
              | Rack _ | Mask _ | Rack_array _ when env.mode = Slow_mode ->
                  fail loc "slow code can't hold rack or mask '%s'; reduce or extract it before the slow block" name
-             | Stack _ when env.mode = Slow_mode ->
-                 fail loc "slow code can't use traversal chunk or stack '%s'; pass its memory to a run" name
              | _ -> ());
             if env.mode = Vector_mode && not buniform then
               fail loc "'%s' is not a uniform scalar" name;
@@ -375,6 +371,13 @@ let rec check_uniform env ?expected (e : Ast.expr) : expr =
       element env loc base index unchecked
   | EField (base, field) -> (
       let base = check_uniform env base in
+      match base.ty with
+      | Stack pack -> (
+          (* A column of a stack is a writable view of its records. *)
+          match List.assoc_opt field (Hashtbl.find env.ctx.packs pack).pack_fields with
+          | Some element -> mk (Field (base, field)) (View (Sc element, true)) loc
+          | None -> fail loc "pack %s has no field '%s'" pack field)
+      | _ ->
       let record =
         match base.ty with
         | Record name | Ptr (Record name, _) -> Hashtbl.find env.ctx.records name
@@ -483,13 +486,14 @@ and stack_literal env loc name inits =
                 | Some i ->
                     let v = as_view env (check_uniform env i.init_value) in
                     (match v.ty with
-                     | View (Sc s, _) when s = element -> ()
+                     | View (Sc s, true) when s = element -> ()
+                     | View (Sc s, false) when s = element ->
+                         fail i.init_value.loc "column %s is read-only: a run updates its stack in place, so pass a writable view or array" field
                      | ty -> fail i.init_value.loc "column %s holds %s; got %s" field (string_of_ty (Sc element)) (string_of_ty ty));
                     (field, v))
               pack.pack_fields
           in
-          let writable = List.for_all (fun (_, v) -> match v.ty with View (_, w) -> w | _ -> false) fields in
-          mk (Stack_lit (name, fields)) (Stack (name, writable)) loc
+          mk (Stack_lit (name, fields)) (Stack name) loc
       | None -> fail loc "unknown pack '%s'" name
 
 (** An array passed where a view is expected is a borrow of all its elements. *)
@@ -553,7 +557,13 @@ and call env ?expected loc name args =
       let a = arg a in
       match a.ty with
       | View _ | Array _ -> mk (Length a) (Sc SInt) loc
-      | ty -> fail loc "count takes a view or array, got %s" (string_of_ty ty))
+      | Stack _ -> mk (Length a) (Sc SInt64) loc
+      | ty -> fail loc "count takes a view, array or stack, got %s" (string_of_ty ty))
+  | "copy", [ a ] when env.mode = Slow_mode -> (
+      let a = arg a in
+      match a.ty with
+      | Stack _ -> mk (Stack_copy a) a.ty loc
+      | ty -> fail loc "copy takes a stack, got %s" (string_of_ty ty))
   | "slice", [ a; start; count ] -> (
       let a = arg a in
       let start = arg ~expected:(Sc SInt) start and count = arg ~expected:(Sc SInt) count in
@@ -670,37 +680,31 @@ and vector_call env loc name signature args =
          if not w then fail a.loc "this run writes the argument: pass a writable view";
          require a.loc (View (e, true)) (View (f, true)) "a view argument"
      | View (e, false), View (f, _) -> require a.loc (View (e, false)) (View (f, false)) "a view argument"
-     | Stack (s, true), Stack (t, w) ->
-         if not w then fail a.loc "this run writes the stack: pass writable columns";
-         if s <> t then fail a.loc "a stack of %s is expected, got %s" s t
-     | Stack (s, false), Stack (t, _) -> if s <> t then fail a.loc "a stack of %s is expected, got %s" s t
+     | Stack s, Stack t -> if s <> t then fail a.loc "a stack of %s is expected, got %s" s t
      | expected, actual -> require a.loc expected actual "a memory argument");
     Arg_memory (read_only_view expected v)
   in
   match signature with
-  | Sig_run (params, stream) ->
-      let expected = List.length params + (if stream = None then 0 else 1) in
-      if List.length args <> expected then
-        fail loc "run %s takes %d arguments%s, got %d" name expected
-          (if stream = None then "" else " (its last the output view)") (List.length args);
+  | Sig_run (params, result) ->
+      if List.length args <> List.length params then
+        fail loc "run %s takes %d arguments, got %d" name (List.length params) (List.length args);
       let rec go params args =
         match (params, args) with
         | [], [] -> []
-        | [], [ out ] -> (
-            match stream with Some s -> [ memory_arg (View (Sc s, true)) out ] | None -> assert false)
         | p :: ps, a :: rest ->
             let v =
               match p with
               | Run_uniform (_, s) -> uniform_arg s a
               | Run_view (_, s, w) -> memory_arg (View (Sc s, w)) a
-              | Run_stack (_, pack, w) -> memory_arg (Stack (pack, w)) a
+              | Run_stack (_, pack) -> memory_arg (Stack pack) a
               | Run_rack (pname, _) ->
                   fail a.loc "run %s takes rack %s, which slow code can't hold" name pname
             in
             v :: go ps rest
         | _ -> fail loc "argument count mismatch"
       in
-      mk (Vector_call (name, go params args)) Void loc
+      let ty = match result with Some (_, pack) -> Stack pack | None -> Void in
+      mk (Vector_call (name, go params args)) ty loc
   | Sig_scratch (params, result) ->
       if List.length params <> List.length args then
         fail loc "%s takes %d arguments, got %d" name (List.length params) (List.length args);
@@ -768,7 +772,6 @@ and check_slow_stmt env (stmt : Ast.stmt) =
     (match ty with
      | Void -> fail loc "'%s' would hold nothing" name
      | Str -> fail loc "a string literal is passed to an extern, not stored"
-     | Stack _ -> fail loc "a stack is built at the run call it is passed to"
      | _ -> ());
     let env = bind env loc name { bty = ty; bmut = mutable_; buniform = false; bconst = None } in
     (env, st (Decl (name, ty, Some v, mutable_)))
@@ -814,7 +817,7 @@ and check_slow_stmt env (stmt : Ast.stmt) =
       (env, st (Return (Some v)))
   | SFused _ -> fail loc "fused bindings are vector code"
   | SUniform _ -> fail loc "every slow value is scalar: write let name: T = value"
-  | SOver _ | SYield _ -> fail loc "traversals are run code"
+  | STine _ | SResult _ -> fail loc "local tines and stack results are stack run code"
 
 and assign env loc (target : expr) value =
   if not (is_writable_place env target) then fail loc "this location can't be assigned";
@@ -855,7 +858,7 @@ let run_params ctx loc (params : Ast.param list) =
           | ty -> fail loc "<%s> must be a scalar, got %s" name (string_of_ty ty))
       | PRack (name, Some t) -> (
           match ty_of ctx t with
-          | Stack (pack, w) -> Run_stack (name, pack, w)
+          | Stack pack -> Run_stack (name, pack)
           | View (Sc s, w) -> Run_view (name, s, w)
           | Rack s -> Run_rack (name, s)
           | ty -> fail loc "a run takes stacks, views of scalars, racks and <uniform> scalars, not %s" (string_of_ty ty))
@@ -877,8 +880,9 @@ let constant_value ctx (e : expr) =
 
 (* ─── Runs ──────────────────────────────────────────────────────────── *)
 
-(** The traversal a run statement sits in: chunk name, pack, domain. *)
-type traversal_scope = { chunk : string; chunk_pack : pack; domain : scalar; outer : traversal_scope option }
+(** A stack run's records: each stack, read through its name, and the domain
+    whose lanes they share. *)
+type traversal_scope = { stacks : (string * pack) list; domain : scalar }
 
 (** [bound] holds the names one statement's normalisation has hoisted so far;
     the statement's checker folds them into its environment. [in_branch]
@@ -997,7 +1001,7 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
         | Rack _ | Mask _ -> e
         | Rack_array _ -> fail loc "rack array %s is used one element at a time: %s[<k>]" name name
         | View _ -> fail loc "%s is memory: load a rack with %s[<index>]" name name
-        | Stack _ -> fail loc "%s is a stack: use a traversal over it" name
+        | Stack _ -> fail loc "%s is a stack: read its columns as %s.field" name name
         | Sc _ -> fail loc "uniform scalar %s is written <%s>" name name
         | ty -> fail loc "%s holds %s, which is not a rack" name (string_of_ty ty))
   | EScalarVar name -> (
@@ -1034,7 +1038,7 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
              | s -> fail loc "wasm-simd128 gathers 32-bit elements; %s has %d-bit elements" base (bits s));
             (match renv.scope with
              | Some { domain; _ } when bits domain <> 32 ->
-                 fail loc "a gather in a traversal takes the traversal's lanes: traverse with a 32-bit domain such as f32s or i32s"
+                 fail loc "a gather takes 32-bit lanes: this run's widest column isn't 32 bits"
              | _ -> ());
             let name = fresh renv.env "gather" in
             emit renv loc (R_gather (name, element, view, index_name, not unchecked));
@@ -1051,7 +1055,7 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
   | EIndex _ -> fail loc "vector code indexes a named view or rack array"
   | EField ({ v = EVar chunk; _ }, field) -> chunk_column renv loc chunk field false
   | ECall ("widen", [ { v = EField ({ v = EVar chunk; _ }, field); loc = floc } ]) -> chunk_column renv floc chunk field true
-  | EField _ -> fail loc "vector code reads fields of a traversal chunk only"
+  | EField _ -> fail loc "vector code reads the columns of its stacks only"
   | ECall (name, args) -> re (ECall (name, List.map (normalise renv) args))
   | EBinop (a, op, b) -> re (EBinop (normalise renv a, op, normalise renv b))
   | EUnop (op, a) -> re (EUnop (op, normalise renv a))
@@ -1076,16 +1080,17 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
 
 and chunk_column renv loc chunk field widened =
   match renv.scope with
-  | Some scope when scope.chunk = chunk -> (
-      match List.assoc_opt field scope.chunk_pack.pack_fields with
-      | None -> fail loc "pack %s has no column '%s'" scope.chunk_pack.pack_name field
+  | Some scope when List.mem_assoc chunk scope.stacks -> (
+      let pack = List.assoc chunk scope.stacks in
+      match List.assoc_opt field pack.pack_fields with
+      | None -> fail loc "pack %s has no column '%s'" pack.pack_name field
       | Some stored ->
           let element =
             if bits stored = bits scope.domain then (
-              if widened then fail loc "widen requires a stored element narrower than the traversal domain";
+              if widened then fail loc "widen requires a stored element narrower than the run's domain";
               stored)
             else if bits stored > bits scope.domain then
-              fail loc "column %s is wider than the %s traversal domain" field (string_of_ty (Rack scope.domain))
+              fail loc "column %s is wider than the run's %s domain" field (string_of_ty (Rack scope.domain))
             else if not widened then
               fail loc "column %s stored as %s is a storage slice; call widen(column) explicitly" field (string_of_ty (Sc stored))
             else
@@ -1098,12 +1103,10 @@ and chunk_column renv loc chunk field widened =
               | _ -> fail loc "no value-preserving widening of %s to %s lanes" (string_of_ty (Sc stored)) (string_of_ty (Rack scope.domain))
           in
           let name = fresh renv.env "column" in
-          emit renv loc (R_chunk_load (name, element, field, stored));
+          emit renv loc (R_chunk_load (name, element, chunk, field, stored));
           renv_bind_rack renv name (Rack element);
           { Ast.v = Ast.EVar name; loc })
-  | Some scope when (let rec outer = function Some s -> s.chunk = chunk || outer s.outer | None -> false in outer scope.outer) ->
-      fail loc "%s is an outer traversal's chunk: bind %s.%s with let before the nested traversal" chunk chunk field
-  | _ -> fail loc "%s is not a traversal chunk here" chunk
+  | _ -> fail loc "%s is not a stack of this run" chunk
 
 and renv_bind_rack renv name ty =
   renv.bound := SM.add name { bty = ty; bmut = false; buniform = false; bconst = None } !(renv.bound)
@@ -1133,7 +1136,6 @@ let statement_count stmts =
     match s.v with
     | SIf (_, a, b) -> 1 + List.fold_left (fun n s -> n + count s) 0 (a @ b)
     | SLoop l -> 1 + List.fold_left (fun n s -> n + count s) 0 l.loop_body
-    | SOver o -> 1 + List.fold_left (fun n s -> n + count s) 0 o.over_body
     | _ -> 1
   in
   List.fold_left (fun n s -> n + count s) 0 stmts
@@ -1143,22 +1145,96 @@ let statement_count stmts =
     never slower; this bounds code size and compile time. *)
 let unroll_budget = 4096
 
-let rec check_run_block renv (stmts : Ast.stmt list) ~yield_last : run_env * rstmt list =
-  let outer = renv.emit in
-  renv.emit |> ignore;
-  let collected = ref [] in
-  let renv = { renv with emit = collected } in
-  let count = List.length stmts in
-  let renv =
-    List.fold_left
-      (fun (renv, index) stmt -> (check_run_stmt renv stmt ~last:(yield_last && index = count - 1), index + 1))
-      (renv, 0) stmts
-    |> fst
+(** Every stack column a stack run's body names, as (stack, field) in order of
+    first appearance, including the arguments of global tine applications. *)
+let named_columns stacks (body : Ast.stmt list) =
+  let found = ref [] in
+  let rec expr (e : Ast.expr) =
+    match e.v with
+    | EField ({ v = EVar s; _ }, f) when List.mem_assoc s stacks ->
+        if not (List.mem (s, f) !found) then found := (s, f) :: !found
+    | EBinop (a, _, b) | EPipe (a, b) | EFusedPipe (a, b) | EExtract (a, b) | EGather (a, b)
+    | ECompress (a, b) | EOuter (a, b) | EIndex (a, b, _) -> expr a; expr b
+    | EUnop (_, a) | EField (a, _) | EReduce (_, a) | EScan (_, a) | EShuffle (a, _)
+    | EShift (a, _, _) | ERotate (a, _, _) | EBroadcast a | EConvert (_, _, a) | ELambda (_, a) -> expr a
+    | EInsert (a, b, c) | EScatter (a, b, c) | EExpand (a, b, c) | EFma (a, b, c) | EIf (a, b, c) ->
+        expr a; expr b; expr c
+    | ECall (_, items) | ETuple items | EArray items -> List.iter expr items
+    | ELet (b, a) -> expr b.bind_expr; expr a
+    | ERecord (_, inits) | EStack (_, inits) -> List.iter (fun (i : Ast.field_init) -> expr i.init_value) inits
+    | EWith (a, inits) -> expr a; List.iter (fun (i : Ast.field_init) -> expr i.init_value) inits
+    | EInt _ | EFloat _ | EBool _ | EVar _ | EScalarVar _ | ELaneIndex | ELanes | EUnit | EString _
+    | ETines _ | ESlow _ -> ()
+  and predicate (p : Ast.predicate) =
+    match p.v with
+    | PCmp (a, _, b) | PIs (a, b) | PIsNot (a, b) -> expr a; expr b
+    | PExpr a -> expr a
+    | PAnd (a, b) | POr (a, b) -> predicate a; predicate b
+    | PNot a -> predicate a
+    | PTineCall (_, args) -> List.iter expr args
+    | PTineRef _ -> ()
+  and stmt (s : Ast.stmt) =
+    match s.v with
+    | SLet b | SUniform b -> expr b.bind_expr
+    | SFused f -> expr f.fused_expr
+    | SLocBind l -> expr l.loc_expr
+    | SAssign (_, e) | SExpr e -> expr e
+    | SStore (a, b) -> expr a; expr b
+    | STine t -> predicate t.tine_pred
+    | SResult r ->
+        List.iter (fun (i : Ast.field_init) -> expr i.init_value) r.result_fields;
+        Option.iter predicate r.result_where
+    | SIf (c, a, b) -> expr c; List.iter stmt a; List.iter stmt b
+    | SWhile (c, a) -> expr c; List.iter stmt a
+    | SLoop l -> List.iter stmt l.loop_body
+    | SReturn e -> Option.iter expr e
+    | SBreak | SContinue -> ()
   in
-  ignore outer;
+  List.iter stmt body;
+  List.rev !found
+
+(** A predicate as a mask expression over the run's values. Global tine
+    applications are expanded, and a local tine is the mask bound to it. *)
+let predicate_mask renv (predicate : Ast.predicate) =
+  let rec go (p : Ast.predicate) : Ast.expr =
+    let node v = { Ast.v; loc = p.loc } in
+    match p.v with
+    | PCmp (left, operator, right) ->
+        let operator = match operator with
+          | Ast.CLt -> Ast.Lt | CLe -> Le | CGt -> Gt | CGe -> Ge | CEq -> Eq | CNe -> Ne in
+        node (Ast.EBinop (left, operator, right))
+    | PAnd (left, right) -> node (Ast.EBinop (go left, Ast.And, go right))
+    | POr (left, right) -> node (Ast.EBinop (go left, Ast.Or, go right))
+    | PNot operand -> node (Ast.EUnop (Ast.Not, go operand))
+    | PTineRef name ->
+        let bound = "tine$" ^ name in
+        if not (SM.mem bound renv.env.vars) then fail p.loc "undefined tine #%s" name;
+        node (Ast.EVar bound)
+    | PExpr e -> e
+    | PTineCall _ | PIs _ | PIsNot _ -> fail p.loc "this predicate has no vector meaning in a run"
+  in
+  go (Tines.expand_calls renv.env.ctx.tc.global_tines predicate)
+
+(** The source text of a predicate, for the kernel report. *)
+let rec predicate_text (p : Ast.predicate) =
+  match p.v with
+  | PTineRef name -> "#" ^ name
+  | PTineCall (name, args) -> Printf.sprintf "#%s(%s)" name (String.concat ", " (List.map string_of_ast args))
+  | PCmp (a, op, b) ->
+      let op = match op with Ast.CLt -> "<" | CLe -> "<=" | CGt -> ">" | CGe -> ">=" | CEq -> "=" | CNe -> "!=" in
+      Printf.sprintf "%s %s %s" (string_of_ast a) op (string_of_ast b)
+  | PAnd (a, b) -> Printf.sprintf "(%s and %s)" (predicate_text a) (predicate_text b)
+  | POr (a, b) -> Printf.sprintf "(%s or %s)" (predicate_text a) (predicate_text b)
+  | PNot a -> Printf.sprintf "(%s) gaps" (predicate_text a)
+  | PExpr e -> string_of_ast e
+  | PIs _ | PIsNot _ -> "a predicate"
+
+let rec check_run_block renv (stmts : Ast.stmt list) : run_env * rstmt list =
+  let collected = ref [] in
+  let renv = List.fold_left check_run_stmt { renv with emit = collected } stmts in
   (renv, List.rev !collected)
 
-and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
+and check_run_stmt renv (stmt : Ast.stmt) : run_env =
   let loc = stmt.loc in
   let bind_name renv name binding = { renv with env = bind renv.env loc name binding } in
   match stmt.v with
@@ -1260,37 +1336,23 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
               emit renv loc (R_store (view, index, name, not unchecked));
               renv
           | ty -> fail loc "%s holds %s and can't be stored to" base (string_of_ty ty))
-      | EField ({ v = EVar output; _ }, field) -> (
-          match ((lookup renv.env loc output).bty, renv.scope) with
-          | Stack (pack, true), Some scope ->
-              let pack = Hashtbl.find renv.env.ctx.packs pack in
-              let element = match List.assoc_opt field pack.pack_fields with Some e -> e | None -> fail loc "pack %s has no column %s" pack.pack_name field in
-              if bits element <> bits scope.domain then
-                fail loc "output column %s must have the traversal domain's lane width" field;
-              let renv, pure, ty = rack_value renv value in
-              require loc (Rack element) ty "the stored rack";
-              let name = fresh renv.env "output" in
-              emit renv loc (R_pure (name, ty, pure, false));
-              emit renv loc (R_output (output, field, name));
-              renv
-          | Stack (_, false), _ -> fail loc "stack %s is read-only: declare it mut stack" output
-          | _ -> fail loc "%s.%s is stored only inside a traversal over the same records" output field)
+      | EField ({ v = EVar output; _ }, field) ->
+          fail loc "a stack run replaces columns in its result: %s with { %s: ... }" output field
       | _ -> fail loc "vector code stores to view[<index>], rack array elements and output columns")
   | SExpr ({ v = ESlow _; _ } as value) ->
       emit renv loc (R_slow (check_uniform renv.env value));
       renv
-  | SExpr value when last -> (
-      match renv.scope with
-      | Some _ ->
-          let renv, pure, ty = rack_value renv value in
-          (match ty with Rack _ -> () | _ -> fail loc "a traversal yields a rack");
-          let name = fresh renv.env "yield" in
-          emit renv loc (R_pure (name, ty, pure, false));
-          emit renv loc (R_yield name);
-          renv
-      | None -> fail loc "an expression statement has no effect in vector code")
   | SExpr _ -> fail loc "an expression statement has no effect in vector code"
-  | SYield _ -> fail loc "yield ends a traversal"
+  | STine tine -> (
+      match renv.scope with
+      | None -> fail loc "a local tine belongs to a stack run or a rake"
+      | Some _ ->
+          let name = "tine$" ^ tine.tine_name in
+          let renv, pure, ty = rack_value renv (predicate_mask renv tine.tine_pred) in
+          (match ty with Mask _ -> () | _ -> fail loc "tine #%s doesn't select lanes" tine.tine_name);
+          emit renv loc (R_pure (name, ty, pure, false));
+          bind_name renv name { bty = ty; bmut = false; buniform = false; bconst = None })
+  | SResult _ -> fail loc "a stack run's result is its last statement"
   | SLoop l when l.loop_repeat ->
       if not l.loop_uniform then fail loc "repeat's index is uniform: repeat <i: i32> from <a> up to <b>";
       let ty = match l.loop_type with Some t -> ty_of renv.env.ctx t | None -> Sc SInt in
@@ -1300,13 +1362,13 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
       if trips * statement_count l.loop_body <= unroll_budget then (
         for k = 0 to trips - 1 do
           let copy = { renv with env = bind renv.env loc l.loop_var { bty = ty; bmut = false; buniform = true; bconst = Some (Int64.add first (Int64.of_int k)) } } in
-          let _, body = check_run_block copy l.loop_body ~yield_last:false in
+          let _, body = check_run_block copy l.loop_body in
           emit renv loc (R_block body)
         done;
         renv)
       else
         let inner = { renv with env = bind renv.env loc l.loop_var { bty = ty; bmut = false; buniform = true; bconst = None } } in
-        let _, body = check_run_block inner l.loop_body ~yield_last:false in
+        let _, body = check_run_block inner l.loop_body in
         emit renv loc (R_for (l.loop_var, mk (Int first) ty loc, mk (Int stop) ty loc, None, body));
         renv
   | SLoop l ->
@@ -1319,7 +1381,7 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
       let by = Option.map (fun e -> let v = check_uniform renv.env ~expected:ty e in require e.loc ty v.ty "the loop step"; v) l.loop_by in
       (match by with Some { k = Int n; _ } when n <= 0L -> fail loc "a loop steps forward" | _ -> ());
       let inner = { renv with env = bind renv.env loc l.loop_var { bty = ty; bmut = false; buniform = true; bconst = None } } in
-      let _, body = check_run_block inner l.loop_body ~yield_last:false in
+      let _, body = check_run_block inner l.loop_body in
       emit renv loc (R_for (l.loop_var, from, upto, by, body));
       renv
   | SIf (c, a, b) ->
@@ -1327,40 +1389,10 @@ and check_run_stmt renv (stmt : Ast.stmt) ~last : run_env =
         fail loc "a statement if takes a uniform condition; choose lanes with if mask then a else b";
       let c = check_uniform renv.env ~expected:(Sc SBool) c in
       require c.loc (Sc SBool) c.ty "an if condition";
-      let _, a = check_run_block renv a ~yield_last:false in
-      let _, b = check_run_block renv b ~yield_last:false in
+      let _, a = check_run_block renv a in
+      let _, b = check_run_block renv b in
       emit renv loc (R_if (c, a, b));
       renv
-  | SOver o -> (
-      match (lookup renv.env loc o.over_stack).bty with
-      | Stack (pack_name, _) ->
-          let pack = Hashtbl.find renv.env.ctx.packs pack_name in
-          let domain = scalar_of_prim o.over_domain in
-          (* A nested traversal's lanes are its outer traversal's, so their
-             tails combine into one prefix mask. *)
-          (match renv.scope with
-           | Some outer when lanes outer.domain <> lanes domain ->
-               fail loc "a nested traversal takes its outer traversal's lane count: %s has %d lanes, %s %d"
-                 (string_of_ty (Rack domain)) (lanes domain) (string_of_ty (Rack outer.domain)) (lanes outer.domain)
-           | _ -> ());
-          let count = check_uniform renv.env o.over_count in
-          (match count.ty with
-           | Sc (SInt | SInt64) -> ()
-           | ty -> fail o.over_count.loc "Over loop count must be scalar int/int64, got %s" (string_of_ty ty));
-          let inner =
-            { renv with scope = Some { chunk = o.over_chunk; chunk_pack = pack; domain; outer = renv.scope };
-              env = bind renv.env loc o.over_chunk { bty = Stack (pack_name, false); bmut = false; buniform = false; bconst = None } }
-          in
-          let _, body = check_run_block inner o.over_body ~yield_last:true in
-          (* Its stores would be bounded by both traversals at once: it
-             accumulates into locations, which the outer traversal stores. *)
-          if renv.scope <> None then (
-            let rec stores stmts = List.exists (fun s -> match s.r with R_yield _ | R_output _ | R_store _ -> true | R_for (_, _, _, _, b) | R_block b -> stores b | R_if (_, a, b) -> stores a || stores b | R_traverse t -> stores t.t_body | _ -> false) stmts in
-            if stores body then
-              fail loc "a nested traversal can't yield or store: accumulate into a location and store it in the outer traversal");
-          emit renv loc (R_traverse { t_stack = o.over_stack; t_pack = pack_name; t_domain = domain; t_count = count; t_body = body });
-          renv
-      | ty -> fail loc "Expected stack type, got %s" (string_of_ty ty))
   | SWhile _ -> fail loc "vector code loops are counted: for <i: i32> from <a> up to <b>"
   | SBreak | SContinue -> fail loc "vector loops run every iteration; there is no break"
   | SReturn _ -> fail loc "a run ends after its last statement"
@@ -1377,35 +1409,189 @@ and assign_rack renv loc name value =
   emit renv loc (R_set (name, fresh_name));
   renv
 
-let check_run_body env params stream body loc =
-  let env =
-    List.fold_left
-      (fun env -> function
-        | Run_stack (name, pack, w) -> bind env loc name { bty = Stack (pack, w); bmut = false; buniform = false; bconst = None }
-        | Run_view (name, s, w) -> bind env loc name { bty = View (Sc s, w); bmut = false; buniform = false; bconst = None }
-        | Run_uniform (name, s) -> bind env loc name { bty = Sc s; bmut = false; buniform = true; bconst = None }
-        | Run_rack (name, s) -> bind env loc name { bty = Rack s; bmut = false; buniform = false; bconst = None })
-      env params
+let bind_run_params env loc params =
+  List.fold_left
+    (fun env -> function
+      | Run_stack (name, pack) -> bind env loc name { bty = Stack pack; bmut = false; buniform = false; bconst = None }
+      | Run_view (name, s, w) -> bind env loc name { bty = View (Sc s, w); bmut = false; buniform = false; bconst = None }
+      | Run_uniform (name, s) -> bind env loc name { bty = Sc s; bmut = false; buniform = true; bconst = None }
+      | Run_rack (name, s) -> bind env loc name { bty = Rack s; bmut = false; buniform = false; bconst = None })
+    env params
+
+(** A general run: counted loops over views. *)
+let check_run_body env params body loc =
+  if List.exists (function Run_stack _ -> true | _ -> false) params then
+    fail loc "a run over stacks returns one: declare it -> stack Pack and end with its result";
+  let renv = { env = bind_run_params env loc params; scope = None; emit = ref []; bound = ref SM.empty; in_branch = ref 0 } in
+  snd (check_run_block renv body)
+
+(** A stack run: one traversal of its stacks' records, in the domain of the
+    widest column it touches, ending with the result's stores or compaction. *)
+let check_stack_run env params result_pack body loc =
+  let stacks =
+    List.filter_map (function Run_stack (name, pack) -> Some (name, Hashtbl.find env.ctx.packs pack) | _ -> None) params
   in
-  let renv = { env; scope = None; emit = ref []; bound = ref SM.empty; in_branch = ref 0 } in
-  let _, stmts = check_run_block renv body ~yield_last:false in
-  (match stream with
-   | Some element -> (
-       match List.rev stmts with
-       | { r = R_traverse t; _ } :: _ ->
-           if bits element <> bits t.t_domain then
-             fail loc "a run yielding %s racks stores elements of their width" (string_of_ty (Rack t.t_domain));
-           let rec yields = function
-             | [] -> false
-             | { r = R_yield _; _ } :: _ -> true
-             | _ :: rest -> yields rest
-           in
-           if not (yields t.t_body) then fail loc "Run result is not produced; the traversal must end in yield"
-       | _ -> fail loc "Run result is not produced; the body must end in an over loop")
-   | None ->
-       let rec yields stmts = List.exists (fun s -> match s.r with R_yield _ -> true | R_traverse t -> yields t.t_body | R_for (_, _, _, _, b) | R_block b -> yields b | R_if (_, a, b) -> yields a || yields b | _ -> false) stmts in
-       if yields stmts then fail loc "only a run declared -> T yields; this run stores to its views");
-  stmts
+  if List.exists (function Run_rack _ -> true | _ -> false) params then
+    fail loc "a stack run takes stacks, views and uniforms";
+  let preceding, r, rloc =
+    match List.rev body with
+    | { Ast.v = Ast.SResult r; loc = rloc } :: rest -> (List.rev rest, r, rloc)
+    | _ -> fail loc "a stack run ends with its result: s with { field: e }, or compact s where #tine"
+  in
+  let output =
+    match List.assoc_opt r.result_stack stacks with
+    | Some pack when pack.pack_name = result_pack -> pack
+    | Some pack -> fail rloc "this run returns a stack of %s, but %s is a stack of %s" result_pack r.result_stack pack.pack_name
+    | None -> fail rloc "%s is not a stack parameter of this run" r.result_stack
+  in
+  let replaced = List.map (fun (i : Ast.field_init) -> i.init_field) r.result_fields in
+  if List.length replaced <> List.length (List.sort_uniq compare replaced) then
+    fail rloc "the result replaces a field twice";
+  if r.result_fields = [] && not r.result_compact then fail rloc "the result replaces no field";
+  List.iter (fun f -> if not (List.mem_assoc f output.pack_fields) then fail rloc "pack %s has no field '%s'" output.pack_name f) replaced;
+  let columns =
+    named_columns stacks body
+    @ List.map (fun f -> (r.result_stack, f)) replaced
+    @ List.map (fun (f, _) -> (r.result_stack, f)) (if r.result_compact then output.pack_fields else [])
+  in
+  let widest =
+    List.fold_left
+      (fun widest (s, f) ->
+        match List.assoc_opt f (List.assoc s stacks).pack_fields with
+        | Some element -> max widest (bits element)
+        | None -> widest)
+      8 columns
+  in
+  let domain = match widest with 64 -> Types.SInt64 | 32 -> Types.SInt | 16 -> Types.SInt16 | _ -> Types.SUint8 in
+  List.iter
+    (fun f ->
+      let element = List.assoc f output.pack_fields in
+      if bits element <> bits domain then
+        fail rloc "replacing %s field %s in this run's %d-bit domain is work in progress: replacements write fields as wide as the domain"
+          (string_of_ty (Sc element)) f (bits domain))
+    replaced;
+  let env = bind_run_params env loc params in
+  let renv = { env; scope = Some { stacks; domain }; emit = ref []; bound = ref SM.empty; in_branch = ref 0 } in
+  let renv, computed = check_run_block renv preceding in
+  let collected = ref [] in
+  let renv = ref { renv with emit = collected } in
+  let value name (e : Ast.expr) =
+    let next, pure, ty = rack_value !renv e in
+    let bound = fresh next.env name in
+    emit next e.loc (R_pure (bound, ty, pure, false));
+    renv := { next with env = bind next.env e.loc bound { bty = ty; bmut = false; buniform = false; bconst = None } };
+    (bound, ty)
+  in
+  let selection =
+    Option.map
+      (fun p ->
+        let mask, ty = value "selection" (predicate_mask !renv p) in
+        (match ty with Mask _ -> () | _ -> fail p.loc "this predicate doesn't select records");
+        mask)
+      r.result_where
+  in
+  let column (f : string) loc : Ast.expr =
+    let read = { Ast.v = Ast.EField ({ Ast.v = Ast.EVar r.result_stack; loc }, f); loc } in
+    if bits (List.assoc f output.pack_fields) < bits domain then { Ast.v = Ast.ECall ("widen", [ read ]); loc } else read
+  in
+  let replacements =
+    List.map
+      (fun (i : Ast.field_init) ->
+        let element = List.assoc i.init_field output.pack_fields in
+        let e =
+          match selection with
+          | Some mask when not r.result_compact ->
+              { i.init_value with v = Ast.EIf ({ Ast.v = Ast.EVar mask; loc = i.init_value.loc }, i.init_value, column i.init_field i.init_value.loc) }
+          | _ -> i.init_value
+        in
+        let rack, ty = value "replacement" e in
+        require i.init_value.loc (Rack element) ty ("field " ^ i.init_field);
+        (i.init_field, rack))
+      r.result_fields
+  in
+  (match (r.result_compact, selection) with
+   | false, _ -> List.iter (fun (f, rack) -> emit !renv rloc (R_output (r.result_stack, f, rack))) replacements
+   | true, Some mask ->
+       let racks =
+         List.map
+           (fun (f, _) ->
+             match List.assoc_opt f replacements with
+             | Some rack -> (f, rack)
+             | None -> (f, fst (value "kept" (column f rloc))))
+           output.pack_fields
+       in
+       emit !renv rloc (R_compact (mask, racks))
+   | true, None -> assert false);
+  let traverse =
+    { t_stack = r.result_stack; t_pack = output.pack_name; t_domain = domain;
+      t_count = mk (Length (mk (Var r.result_stack) (Stack output.pack_name) loc)) (Sc SInt64) loc;
+      t_body = computed @ List.rev !collected }
+  in
+  let selection =
+    match (r.result_where, r.result_compact) with
+    | None, _ -> Every_record
+    | Some p, false -> Masked (predicate_text p)
+    | Some p, true -> Compacted (predicate_text p)
+  in
+  ([ { r = R_traverse traverse; rloc = loc } ], (r.result_stack, selection))
+
+module SS = Set.Make (String)
+
+(** A run call moves its result's stack: reading that variable again is an
+    error until it is assigned. A stack moved in either branch of an if is
+    moved after it, and a loop body that moves a stack must assign it again
+    before the next iteration reads it. *)
+let check_moves vectors (f : slow_func) =
+  let consumed name =
+    match Hashtbl.find_opt vectors name with
+    | Some (Sig_run (params, Some (stack, _))) ->
+        let rec index i = function
+          | Run_stack (p, _) :: _ when p = stack -> Some i
+          | _ :: rest -> index (i + 1) rest
+          | [] -> None
+        in
+        index 0 params
+    | _ -> None
+  in
+  let rec expr moved (e : expr) =
+    match e.k with
+    | Var v when SS.mem v moved ->
+        fail e.loc "stack %s was moved into a run: assign it again before reading it, or pass copy(%s) to the run" v v
+    | Var _ | Int _ | Float _ | Bool _ | Str_lit _ | Global _ | Function_ref _ -> moved
+    | Vector_call (name, args) -> (
+        let moved = List.fold_left (fun m -> function Arg_memory a | Arg_uniform a -> expr m a) moved args in
+        match Option.map (List.nth args) (consumed name) with
+        | Some (Arg_memory { k = Var v; _ }) -> SS.add v moved
+        | _ -> moved)
+    | Unary (_, a) | Math (_, [ a ]) | Count_bits (_, a) | Pointer_cast a | Field (a, _) | Convert (_, _, a)
+    | Addr a | Length a | Read_only_view a | Is_null a | Stack_copy a -> expr moved a
+    | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> expr (expr moved a) b
+    | Cond (a, b, c) | Slice (a, b, c) -> expr (expr (expr moved a) b) c
+    | Math (_, items) | Call (_, items) | Extern_call (_, items) | Array_lit items -> List.fold_left expr moved items
+    | Indirect_call (callee, items) -> List.fold_left expr (expr moved callee) items
+    | Record_lit (_, fields) | Stack_lit (_, fields) -> List.fold_left (fun m (_, v) -> expr m v) moved fields
+    | Block (body, value) -> let m = stmts moved body in Option.fold ~none:m ~some:(expr m) value
+  and stmts moved body = List.fold_left stmt moved body
+  and stmt moved (s : stmt) =
+    match s.s with
+    | Decl (name, _, value, _) -> SS.remove name (Option.fold ~none:moved ~some:(expr moved) value)
+    | Assign ({ k = Var v; _ }, value) -> SS.remove v (expr moved value)
+    | Assign (target, value) -> expr (expr moved value) target
+    | Eval e -> expr moved e
+    | If (c, a, b) -> let m = expr moved c in SS.union (stmts m a) (stmts m b)
+    | While (c, body) -> loop (fun m -> stmts (expr m c) body) (expr moved c)
+    | For (_, _, a, b, step, body) ->
+        let m = Option.fold ~none:(expr (expr moved a) b) ~some:(expr (expr (expr moved a) b)) step in
+        loop (fun m -> stmts m body) m
+    | Return value -> Option.fold ~none:moved ~some:(expr moved) value
+    | Break | Continue -> moved
+  and loop body moved =
+    (* A second pass starts from whatever the first leaves moved, as the next
+       iteration would. *)
+    let after = body moved in
+    if SS.subset after moved then moved else SS.union after (body (SS.union moved after))
+  in
+  ignore (stmts SS.empty f.fbody)
 
 let check_program ?(base_dir = ".") (program : Ast.program) : program =
   let tc = Typecheck.check_program program in
@@ -1522,9 +1708,17 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
           let ext = { ename = name; eheader = header; eparams; eresult } in
           Hashtbl.replace ctx.externs name ext;
           externs := ext :: !externs
-      | DRun (name, params, result, _) ->
-          let stream = Option.map (fun (t : Ast.typ) -> match ty_of ctx t with Sc s -> s | ty -> fail t.loc "a stream run stores scalars, got %s" (string_of_ty ty)) result.result_type in
-          Hashtbl.replace ctx.vectors name (Sig_run (run_params ctx d.loc params, stream))
+      | DRun (name, params, result, body) ->
+          let result =
+            Option.map
+              (fun (t : Ast.typ) ->
+                match (ty_of ctx t, List.rev body) with
+                | Stack pack, { Ast.v = Ast.SResult r; _ } :: _ -> (r.result_stack, pack)
+                | Stack _, _ -> fail d.loc "a stack run ends with its result: s with { field: e }, or compact s where #tine"
+                | ty, _ -> fail t.loc "a run returns a stack: declare -> stack Pack, not %s" (string_of_ty ty))
+              result.result_type
+          in
+          Hashtbl.replace ctx.vectors name (Sig_run (run_params ctx d.loc params, result))
       | DScratch (name, params, result, _) | DRake (name, params, result, _, _, _, _) -> (
           try
             let params =
@@ -1582,16 +1776,23 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
         | _ -> None)
       defs
   in
+  List.iter (check_moves ctx.vectors) slows;
   let runs =
     List.filter_map
       (fun (d : Ast.def) ->
         match d.v with
         | DRun (name, _, _, body) -> (
             match Hashtbl.find ctx.vectors name with
-            | Sig_run (params, stream) ->
+            | Sig_run (params, result) ->
                 let env = { top_env with mode = Vector_mode; return_allowed = false } in
-                let body = check_run_body env params stream body d.loc in
-                Some { run_name = name; run_params = params; run_stream = stream; run_body = body; run_loc = d.loc }
+                let body, run_result =
+                  match result with
+                  | None -> (check_run_body env params body d.loc, None)
+                  | Some (_, pack) ->
+                      let body, result = check_stack_run env params pack body d.loc in
+                      (body, Some result)
+                in
+                Some { run_name = name; run_params = params; run_result; run_body = body; run_loc = d.loc }
             | Sig_scratch _ -> None)
         | _ -> None)
       defs

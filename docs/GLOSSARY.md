@@ -21,8 +21,11 @@ explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 | slow block | `slow { ... }`, a lexical scalar escape inside a run or slow function, optionally producing a scalar value |
 | fused binding | `\| name <\| e`, one stage of a pure fused computation |
 | pack | one record described by a `pack` declaration, with its fields stored together |
-| stack | a collection of packs transposed into one contiguous column for each field |
-| traversal | `for chunk in input using f32s up to <n>:`, a rack-sized slice of a stack's columns at a time |
+| stack | a count of packs transposed into one contiguous column for each field |
+| stack run | a run that applies calculations to whole stacks and returns one: `s with { field: e }` |
+| masking | `where p`: a stack run replaces fields only in the records `p` selects |
+| compaction | `compact s where p`: a stack run keeps only the records `p` selects |
+| move | passing a stack to the run that returns it, which updates its columns in place |
 | view | `[]T`, elements with a count, borrowed from the caller |
 | profile | a named target, such as `x86-avx2`, that fixes the rack width and the rules |
 | widening | converting narrow stored elements, such as `u8`, to wider lanes without changing their values |

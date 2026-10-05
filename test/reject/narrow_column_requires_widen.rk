@@ -3,6 +3,5 @@ pack Particles {
   u8: age;
 }
 
-run invalid(particles: stack Particles, <count: i64>) -> f32:
-  for particle in particles using f32s up to <count>:
-    yield particle.age
+run invalid(particles: stack Particles) -> stack Particles:
+  particles with { position: particles.age }

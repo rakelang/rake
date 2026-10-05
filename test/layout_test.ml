@@ -25,7 +25,7 @@ let () =
   expect_valid
     "scratch add(\n  left: f32s,\n  right: f32s\n) -> f32s:\n  left + right\n\nscratch id(value: f32s) -> f32s:\n  value\n";
   expect_valid
-    "pack Samples {\n  f32: value;\n}\n\n~~ a comment does not affect layout\nrun copy(input: stack Samples, <count: i64>) -> f32:\n  for chunk in input using f32s up to <count>:\n    yield chunk.value\n";
+    "pack Samples {\n  f32: value;\n}\n\n~~ a comment does not affect layout\nrun copy(input: stack Samples) -> stack Samples:\n  input with {\n    value: input.value\n  }\n";
   expect_invalid "indented body"
     "scratch broken(value: f32s) -> f32s:\nreturn value\n";
   expect_invalid "enclosing body"

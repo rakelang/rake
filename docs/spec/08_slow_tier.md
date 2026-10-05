@@ -15,9 +15,9 @@ definition is a whole program. On `wasm-simd128` it compiles to one C
 translation unit with a C entry point, which is what a C-only judge takes.
 Whole programs are implemented for `wasm-simd128` and
 `wasm-simd128-relaxed`. Rake 0.7.0 also emits native C and objects combining slow orchestration and
-register kernels on x86-64 and AArch64. SSE2, AVX2, AVX-512 and NEON additionally support the
-[native stream subset](02_packs_and_run.md#native-cpu-streams). General native
-runs remain work in progress.
+register kernels on x86-64 and AArch64. SSE2, AVX2, AVX-512 and NEON also compile
+[stack runs](02_packs_and_run.md#stack-runs). General runs over views remain
+work in progress on those profiles.
 
 ### Native kernel calls
 
@@ -98,10 +98,9 @@ pack Samples {
   u8: quality;
 }
 
-run weigh(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
-  for chunk in input using f32s up to <count>:
-    let quality = to_f32(widen(chunk.quality))
-    yield chunk.value * <scale> + quality
+run weigh(samples: stack Samples, <scale: f32>) -> stack Samples:
+  let quality = to_f32(widen(samples.quality))
+  samples with { value: samples.value * <scale> + quality }
 
 run running_sum(x: []f32, out: mut []f32, <n: i32>):
   total := <0.0>
@@ -114,10 +113,9 @@ state calls: i32 := 0
 slow main() -> i32:
   values: [8]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
   qualities: [8]u8 := [0, 1, 0, 1, 0, 1, 0, 1]
-  weighed: [8]f32 := [0.0; 8]
-  weigh(stack Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
+  let weighed = weigh(stack Samples { value: values, quality: qualities }, <0.5>)
   sums: [8]f32 := [0.0; 8]
-  running_sum(weighed, sums, <8>)
+  running_sum(weighed.value, sums, <8>)
   calls <- calls + 1
   return i32(sums[7] * 4.0) + calls
 ```
@@ -161,7 +159,7 @@ Blocks have lexical scope and may nest. Their locals end at `}` and can't
 shadow an enclosing binding, though sibling blocks may reuse a name. A block
 inside a slow function shares that function's mutable locations. A block in a
 run can read its uniforms and scalar-element views, and write a mutable view.
-It can't name a rack, mask, rack array or traversal chunk. Reduce or extract a
+It can't name a rack, mask, rack array or stack column. Reduce or extract a
 rack to a uniform before entering the block. Block results are scalar or
 void, so a local array, record or borrowed view can't escape through the result.
 
@@ -280,7 +278,8 @@ accepts typed function pointers.
 | `ptr ()` | an opaque C `void *` |
 | `slow(T, ...) -> U` | a typed C function pointer |
 | `Name` | a record |
-| `mut T` | in a parameter list: a view, stack, array or record the callee writes |
+| `stack Name` | a stack: its count and a view of each column |
+| `mut T` | in a parameter list: a view, array or record the callee writes |
 
 Arrays and records are values: binding or assigning one copies it. Views and
 pointers alias the storage they name. A slow parameter of array or record type
@@ -289,8 +288,13 @@ argument must then be a location the caller may write. A view parameter is
 passed by value and is writable through when declared `mut []T`.
 
 Slow code holds individual packs as ordinary records. It has no rack or mask
-values. A stack is currently constructed at a run call by supplying views
-for the pack's fields: `stack Samples { value: values, quality: qualities }`.
+values. A stack is built from writable views or arrays, one for each of the
+pack's fields: `stack Samples { value: values, quality: qualities }`. Its
+count is their length, and the literal traps if they differ. `s.field` is a
+column as a view of `count(s)` elements. A stack moves into the run that
+returns it, and `copy(s)` makes a new stack whose columns come from the
+function's frame, as [moves and copies](02_packs_and_run.md#moves-and-copies)
+defines. Slow functions can't take or return stacks.
 
 ## Statements
 
@@ -450,7 +454,8 @@ implementation as a direct C call.
 
 ## Calling vector code
 
-Slow code calls a run as a statement and a scratch or rake as an expression:
+Slow code calls a stack run as an expression returning its result's stack, a
+general run as a statement, and a scratch or rake as an expression:
 
 <!-- rake-check: run 7 -->
 ```rake
@@ -465,19 +470,18 @@ slow main() -> i32:
 ```
 
 The run call in [the example](#an-example) above,
-`weigh(stack Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)`,
-passes a stack, two uniforms and its output view.
+`weigh(stack Samples { value: values, quality: qualities }, <0.5>)`, moves a
+stack into `weigh` and binds the stack it returns.
 
 Memory arguments, views and stacks, are passed bare. An array passed where a
 view is expected lends all its elements. Every scalar argument is marked
 `<...>`, as in `<name>`, `<3>`, `<record.field>` or `<view[index]>`, because it
-becomes a rack in the callee. A run declared `-> T` takes its output view as a last argument. A
-scratch or rake is callable from slow code only when all its parameters are
+becomes a rack in the callee. A scratch or rake is callable from slow code only when all its parameters are
 uniform and its result is a scalar. Slow code can't pass or receive a rack.
 
-At a run call, every column of a traversed stack, of a stack the traversal
-stores into, and the output view must hold the traversal's count, or the call
-traps before the run starts.
+At a stack run call, every stack must have the result's count, and the result's
+columns may share memory with another argument only element for element, or
+the call traps before the run starts.
 
 ## The explicitness rules
 
@@ -524,11 +528,11 @@ so programs that call C are tested through C (`test/abi/interop.rk`).
 `test/program_test.sh` runs every `test/program/*.rk` in the interpreter and,
 compiled from the emitted C in both addressings, under wasmtime, and requires
 equal results. Programs under `test/program/trap/` must trap in both.
-`test/abi_test.sh` calls runs from C across the [wasm32
-boundary](02_packs_and_run.md#wasm32-boundary) and runs `interop.rk` against
-its C functions.
-`test/reject/slow_*.rk` and `test/reject/run_*.rk` show each explicitness rule
-rejecting a program that breaks it.
+`test/abi_test.sh` calls runs from C across [the C
+boundary](02_packs_and_run.md#the-c-boundary) and runs `interop.rk` against its
+C functions. `test/reject/slow_*.rk`, `test/reject/run_*.rk` and
+`test/reject/stack_*.rk` show each explicitness rule rejecting a program that
+breaks it.
 
 ## The C unit
 
@@ -588,7 +592,7 @@ from host worker stacks. Allocation failure traps. Nonlocal exits such as C
 ## Verification
 
 For a native mixed program, both `--emit-obj` and `--verify-native` check each
-embedded register kernel and supported stream traversal in the final object.
+embedded register kernel and native stack run in the final object.
 The ordinary slow functions
 retain the platform compiler's C semantics and are outside that vector
 instruction contract. A slow-only unit uses `--emit-obj`.

@@ -42,6 +42,7 @@ let function_ =
           (A.Fmla { dst = 20; multiplicand = 3; multiplier = 4 });
         instruction 21 (A.Move { dst = 0; source = 20 }) ];
     result = Some 0;
+    outputs = [];
     result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
     maximum_live = 13;
   }

@@ -41,21 +41,22 @@ Three C builds are reported. The ordinary optimized build uses GCC `-O3
 vectorizer is enabled. The explicitly scalar comparison adds
 `-fno-tree-vectorize`. `safe_root_avx2.c` uses explicit eight-lane AVX2
 instructions and masked memory operations for the tail. The fourth kernel
-is the complete Rake traversal. The report retains every sample, the median,
+is the complete Rake stack run. The report retains every sample, the median,
 source and artifact hashes, flags, GCC version and processor.
 
-The retained [4 October measurement](measurement-20261004.tsv), on a Ryzen
-7 5800X3D with GCC 14.3, has these medians per million-element pass:
+The retained [5 October measurement](measurement-20261005.tsv), on a Ryzen
+7 5800X3D with GCC 14.3 while other work kept the processor's 16 threads
+busy (load average 15), has these medians per million-element pass:
 
 | Kernel | Milliseconds |
 | --- | ---: |
-| C, vectoriser disabled | 3.87 |
-| C, automatic vectorisation | 0.143 |
-| C, AVX2 intrinsics | 0.143 |
-| Rake, verified AVX2 traversal | 0.144 |
+| C, vectoriser disabled | 4.00 |
+| C, automatic vectorisation | 0.147 |
+| C, AVX2 intrinsics | 0.146 |
+| Rake, verified AVX2 stack run | 0.147 |
 
 The three vector implementations have similar times. Rake verifies the
-selected vector instructions and the complete traversal.
+selected vector instructions and the complete run.
 
 ## Rejection and algorithm change
 

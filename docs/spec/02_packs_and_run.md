@@ -1,94 +1,276 @@
 # Packs, stacks and runs
 
-A run is vector code over memory. It traverses columnar data a rack at a
-time, loops over views, and writes its results to memory. Runs are
-implemented for `wasm-simd128`. The unreleased compiler also implements the
-[SSE2, AVX2, AVX-512 and NEON stream subset](#native-cpu-streams).
-General native runs remain work in progress.
+A run applies rakes and scratches to whole stacks. The programmer names the
+columns and the calculations. The compiler splits the columns into racks,
+handles the final partial rack, fuses the calculations and stores the results.
+Stack runs compile for SSE2, AVX2, AVX-512, NEON and `wasm-simd128`.
 
-A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks).
-It returns to vector mode at the closing brace. The block can't capture racks
-or a traversal chunk, and it never scalarises the surrounding rack work.
+A run may also be a [general run](#general-runs) over views, with counted
+loops that index memory a rack at a time. General runs compile for
+`wasm-simd128`.
 
 ## Packs and stacks
 
-A `pack` defines one record, with its fields stored together. A `stack` is
-a collection of those records transposed into structure-of-arrays storage:
-one contiguous column for each field. Remember the hierarchy as "define our
-pack, then rack 'em and stack 'em". A `run` traverses the stack, splitting its
-unsized columns into racks for the rakes and scratches in its body:
+A `pack` defines one record. A `stack` holds many of those records in
+structure-of-arrays storage: one contiguous column for each field, and a
+count of records. Remember the hierarchy as "define our pack, then rack 'em
+and stack 'em".
+
+```text
+PACK: one record          { posx, posy, velx, vely, kill }
+
+STACK: count records, one column per field
+  posx: [p0 p1 p2 p3] [p4 p5 p6 p7] [p8 ...
+  velx: [v0 v1 v2 v3] [v4 v5 v6 v7] [v8 ...
+  kill: [k0 k1 k2 k3] [k4 k5 k6 k7] [k8 ...
+         └── one rack: the target's lane count of records ──┘
+```
+
+Each column's stored type is scalar, such as `f32` or `u8`. The run works on
+its racks, whose plural types such as `f32s` have the target's lane count. A
+column can have a million entries without making its rack a million lanes
+wide.
+
+## Stack runs
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Particle {
+  f32: posx, posy, velx, vely;
+  u8: kill;
+}
+
+scratch step(position: f32s, velocity: f32s, <dt: f32>) -> f32s:
+  position + velocity * <dt>
+
+run advance(particles: stack Particle, <dt: f32>) -> stack Particle:
+  let kill = widen(particles.kill)
+  tine #alive means kill = <0>
+  particles with {
+    posx: step(particles.posx, particles.velx, <dt>),
+    posy: step(particles.posy, particles.vely, <dt>)
+  } where #alive
+```
+
+Inside a stack run, `particles.posx` is the whole `posx` column, and an
+expression over columns applies to every record. `step` takes racks, so the
+compiler calls it once per rack of records. The run's body has these forms,
+in source order:
+
+| Form | Meaning |
+| --- | --- |
+| `let x = e`, `\| x <\| e` | a value for every record, typed as in a scratch |
+| `let <x: T> = e` | a uniform: arithmetic of uniforms, `bool` only on native targets |
+| `tine #name means p` | a predicate on every record, as in a rake |
+| `x := e`, `x <- e`, `repeat <i: T> from <a> up to <b>:` | rack locations and unrolled loops, as in a [general run](#general-runs) |
+| `s with { field: e, ... }` | the run's result: `s` with those fields replaced |
+| `s with { ... } where p` | replace them only in the records where `p` holds |
+| `compact s where p` | keep only the records where `p` holds |
+| `compact s with { ... } where p` | replace the fields, then keep those records |
+
+The result is the run's last statement. It names one stack parameter, `s`,
+whose pack is the run's declared result. Fields it doesn't name keep their
+values. A replacement's value has the field's working rack type, so an `f32`
+field takes `f32s`. Replacing a byte or 16-bit field is work in progress.
+
+`p` is any predicate a rake's sweep accepts: a local tine, a global tine
+application such as `#alive(kill)`, or a composition such as
+`(#alive and #near) gaps`.
+
+### Masking and compaction
+
+`where` masks. The run computes the new fields for every record, and the
+records outside the predicate keep their old values. The stack's count doesn't
+change, and every later operation still visits the unselected records.
+
+`compact` removes. The selected records move to the front of each column in
+their original order, and the stack's count becomes the number selected. A
+compaction rewrites every column, including the ones the run doesn't replace.
+
+Both forms mean the same thing on every target. Which one is faster depends on
+the data: compaction costs roughly the same per record, while masking carries
+unselected records through all the work that follows. The compiler can't know
+how many records survive, so the source chooses. Each target implements
+compaction with vector instructions:
+
+| Target | Compaction |
+| --- | --- |
+| AVX-512 | `vcompressps` under the selection mask, then `vpmovdb` or `vpmovdw` for compact columns |
+| AVX2 | `vpermps` by a permutation table indexed by the selection bits |
+| NEON | `tbl` by a byte table indexed by the selection bits, then `xtn` for compact columns |
+| `wasm-simd128` | `i8x16.swizzle` by a byte table indexed by the selection bits |
+| SSE2 | a jump to one of 16 fixed `pshufd` permutations |
+
+The [kernel report](#kernel-report) names the method each build used.
+Compacting a run whose widest column has 8 bits is work in progress on
+WebAssembly.
+
+### Several stacks
+
+A run can read stacks other than its result. They must have the same count as
+the result's stack:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
 pack Samples {
   f32: value;
-  u8: quality;
+}
+pack Roots {
+  f32: root;
 }
 
-run scale_values(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
-  for chunk in input using f32s up to <count>:
-    let quality = to_f32(widen(chunk.quality))
-    yield chunk.value * <scale> + quality
+tine #valid(values: f32s) means values >= <0.0>
+
+rake safe_root(values: f32s) -> f32s:
+  through #valid(values) into rooted:
+    sqrt(values)
+  sweep:
+    | #valid(values) => rooted
+    | #valid(values) gaps => <0.0>
+
+run roots(input: stack Samples, output: stack Roots) -> stack Roots:
+  output with { root: safe_root(input.value) }
 ```
 
-The declaration above describes one `Samples` record: an `f32` value and a
-`u8` quality. `Samples { value: 1.0, quality: 2 }` constructs one pack.
-`stack Samples { value: values, quality: qualities }` borrows whole columns
-from the caller's arrays or views. Each column's stored type is scalar. Its
-working rack has a plural type such as `f32s`, whose lane count follows the
-target's register width. A column can have a million entries without making
-its working rack a million lanes wide.
+The result's stack, `output`, moves into the run. Every other stack parameter
+is read only. A call traps before the run starts if the counts differ.
 
-## Traversals
+## Moves and copies
 
-`for chunk in input using f32s up to <count>:` visits the first `count`
-records of `input`, one rack of records at a time: four at once for `f32s` on
-`wasm-simd128`. `using` specifies the compute domain. `chunk.value` is the rack of
-the current records' `value` column, loaded once for the chunk.
+A stack is a value, and calling a run moves the result's stack into it. The
+call returns the updated stack, so the source reads as a function from stack to
+stack while the compiler updates the columns in place:
 
-A traversal of a run declared `-> f32` ends each chunk with `yield`, and the
-yielded rack's lanes go to the run's output column of `f32`. A traversal in a
-run without a result type stores into columns of a `mut stack` instead, as
-`out.sum <- row.a + row.b`, or accumulates into rack locations.
+<!-- rake-check: run 17 -->
+```rake
+pack Samples {
+  f32: value;
+}
 
-A column whose stored element is as wide as the domain's lanes is a rack
-directly: in an `f32s` traversal, an `f32` column is `f32s` and a `u32` column
-is `u32s`. A narrower column has no rack value until `widen` converts it, and
-the compiler rejects any other use of it, so a byte column can't turn into a
-hidden scalar loop. `widen` preserves the value, extending by the stored
-type's sign:
+run doubled(samples: stack Samples) -> stack Samples:
+  samples with { value: samples.value * <2.0> }
 
-| Stored column | 32-bit domains (`f32s`, `i32s`, `u32s`) | 64-bit domains (`i64s`, `u64s`) |
+slow main() -> i32:
+  values: [4]f32 := [1.0, 2.0, 3.0, 1.5]
+  samples := stack Samples { value: values }
+  samples <- doubled(samples)
+  kept := copy(samples)
+  twice := doubled(kept)
+  return i32(twice.value[0] + samples.value[3] + twice.value[3]) + i32(count(samples))
+```
+
+After `doubled(samples)`, the old value of `samples` is gone. Reading it is a
+compile error until it is assigned again, as `samples <- doubled(samples)`
+does. A stack moved in one branch of an `if` counts as moved after it, and a
+stack moved inside a loop must be assigned again before the next iteration.
+
+`copy(samples)` creates a stack with its own columns and the same records,
+and leaves `samples` usable. The copy's columns come from the slow function's
+frame arena, so they last until that function returns, and a copy larger than
+the arena's `RAKE_FRAME_BYTES` (4 MiB unless defined) traps. A copy is the
+only way to keep a stack after passing it to a run, and the compiler never
+copies one implicitly. An implicit copy would be a slower way to write the same program.
+
+Moving gives each run exclusive use of its result's columns, so its stores
+can't change memory that its other arguments read, except through exactly the
+same column. A call traps before the run starts if the result's columns
+overlap another argument's memory in any other way.
+
+A stack built from arrays, as `stack Samples { value: values }`, uses those
+arrays as its columns. Its count is their length, and a stack literal traps if
+its columns have different lengths. After a run updates the stack in place,
+the arrays hold the new values. A compaction leaves the records past the new
+count unspecified.
+
+In slow code, `s.field` is a column as a view of `count(s)` elements, and
+`count(s)` is the stack's count as an `i64`.
+
+## Columns and domains
+
+A run computes in one domain: the widest element type of the columns it reads
+or writes. Every rack in the run has that domain's lane count, so a run over
+`f32` and `u8` columns visits four records at a time on SSE2 and NEON, eight on
+AVX2 and sixteen on AVX-512.
+
+A column as wide as the domain is a rack directly: in a 32-bit domain an `f32`
+column is `f32s` and a `u32` column is `u32s`. A narrower column has no rack
+value until `widen` converts it, so a byte column can't turn into a hidden
+scalar loop. `widen` preserves the value, extending by the stored type's sign:
+
+| Stored column | 32-bit domains | 64-bit domains |
 | --- | --- | --- |
 | `u8`, `u16` | `u32s` | WIP* |
 | `i8`, `i16` | `i32s` | WIP* |
 | `u32` | the column itself | `u64s` |
 | `i32` | the column itself | `i64s` |
 
-*WIP: work in progress. WebAssembly supports the implemented domains above.
-Native streams currently implement only the 32-bit domains.*
+*WIP: work in progress. Native targets implement 32-bit domains. WebAssembly
+implements the domains above.*
 
-A column wider than the domain's lanes is rejected. A traversal using `u8s`
-reads sixteen byte records at once, and a `u8` column is its rack directly.
+The column stays compact in memory, and its pointer advances by one or two
+bytes per record instead of four. The unsigned fields of this pack fit in a
+signed 32-bit lane, so their bitcasts preserve their values:
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack CompactReadings {
+  i8: adjustment;
+  i16: offset;
+  u8: quality;
+  u16: weight;
+  i32: total;
+}
+
+run combine_readings(input: stack CompactReadings) -> stack CompactReadings:
+  let adjustment = widen(input.adjustment)
+  let offset = widen(input.offset)
+  let quality = bitcast(i32s, widen(input.quality))
+  let weight = bitcast(i32s, widen(input.weight))
+  input with { total: ((adjustment + offset) + quality) + weight }
+```
+
+In general `bitcast` changes only the interpretation of bits: an unsigned
+32-bit value above 2³¹−1 becomes a negative signed value. `to_f32` converts
+`i32s` or `u32s` to floats. `to_i32` and `to_u32` round floats to integers with
+ties to even and saturation: NaNs become zero, values beyond the range saturate
+to its endpoints, and for `to_u32` negative values become zero.
 
 ## Count and tail
 
-The count is a uniform integer. A count of zero or less reads nothing. A count
-that isn't a multiple of the lane count ends with a tail chunk whose mask is
-`lane < count mod lanes`. Its transfers touch only active elements: lane-sized
-loads and stores on WebAssembly, count-guarded lane transfers on SSE2 and
-NEON, and masked vector transfers for 32-bit AVX2 columns and AVX-512
-columns. Compact AVX2 columns use count-guarded lane transfers before packed
-widening. These transfers avoid
-elements past the count. In the tail, a column's inactive lanes hold
-zero, so a shuffle that moves one into an active lane reads zero. Rack
-expressions run under the tail's mask, and a mutable location updates only
-its active lanes.
+A stack of zero records runs nothing. A count that isn't a multiple of the lane
+count ends with a tail rack whose mask is `lane < count mod lanes`. Its memory
+transfers touch only existing records: lane-sized loads and stores on
+WebAssembly, count-guarded lane transfers on SSE2 and NEON, masked vector
+transfers for 32-bit columns on AVX2 and for all columns on AVX-512, and
+count-guarded transfers for compact AVX2 columns. In the tail a column's
+inactive lanes hold zero. Expressions run under the tail's mask, and inactive
+operands are made benign before exception-capable arithmetic.
+
+Each rack loads every column the run reads before storing its results, so a
+replacement sees the record's values as they were.
+
+## Kernel report
+
+A successful build that emits code ends with a report on standard error. It
+lists each run with the facts the compiler used: the domain and lanes, the
+columns read and written, whether the result is updated in place, the
+selection (every record, masked or compacted) and its method, and the tail's
+memory transfers. For example, an AVX2 build of the first example reports:
+
+```text
+rakec: kernel report for x86-avx2
+  run advance: 32-bit domain, 8 lanes
+    reads kill, posx, velx, posy, vely; replaces posx, posy in place
+    selection: masked by #alive
+    tail: vmaskmovps for 32-bit columns, guarded lane transfers for compact columns
+```
+
+`--no-report` omits it.
 
 ## General runs
 
-A run's parameters are stacks (`stack S`, or `mut stack S` to write its columns),
-views (`[]T`, or `mut []T` to write), uniform scalars (`<name: T>`) and racks
+A general run indexes views with counted loops. Its parameters are views
+(`[]T`, or `mut []T` to write), uniform scalars (`<name: T>`) and racks
 (`x: f32s`), which only a C caller can pass. Its body uses these forms:
 
 | Form | Meaning |
@@ -104,7 +286,9 @@ views (`[]T`, or `mut []T` to write), uniform scalars (`<name: T>`) and racks
 | `for <i: T> from <a> up to <b> by <s>:` | a counted loop with a uniform index |
 | `repeat <i: T> from <a> up to <b>:` | a loop with constant bounds |
 | `if <c>:` … `else:` | a branch on a uniform condition |
-| `for chunk in p using D up to <n>:` | a traversal |
+
+A stack run can also take views, for gathers such as `table[indices]` on
+WebAssembly.
 
 Every view access is checked, and a rack access traps unless all its
 elements are in bounds. `view[unchecked <i>]` drops the check. A store's index
@@ -131,16 +315,10 @@ slow main() -> i32:
   return i32(sums[4] + sums[5])
 ```
 
-A traversal may contain another traversal of the same lane count, such as a
-pass over a second stack for each chunk of the first. The inner traversal reads
-only its own chunk's columns, so values from the outer chunk are bound with
-`let` before it. It can't yield or store. It accumulates into locations, and
-the outer traversal stores them. In the outer tail both masks apply, and
-because both cover a prefix of the lanes, the inner tail's mask is the
-shorter one.
-
-A run can't loop with `while`, `break` or `continue`, call slow code, call C,
-or read module state.
+A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks).
+It returns to vector mode at the closing brace. The block can't capture racks,
+and it never scalarises the surrounding rack work. A run can't loop with
+`while`, `break` or `continue`, call slow code, call C, or read module state.
 
 ## Addressing
 
@@ -162,406 +340,78 @@ with an empty scalar `asm`, so clang retains the rack arithmetic before
 selecting its active lane stores. These barriers take scalar operands,
 because a `v128` operand to `asm` crashes some wasm32 builds of clang.
 
-## wasm32 boundary
+## The C boundary
 
-On `wasm-simd128` a run is an external C function that is never inlined,
-named as in the source and returning `void`. Its C parameters follow the
-source order:
+A run is an external C function named as in the source and returning `void`.
+Its C parameters follow the source order:
 
 | Rake parameter | C parameters |
 | --- | --- |
-| `p: stack S` | `const struct rake_stack_S_v1 *p` |
-| `p: mut stack S` | `const struct rake_mut_stack_S_v1 *p` |
+| the result's stack, `s: stack S` | `struct rake_stack_S_v2 *s` |
+| another stack, `s: stack S` | `const struct rake_stack_S_v2 *s` |
 | `x: []T` | `const T *p_x, int32_t p_x_count` |
 | `x: mut []T` | `T *p_x, int32_t p_x_count` |
 | `<n: T>` | the C type of `T` |
 | `x: f32s`, or another rack | `v128_t x` |
-| the output of a run declared `-> T` | `T *p_result`, last |
 
-A stack descriptor has one pointer for each column in declaration order,
-`const T *` in `rake_stack_S_v1` and `T *` in `rake_mut_stack_S_v1`. The runs in
-`test/abi/runs.rk` have these declarations:
+A stack descriptor holds the count, then one pointer for each column in
+declaration order. The runs in this page's first two examples have these
+declarations:
 
 ```c
-struct rake_stack_Samples_v1 { const float *value; const uint8_t *quality; };
-void scale_values(const struct rake_stack_Samples_v1 *input, int64_t count, float scale, float *result);
-void offset(const float *x, int32_t x_count, float *out, int32_t out_count, v128_t shift, int32_t n);
+struct rake_stack_Particle_v2 {
+    int64_t count;
+    float *posx; float *posy; float *velx; float *vely;
+    uint8_t *kill;
+};
+void advance(struct rake_stack_Particle_v2 *particles, float dt);
+
+struct rake_stack_Samples_v2 { int64_t count; float *value; };
+struct rake_stack_Roots_v2 { int64_t count; float *root; };
+void roots(const struct rake_stack_Samples_v2 *input,
+    struct rake_stack_Roots_v2 *output);
 ```
 
 The caller owns all the storage, and a run never allocates, keeps or frees
-it. When a traversal's count is zero or less, the descriptor, its columns
-and the output may be null. A positive count is at most 2^32 - 1, because a
-wasm32 traversal counts in 32 bits. Every column the traversal reads, the
-output, and every column of a stack it stores into must hold at least `count`
-elements. Slow code calling a run checks these and traps, and a C caller must
-meet them. A run reads each column pointer from its descriptor once.
+it. A run reads each column pointer once and writes the result's count, which
+only a compaction changes. With a count of zero or less, the columns may be
+null. Every column holds at least `count` elements, and every stack in a call
+has the same count. Slow code calling a run checks these and traps. A C caller
+must meet them. On WebAssembly a positive count is at most 2^32 - 1.
 
-Read-only inputs may alias each other. An output may overlap an input only
-when their element widths match and both start at exactly the same address,
-for an in-place update. Otherwise their storage must be disjoint. A 32-bit
-output cannot reuse a compact byte or 16-bit input's storage: its wider
-stores would overwrite records before the next chunk reads them. Each
-chunk loads all the columns it reads before storing its result,
-so an in-place update sees the chunk's inputs as they were. The C declaration
-has no `restrict`, because that exact aliasing is allowed.
+The result's columns may share storage with another argument only when an
+element of one starts at exactly the same address as the corresponding element
+of the other, for an in-place update. Otherwise their storage must be disjoint.
+The C declaration has no `restrict`, because that exact aliasing is allowed.
 
-From slow code, a run is a statement. A run declared `-> T` takes its output
-view as one more argument after its parameters, as `weigh(..., weighed)` does
-in [the slow tier](08_slow_tier.md).
+On x86-64 Linux a stack run follows System V, and on AArch64 Linux it follows
+AAPCS64. Stack descriptors take integer argument registers in source order, and
+`f32` uniforms take the vector argument registers, `xmm0` to `xmm7` or `s0` to
+`s7`. `i32`, `u32` and `bool` uniforms advance the integer register counter.
+The run never spills an argument or accepts stack arguments, so a run with more
+integer arguments than registers (six on x86, eight on AArch64) fails
+compilation, as does one with more than eight uniforms. An `i32` uniform's
+unspecified upper register bits can't change its value, and a `bool` keeps only
+its value bit. The run calls nothing, and touches the stack only to save the
+callee-saved registers that x86 needs when a run has many columns. The AVX
+profiles execute `vzeroupper` before returning.
 
-`test/abi_test.sh` calls the runs from C for every count from 0 to 20, with
-misaligned arrays, sentinels after the output, null pointers for empty
-counts, in-place output, storage ending at the last page of linear memory,
-mutable stacks and rack parameters, in both addressing modes.
+Native stack runs keep the columns they read in vector registers: up to six on
+SSE2, seven on AVX2 and NEON, and twenty on AVX-512.
+Views, reductions, scans, extraction, insertion and shuffles in native stack
+runs are work in progress and fail compilation.
 
-## Native CPU streams
+## Verification
 
-The unreleased development compiler supports an input stack and an `i32` or
-`i64` count, optionally followed by a mutable destination stack, then up to eight
-uniform `f32`, `i32`, `u32` or `bool` arguments within the C register limits.
-One traversal using `f32s`, `i32s` or `u32s` yields a stream of the matching
-scalar type from a read-only stack, or updates one `f32`, `i32` or `u32`
-column in its mutable input or destination. Its body loads one to four distinct
-columns of these types, or compact columns explicitly widened to 32 bits,
-and combines lane expressions, including
-calls to rakes and scratches. A float mask can select integer values, and an
-integer mask can select floats: each column keeps its own element type while
-sharing the traversal's lane count. Local rack locations and arrays of them
-can be assigned with `<-`, and fixed-count `repeat` bodies compile when the
-checker unrolls them within its 4096-statement budget. General loops, multiple column stores,
-other scalar parameter types, reductions,
-scans, extraction, insertion and shuffles
-remain work in progress and fail compilation. Unused stored columns may have
-other scalar types.
+The final-object verifier compares each native run with its separately
+assembled selection, including branch offsets, memory operands and embedded
+literals. Any difference or unresolved relocation is rejected. On WebAssembly
+every SIMD instruction in a run must be one its source operations select.
 
-### Repeated rack updates
-
-Each traversal chunk creates its own rack locations. An assignment changes
-the value for subsequent expressions, while an earlier `let` keeps its
-original value. A fixed-count `repeat` copies the rack operations into the
-kernel, so the following run cubes each input value without a runtime inner
-loop:
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack Samples {
-  f32: value;
-}
-
-run cubes(input: stack Samples, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    let value = row.value
-    power := value
-    repeat <i: i32> from <0> up to <2>:
-      power <- power * value
-    yield power
-```
-
-Nested repeats use the same rule. Each copy has its own local bindings, and
-updates to an enclosing rack location survive the copy. These locations
-stay in allocated vector registers. Excess register pressure fails
-compilation. Runtime-counted loops and locations carried from one traversal
-chunk to the next remain WIP on physical targets.
-
-### Compact columns
-
-A stack can keep a small field in byte or 16-bit storage while its run
-computes with 32-bit lanes. `widen(row.field)` sign-extends `i8` or `i16`
-to `i32s`, and zero-extends `u8` or `u16` to `u32s`. This preserves the
-stored value. The field stays compact in memory, and its pointer advances
-by one or two bytes per record instead of four.
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack CompactReadings {
-  i8: adjustment;
-  i16: offset;
-  u8: quality;
-  u16: weight;
-}
-
-run combine_readings(input: stack CompactReadings, <count: i64>) -> i32:
-  for row in input using i32s up to <count>:
-    let adjustment = widen(row.adjustment)
-    let offset = widen(row.offset)
-    let quality = bitcast(i32s, widen(row.quality))
-    let weight = bitcast(i32s, widen(row.weight))
-    yield ((adjustment + offset) + quality) + weight
-```
-
-The unsigned fields fit in a signed 32-bit lane, so their bitcasts above
-preserve their numerical values too. In general `bitcast` changes only the
-interpretation of bits: an unsigned 32-bit value above 2³¹−1 becomes a
-negative signed value. It does not convert integers to floats.
-
-The C boundary keeps the original column types and a 32-bit result:
-
-```c
-struct rake_stack_CompactReadings_v1 {
-    const int8_t   *adjustment;
-    const int16_t  *offset;
-    const uint8_t  *quality;
-    const uint16_t *weight;
-};
-void combine_readings(const struct rake_stack_CompactReadings_v1 *input,
-    int64_t count, int32_t *result);
-```
-
-The compute domain controls how many records each rack visits. An AVX2
-`i32s` traversal processes eight records, loading eight bytes from a byte
-column or sixteen bytes from a 16-bit column before widening into one
-256-bit rack. It doesn't process 32 byte records merely because the stored
-field is small. SSE2 and NEON visit four records, and AVX-512 visits sixteen.
-Outputs and updated columns remain `f32`, `i32` or `u32`. Other widening
-widths and compact outputs are work in progress.
-
-### Numerical conversions
-
-`to_f32` converts an `i32s` or `u32s` rack to floating-point values.
-`to_i32` and `to_u32` round floats to signed or unsigned integers with
-ties to even and saturation. All three
-compile in native streams, including compact signed and unsigned columns
-widened before conversion. `to_f32(widen(row.quality))` preserves the
-unsigned values without a signedness bitcast. A full-width `u32` column
-can exceed the signed range, so its conversion uses the unsigned operation.
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack Measurements {
-  f32: value;
-}
-
-run rounded_values(input: stack Measurements, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    yield to_i32(row.value)
-
-run rounded_unsigned_values(input: stack Measurements, <count: i32>) -> u32:
-  for row in input using u32s up to <count>:
-    yield to_u32(row.value)
-```
-
-Each result column stores one integer per record. Empty counts touch no
-storage, and a tail converts only participating values. NaNs become zero,
-and values beyond the chosen integer range saturate to its endpoints.
-For the unsigned result, negative values become zero and overflow becomes
-4294967295.
-
-### Calling the stream
-
-On Linux x86-64 the stream follows System V: the descriptor is in `rdi`, the
-count in `rsi`, and, when there are no integer uniforms, the output in `rdx`.
-It returns `void` under its source
-identifier, uses no stack frame and calls nothing. The AVX profiles execute
-`vzeroupper` before returning. On AArch64 it follows AAPCS64, with the
-descriptor in `x0`, count in `x1` and, without integer uniforms, output in `x2`:
-
-```c
-void roots(
-    const struct rake_stack_Samples_v1 *input, /* rdi / x0 */
-    int64_t count,                            /* rsi / x1 */
-    float *result                             /* rdx / x2 */
-);
-```
-
-A scale or threshold can vary between calls without changing the kernel:
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack Values {
-  f32: value;
-}
-
-run scaled_values(input: stack Values, <count: i64>, <scale: f32>, <bias: f32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield row.value * <scale> + <bias>
-```
-
-The C arguments retain source order, with the output last:
-
-```c
-void scaled_values(const struct rake_stack_Values_v1 *input,
-    int64_t count, float scale, float bias, float *result);
-```
-
-An integer column follows the same traversal. This run adds an offset to
-each signed magnitude using the [wrapping integer arithmetic](01_primitives_operations_and_targets.md#integer-racks):
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack IntegerValues {
-  i32: value;
-}
-
-run signed_magnitudes(input: stack IntegerValues, <count: i32>, <offset: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    yield abs(row.value) + <offset>
-```
-
-`using i32s` visits four records on SSE2 or NEON, eight on AVX2 and sixteen
-on AVX-512. Its C descriptor and output use `int32_t`, preserving every lane's
-bits through the boundary:
-
-```c
-struct rake_stack_IntegerValues_v1 { const int32_t *value; };
-void signed_magnitudes(const struct rake_stack_IntegerValues_v1 *input,
-    int32_t count, int32_t offset, int32_t *result);
-```
-
-The floating-point arguments arrive in `xmm0` through `xmm7` on x86, or
-`s0` through `s7` on AArch64. Rake preserves them in caller-clobbered registers
-before loading the first rack, and the allocator keeps them live through
-every iteration. Register pressure still causes a compilation error. The
-stream never spills an argument to memory or accepts stack arguments.
-
-Integer and Boolean uniforms advance the integer argument counter separately
-from floats. The descriptor and count consume two slots. A separate mutable
-destination consumes another, while a stream's output pointer comes after
-the uniforms. Consequently an x86 stream can take three integer or Boolean
-uniforms, an in-place update four, and an AArch64 stream five or an in-place
-update six. The eight-uniform limit also applies to mixed types. Compilation
-fails when either register counter or the vector allocator runs out of space.
-Booleans retain only their value bit, so unspecified upper C argument bits
-cannot affect a choice. Uniform comparisons and Boolean conditions use the
-same vector masks in full racks and tails.
-
-You can combine uniform conditions with `and`, `or` and `not`, and bind an
-intermediate Boolean for reuse. Logic short-circuits: when the left side
-already decides an `and` or `or`, a skipped floating-point comparison receives
-benign operands. A signalling NaN in that skipped comparison raises no invalid
-exception. The run's tail and any enclosing through mask also restrict its
-participating lanes. Other scalar arithmetic in native runs remains WIP.
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack Values {
-  f32: value;
-}
-
-run choose_scale(input: stack Values, <count: i32>, <mode: i32>, <scale: f32>, <enabled: bool>) -> f32:
-  for row in input using f32s up to <count>:
-    let value = row.value
-    let <take: bool> = <enabled> and <mode> < <0>
-    yield if <take> then value * <scale> else (if not <enabled> then <0.0> else value)
-```
-
-Its C declaration preserves that order. On x86, `mode` is in `edx`, `scale`
-in `xmm0`, `enabled` in `ecx` and the output pointer in `r8`. On AArch64 the
-corresponding slots are `w2`, `s0`, `w3` and `x4`:
-
-```c
-void choose_scale(const struct rake_stack_Values_v1 *input, int32_t count,
-    int32_t mode, float scale, bool enabled, float *result);
-```
-
-To update a column in place, make the input stack mutable and finish the
-traversal with a column assignment. This run has no stream result or separate
-output argument:
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack Values {
-  f32: value;
-}
-
-run shift_values(input: mut stack Values, <count: i64>, <bias: f32>):
-  for row in input using f32s up to <count>:
-    input.value <- row.value + <bias>
-```
-
-```c
-struct rake_mut_stack_Values_v1 { float *value; };
-void shift_values(const struct rake_mut_stack_Values_v1 *input,
-    int64_t count, float bias);
-```
-
-The descriptor stays unchanged. Rake loads the read columns before storing
-each chunk's result, and writes only the selected column's active elements.
-A column update may also write an input column that the expression never
-reads. A C caller may leave the stack's unused pointers null.
-
-A separate destination stack can have a different record layout. Its
-descriptor follows the count, before the uniforms:
-
-<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
-```rake
-pack Values {
-  f32: value;
-}
-pack Roots {
-  u8: tag;
-  f32: root;
-}
-
-run copy_shift(input: stack Values, <count: i32>, output: mut stack Roots, <bias: f32>):
-  for row in input using f32s up to <count>:
-    output.root <- row.value + <bias>
-```
-
-```c
-struct rake_stack_Values_v1 { const float *value; };
-struct rake_mut_stack_Roots_v1 { uint8_t *tag; float *root; };
-void copy_shift(const struct rake_stack_Values_v1 *input, int32_t count,
-    const struct rake_mut_stack_Roots_v1 *output, float bias);
-```
-
-Both descriptors stay unchanged. The selected destination pointer is loaded
-using its own record layout. The C boundary passes this descriptor in `rdx`
-or `x2`, where a stream passes its output pointer. Rake callers check that
-both stacks' columns hold the count. Independent C callers supply valid
-storage for the read and written columns, and may leave unused pointers null.
-
-The compiler owns the loop and advances by four elements on SSE2 and NEON,
-eight on AVX2 or sixteen on AVX-512F. Full racks use unaligned vector loads
-and stores, with packed extension for compact input columns. AVX2 touches
-only active 32-bit elements in the last rack through `vmaskmovps`. Its compact
-tail first assembles the existing bytes or 16-bit elements with guarded
-lane transfers, then widens the packed value. AVX-512F uses `vmovups` or a
-masked extending load with the `k2` memory mask, independently
-of the expression selector's `k1`.
-
-SSE2 has no fault-suppressing float load or store. For its last one to three
-elements, uniform count guards select the individual memory transfers. The
-compiler assembles those elements into one XMM rack, evaluates the expression
-once with vector arithmetic, and stores only its active elements. There is
-no scalar arithmetic cleanup loop. NEON's tail also uses uniform count
-guards, loading only existing elements into an initially zeroed vector
-through `ld1` lane transfers. It evaluates one masked rack and writes the
-active results through `st1` lane transfers. Both keep the arithmetic
-vectorised. Inactive operands are made benign before exception-capable
-arithmetic on all four profiles.
-
-The count uses `int32_t` or `int64_t` in C, matching its Rake type. An `i32`
-count is sign-extended at entry before the loop or any pointer access, so
-unspecified upper register bits cannot change its value. The
-[System V AMD64 ABI](https://gitlab.com/x86-psABIs/x86-64-ABI/-/blob/master/x86-64-ABI/low-level-sys-info.tex)
-and [AAPCS64](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst#parameter-passing)
-define those unused argument bits as unspecified. Counts of zero or less
-touch no pointer, so null pointers are allowed then.
-For a positive count, each read column and the output must hold that many
-elements of its declared type. The same overlap rules as the wasm32 boundary apply.
-
-The final-object verifier compares the complete traversal function with the
-separately assembled selection, including branch offsets, memory operands
-and embedded literals. Any difference or unresolved relocation is rejected.
-`test/native_stream_test.sh` checks independent C results, exact in-place
-output and guarded tails of every remainder for one to four columns. It also
-checks signed and unsigned integer columns against independently computed
-wrapping bits, including multiplication, absolute values, literal and runtime shifts,
-unsigned clamps and mixed float/integer selection. Integer streams and
-column updates exercise exact aliasing and a separately shaped destination.
-Compact-column checks cover signed and unsigned byte and 16-bit boundaries,
-wrapping sums, unsigned products and separate destinations. Every compact
-input ends at a guard page for each count from zero through 65, so an
-over-read fails independently of the numerical result.
-C and Rake callers also check scale, bias and threshold arguments, including
-a quiet-NaN threshold, and eight uniform arguments preserved across racks.
-Mutable-descriptor checks cover the first and fourth columns, an unread
-destination column, unchanged independent columns and null unused pointers.
-Separate-destination checks use a different record layout through C and Rake
-callers. C checks guard every tail and cover exact aliasing with a read column.
-The C count oracle also supplies arbitrary upper bits in an `i32` argument,
-including zero and negative counts, while Rake callers exercise both widths.
-Each profile checks a million-element safe-root pass plus a three-element tail.
-AVX-512 runs on capable hardware or through Intel SDE, and NEON
-through AArch64 QEMU. The AVX2 demonstration in `demo/safe-root/run.sh`
-times both optimised and explicitly scalar C builds.
+`test/native_stream_test.sh` checks native stack runs against independent C
+results, with exact in-place output and every tail remainder, columns ending at
+guard pages, masked and compacted selections, compact columns and uniform
+arguments. AVX-512 runs on capable hardware or through Intel SDE, and NEON
+through AArch64 QEMU. `test/abi_test.sh` calls WebAssembly runs from C for
+every count from 0 to 20 with misaligned columns, sentinels after each column
+and null columns for empty counts.

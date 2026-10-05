@@ -27,7 +27,7 @@ type value =
   | VPtr of pointer
   | VFunction of string
   | VNull
-  | VStack of (string * value) list
+  | VStack of int64 * (string * value) list  (** count, and each column as a view *)
   | VRack of R.value
   | VUnit
 
@@ -308,7 +308,20 @@ let rec eval env (e : expr) : value =
   | Record_lit (name, fields) ->
       let r = find_record env.machine.program name in
       VRec (name, Array.of_list (List.map (fun (f, _) -> copy (ev (List.assoc f fields))) r.rfields))
-  | Stack_lit (_, fields) -> VStack (List.map (fun (f, v) -> (f, ev v)) fields)
+  | Stack_lit (_, fields) ->
+      let columns = List.map (fun (f, v) -> (f, ev v)) fields in
+      let counts = List.map (function (_, VView v) -> v.count | _ -> trap loc "a stack column") columns in
+      (match counts with
+       | first :: rest -> if List.exists (( <> ) first) rest then trap loc "a stack's columns hold %s elements" (String.concat ", " (List.map string_of_int counts));
+           VStack (Int64.of_int first, columns)
+       | [] -> VStack (0L, columns))
+  | Stack_copy a -> (
+      match ev a with
+      | VStack (count, columns) ->
+          VStack (count, List.map (function
+            | f, VView v -> (f, VView { store = Array.init (Int64.to_int count) (fun k -> v.store.(v.start + k)); start = 0; count = Int64.to_int count })
+            | column -> column) columns)
+      | _ -> trap loc "copy of a non-stack")
   | Array_lit items -> VArr (Array.of_list (List.map (fun i -> copy (ev i)) items))
   | Addr p -> (
       match p.k with
@@ -332,7 +345,7 @@ let rec eval env (e : expr) : value =
           in
           VPtr { store; index = field_index env name field }
       | _ -> trap loc "addr of a non-location")
-  | Length a -> (match ev a with VArr x -> VInt (SInt, Int64.of_int (Array.length x)) | VView v -> VInt (SInt, Int64.of_int v.count) | _ -> trap loc "count")
+  | Length a -> (match ev a with VArr x -> VInt (SInt, Int64.of_int (Array.length x)) | VView v -> VInt (SInt, Int64.of_int v.count) | VStack (count, _) -> VInt (SInt64, count) | _ -> trap loc "count")
   | Slice (base, start, count) -> (
       let s = Int64.to_int (as_int loc (ev start)) and n = Int64.to_int (as_int loc (ev count)) in
       let store, from, total =
@@ -359,6 +372,13 @@ and place env (e : expr) : (unit -> value) * (value -> unit) =
   | Var name | Global name ->
       let cell = lookup env loc name in
       ((fun () -> cell.(0)), fun v -> assign_storage_value cell 0 v)
+  | Field (base, field) when (match base.ty with Stack _ -> true | _ -> false) -> (
+      match eval env base with
+      | VStack (count, columns) -> (
+          match List.assoc_opt field columns with
+          | Some (VView v) -> let column = VView { v with count = Int64.to_int count } in ((fun () -> column), fun _ -> trap loc "a stack's column is not reassigned")
+          | _ -> trap loc "column %s" field)
+      | _ -> trap loc "field of a non-stack")
   | Field (base, field) -> (
       let record =
         match eval env base with
@@ -531,40 +551,43 @@ and elements_of_rack element (rack : R.value) =
 
 and run_call env loc run args =
   let vars = Hashtbl.create 32 in
-  let params = run.run_params in
-  List.iteri
-    (fun i a ->
-      let v = match a with Arg_uniform e | Arg_memory e -> eval env e in
-      match List.nth_opt params i with
-      | Some (Run_stack (n, _, _) | Run_view (n, _, _) | Run_uniform (n, _) | Run_rack (n, _)) -> Hashtbl.replace vars n [| v |]
-      | None -> Hashtbl.replace vars "$result" [| v |])
-    args;
-  let renv = { env with vars } in
-  (* As the C boundary: each traversed column and the output hold the count. *)
-  let rec outputs stmts =
-    List.concat_map (fun s -> match s.r with R_output (o, _, _) -> [ o ] | R_for (_, _, _, _, b) | R_block b -> outputs b | R_if (_, a, b) -> outputs a @ outputs b | _ -> []) stmts
-  in
-  let rec traversals stmts =
-    List.concat_map
-      (fun s ->
-        match s.r with
-        | R_traverse t ->
-            (match t.t_count.k with Var count -> (t.t_stack, count) :: List.map (fun o -> (o, count)) (outputs t.t_body) | _ -> [])
-            @ traversals t.t_body
-        | R_for (_, _, _, _, b) | R_block b -> traversals b
-        | R_if (_, a, b) -> traversals a @ traversals b
-        | _ -> [])
-      stmts
-  in
-  List.iter
-    (fun (stack, count) ->
-      match (Hashtbl.find_opt vars stack, Hashtbl.find_opt vars count) with
-      | Some [| VStack columns |], Some [| VInt (_, n) |] ->
-          let views = List.map snd columns @ (match Hashtbl.find_opt vars "$result" with Some r -> [ r.(0) ] | None -> []) in
-          List.iter (function VView v -> if n > Int64.of_int v.count then trap loc "run %s traverses %Ld records of %d" run.run_name n v.count | _ -> ()) views
-      | _ -> ())
-    (traversals run.run_body);
-  exec_run renv loc run.run_body ~tail:None
+  let values = List.map (function Arg_uniform e | Arg_memory e -> eval env e) args in
+  List.iter2
+    (fun p v -> match p with
+      | Run_stack (n, _) | Run_view (n, _, _) | Run_uniform (n, _) | Run_rack (n, _) -> Hashtbl.replace vars n [| v |])
+    run.run_params values;
+  (* As the C boundary: every stack has the result's count, and the result's
+     columns meet another argument's memory only element for element. *)
+  (match run.run_result with
+   | None -> ()
+   | Some (result, _) ->
+       let count, result_columns =
+         match Hashtbl.find vars result with [| VStack (n, columns) |] -> (n, columns) | _ -> trap loc "a stack" in
+       let memory =
+         List.concat
+           (List.map2
+              (fun p v ->
+                match (p, v) with
+                | Run_stack (n, _), VStack (c, columns) ->
+                    if c <> count then trap loc "run %s takes stacks of %Ld and %Ld records" run.run_name count c;
+                    if n = result then [] else List.filter_map (function _, VView v -> Some (v, true) | _ -> None) columns
+                | Run_view _, VView v -> [ (v, false) ]
+                | _ -> [])
+              run.run_params values)
+       in
+       List.iter
+         (function
+           | _, VView r ->
+               List.iter
+                 (fun ((v : view), columnar) ->
+                   let overlap = v.start < r.start + Int64.to_int count && r.start < v.start + v.count in
+                   if v.store == r.store && overlap && not (columnar && v.start = r.start) then
+                     trap loc "run %s's result shares memory with another argument" run.run_name)
+                 memory
+           | _ -> ())
+         result_columns);
+  ignore (exec_run { env with vars } loc run.run_body ~tail:None);
+  match run.run_result with Some (result, _) -> (Hashtbl.find vars result).(0) | None -> VUnit
 
 (** The scope a run statement sees, as Native_reference values. *)
 and reference_env renv =
@@ -672,54 +695,57 @@ and exec_rstmt renv ~tail (s : rstmt) =
   | R_traverse t ->
       let count = as_int loc (eval renv t.t_count) in
       (* A wasm32 traversal counts its records in 32 bits. *)
-      if count > 0xFFFFFFFFL then trap loc "a traversal of %Ld records exceeds 2^32 - 1" count;
+      if Target.is_wasm renv.machine.profile && count > 0xFFFFFFFFL then
+        trap loc "a traversal of %Ld records exceeds 2^32 - 1" count;
+      let stack name = match (lookup renv loc name).(0) with VStack (_, columns) -> columns | _ -> trap loc "a stack" in
+      let column owner field = match List.assoc_opt field (stack owner) with Some (VView v) -> v | _ -> trap loc "column %s" field in
+      let pack = find_pack renv.machine.program t.t_pack in
+      let cursor = ref 0 in
       if count > 0L then (
-        let stack = match (lookup renv loc t.t_stack).(0) with VStack columns -> columns | _ -> trap loc "a stack" in
         let l = rack_lanes renv.machine t.t_domain in
-        let pack = find_pack renv.machine.program t.t_pack in
         let i = ref 0 in
         while Int64.of_int !i < count do
           let active = min l (Int64.to_int count - !i) in
           set "$chunk_offset" (VInt (SInt, Int64.of_int !i));
+          let elements field value =
+            let stored = List.assoc field pack.pack_fields in
+            match (lookup renv loc value).(0) with
+            | VRack r -> elements_of_rack stored r
+            | _ -> trap loc "a column's value is a rack"
+          in
           List.iter
             (fun st ->
               match st.r with
-              | R_chunk_load (name, element, field, stored) ->
-                  let column = match List.assoc_opt field stack with Some (VView v) -> v | _ -> trap loc "column %s" field in
+              | R_chunk_load (name, element, owner, field, stored) ->
+                  let source = column owner field in
                   let values =
                     Array.init l (fun k ->
-                        if k < active then column.store.(column.start + !i + k)
+                        if k < active then source.store.(source.start + !i + k)
                         else if is_float stored then VFloat (stored, 0.0) else VInt (stored, 0L))
                   in
                   let values = Array.map (function VInt (_, v) -> VInt (element, v) | VFloat (_, f) -> VFloat (element, f) | x -> x) values in
-                  ignore pack;
                   set name (VRack (rack_of_elements element values))
-              | R_yield value | R_output (_, _, value) ->
-                  let out, element =
-                    match st.r with
-                    | R_output (output, field, _) -> (
-                        match (lookup renv loc output).(0) with
-                        | VStack columns -> (match List.assoc_opt field columns with Some (VView v) ->
-                            (* The output stack may be another pack's: its column's own elements give the type. *)
-                            let element = if v.count > 0 then (match v.store.(v.start) with VFloat (s, _) | VInt (s, _) -> s | _ -> t.t_domain) else t.t_domain in
-                            (v, element) | _ -> trap loc "output column")
-                        | _ -> trap loc "output stack")
-                    | _ -> ((match (lookup renv loc "$result").(0) with VView v -> v | _ -> trap loc "the output view"), t.t_domain)
-                  in
-                  (match (lookup renv loc value).(0) with
-                   | VRack r ->
-                       let values = elements_of_rack element r in
-                       for k = 0 to active - 1 do out.store.(out.start + !i + k) <- values.(k) done
-                   | _ -> trap loc "yield of a non-rack")
+              | R_output (output, field, value) ->
+                  let out = column output field and values = elements field value in
+                  for k = 0 to active - 1 do out.store.(out.start + !i + k) <- values.(k) done
+              | R_compact (mask, racks) ->
+                  let selected = match (lookup renv loc mask).(0) with VRack (R.Mask m) -> m | _ -> trap loc "a selection mask" in
+                  let racks = List.map (fun (field, value) -> (column t.t_stack field, elements field value)) racks in
+                  for k = 0 to active - 1 do
+                    if selected.(k) then (
+                      List.iter (fun ((out : view), values) -> out.store.(out.start + !cursor) <- values.(k)) racks;
+                      incr cursor)
+                  done
               | _ ->
-                  (* Nested in an outer tail, both prefix masks apply. *)
                   let own = if active < l then Some active else None in
                   let combined = match (tail, own) with Some o, Some a -> Some (min o a) | Some o, None -> Some o | None, own -> own in
                   exec_rstmt renv ~tail:combined st)
             t.t_body;
           i := !i + l
-        done)
-  | R_chunk_load _ | R_output _ | R_yield _ -> trap loc "a traversal statement outside its traversal"
+        done);
+      if List.exists (fun st -> match st.r with R_compact _ -> true | _ -> false) t.t_body then
+        Hashtbl.replace renv.vars t.t_stack [| VStack (Int64.of_int !cursor, stack t.t_stack) |]
+  | R_chunk_load _ | R_output _ | R_compact _ -> trap loc "a traversal statement outside its traversal"
 
 (* ─── Programs ──────────────────────────────────────────────────────── *)
 

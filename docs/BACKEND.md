@@ -76,7 +76,7 @@ comparison-and-selection sequence. It propagates NaNs and orders −0 below
 selects `fmin` and `fmax` on complete four-lane registers. These operations
 use the caller's [floating-point environment](spec/01_primitives_operations_and_targets.md#floating-point-values).
 Under a participation mask, native lowering sanitises both operands before
-performing the operation, including in a stream's partial rack.
+performing the operation, including in a stack run's partial rack.
 
 Integral rounding uses full-width `vroundps` on AVX2, `vrndscaleps` on
 AVX-512F, and NEON's `frintm`, `frintp`, `frintz` and `frintn`. SSE2 has no
@@ -151,7 +151,7 @@ comparisons remain ordered, and integer comparisons retain their signedness.
 Its mask selects the same arm in every participating lane. The branches
 pass through the common masked
 lowering, so untaken arithmetic receives benign operands. Outer through masks
-and stream tails further limit participation. This uses no scalar comparison
+and stack-run tails further limit participation. This uses no scalar comparison
 or branch inside the register kernel.
 
 A Boolean uniform becomes a vector mask by broadcasting its low word,
@@ -164,9 +164,9 @@ physical profile.
 Uniform conditions also compose with `and`, `or` and `not`. Their mask
 operations remain in vector registers. Short-circuit logic restricts the
 right-hand comparison's participation to lanes where its result is needed,
-intersecting that mask with any outer through or stream-tail mask. Skipped
+intersecting that mask with any outer through or stack-run tail mask. Skipped
 floating-point operands are sanitised before comparison, so a signalling NaN
-raises invalid only when that comparison participates. Native traversals
+raises invalid only when that comparison participates. Native stack runs
 lower immutable Boolean bindings once, retaining their computed masks for reuse.
 WebAssembly can broadcast a Boolean condition into a mask with `i32.sub`
 and `i32x4.splat` before combining it with another condition.
@@ -237,7 +237,7 @@ left then logically right by 27. For a right shift, it negates the resulting
 The final-object verifier accepts these runtime forms only as the complete
 normalisation-and-shift sequence, with full-width data operands and the
 number of shifts derived from Rake's allocated instructions. Unnormalised,
-narrowed or undeclared runtime shifts fail verification. Native streams use
+narrowed or undeclared runtime shifts fail verification. Native stack runs use
 the same selection and retain the count across full and partial racks.
 
 Signed comparisons use `pcmpeqd` and
@@ -255,8 +255,8 @@ Equality and inequality compare the unmodified bits. WebAssembly selects
 comparisons and broadcasts. The interpreter stores unsigned lane values in
 the range 0 to 2³²−1, so its ordering stays independent of signed predicates.
 Integer masks and float masks share the same lane representation, so either
-can select float or integer racks. The native traversal subset accepts these
-32-bit integer columns alongside floats.
+can select float or integer racks. Native stack runs accept these 32-bit
+integer columns alongside floats.
 
 A native `bitcast` between `i32s` and `u32s` keeps the same 32 bits in each
 lane. Selection uses a typed vector copy, and allocation elides the copy
@@ -278,7 +278,7 @@ packed masks, and converts the remaining values with `cvtps2dq`,
 endpoints. Four allocated temporary vector registers hold its masks and
 safe values, and spills still cause rejection. Inside `through`, inactive
 integer or float operands become zero before conversion, including
-in partial streams. The final-object verifier checks full-width conversion
+in partial racks of stack runs. The final-object verifier checks full-width conversion
 operands and rejects scalar or narrowed forms. Independent C bit arithmetic
 checks rounding and saturation separately from these instructions.
 
@@ -332,8 +332,8 @@ explicit slow code -> scalar C and C ABI declarations ────────�
                                                               register-kernel verifier
 ```
 
-This native path supports the limited SSE2, AVX2, AVX-512 and NEON stream traversal.
-General native runs remain work in progress. Slow callers can pass
+This native path also compiles stack runs on SSE2, AVX2, AVX-512 and NEON.
+General runs over views remain work in progress on these profiles. Slow callers can pass
 uniform `f32`, `i32`, `u32` and `bool` arguments and receive `f32`, `bool`, `i32` or
 `u32` results from register kernels.
 The platform compiler lowers explicit slow code and supplies the System V
@@ -430,59 +430,66 @@ Outside a `slow` block, rack work uses vector instructions wherever the selected
 operation. A run may also contain the uniform address, loop and bounds work
 written in its source. It never replaces rack work with scalar lane loops.
 
-## Native traversal selection
+## Native stack runs
 
-Rake selects a native stream's loop, addresses, full-rack transfers and tail.
-Its lane expression goes through the same SSA selector
-and no-spill allocator as a register kernel. Ordered bindings retain each
-computed value in SSA. Local rack assignments rebind subsequent uses, leaving
-earlier snapshots intact. Unrolled `repeat` copies keep their local scope and
-retain updates to enclosing locations. Repeated access to the same column
-shares its loaded rack before the final output store. The tail is lowered under its
-participation mask, so inactive operands cannot raise arithmetic exceptions.
-The complete stream is opaque assembly inside the native C unit. C supplies
-only slow orchestration and its ABI. SSE2 and NEON use count-guarded lane
-transfers for the tail, then evaluate its arithmetic as one masked rack.
-AVX2 and AVX-512 use fault-suppressing masked vector transfers.
+Rake selects a stack run's loop, addresses, full-rack transfers, tail and
+compaction. One kernel computes every output of a rack: lowering returns all
+the replacements, or the compaction's selection and every column, from one SSA
+function, so values they share are computed once. The no-spill allocator
+leaves each output in a register, and the loop stores it from there. Ordered
+bindings retain each computed value in SSA. Local rack assignments rebind
+subsequent uses, leaving earlier snapshots intact. Unrolled `repeat` copies
+keep their local scope and retain updates to enclosing locations. The tail is
+lowered under its participation mask, so inactive operands can't raise
+arithmetic exceptions. The complete run is opaque assembly inside the native C
+unit. C supplies only slow orchestration and its ABI.
 
-The verifier compares the final traversal function's complete bytes with a
-separately assembled selection. This includes its branches, address operands and
+The run reads its arguments in source order. Each stack descriptor arrives in
+an integer register, and the result's descriptor supplies the count. Every
+column the run reads or writes gets one pointer, loaded once into a general
+register that holds no descriptor. On x86 the run pushes the callee-saved
+registers it needs when its columns outnumber the caller-saved ones. Loads
+and stores index columns by the record index. NEON forms each address first,
+because its register-offset loads only scale by the access size. Full racks
+use unaligned vector transfers, and compact columns use packed extension:
+unpack and shift sequences on SSE2, extending loads on AVX2 and AVX-512F, and
+`sshll` or `ushll` on NEON. SSE2 and NEON tails use count-guarded lane
+transfers, then evaluate their arithmetic as one masked rack. AVX2 masks its
+32-bit transfers with `vmaskmovps` and guards its compact ones, and AVX-512F
+masks every transfer with `k2`.
+
+Compaction keeps a write cursor, which never passes the records already
+read, so a full rack may store whole racks at the cursor without overwriting
+an unread record. A tail stores only its selected lanes.
+
+| Profile | Selection | Moving the selected lanes | Compact columns |
+| --- | --- | --- | --- |
+| AVX-512F | `vptestmd` into `k3`, combined with `k2` in the tail | `vcompressps` to memory | `vcompressps` in a register, then `vpmovdb` or `vpmovdw` under a prefix mask |
+| AVX2 | `vmovmskps` bits | `vpermps` by a 256-entry table of lane orders | `vpshufb` and `vpermd` truncation |
+| SSE2 | `movmskps` bits | a jump to one of 16 fixed `pshufd` permutations | sign-extending shifts and saturating packs |
+| NEON | lane weights summed by `addv` | `tbl` by a 16-entry byte table | `xtn` |
+
+The run writes the cursor to the result's count after its last rack. A run
+keeps one to twenty columns in vector registers: six on SSE2, seven on AVX2
+and NEON. Up to eight uniform `f32`, `i32`, `u32` or `bool` arguments use the
+platform C register slots, and the run copies them into preserved
+caller-clobbered vector registers whose allocator lifetimes extend across
+iterations. `bool` uniforms keep only their value bit, once before the loop.
+Compilation fails when the integer argument registers, the vector registers or
+the allocator run out.
+
+The verifier compares the final run's complete bytes with a separately
+assembled selection. This includes its branches, address operands and
 embedded literals. Unresolved relocations fail verification, preventing
 unverified helpers or external constants from changing that graph. Guard
 pages and an independent C oracle check the memory and numerical semantics.
-This stage supports one to four `f32`, `i32` or `u32` read columns and one
-output of these types. It also explicitly widens `i8` and `i16` stored
-columns into `i32s`, or `u8` and `u16` into `u32s`. A stream's result type
-matches its 32-bit traversal domain.
-The output is a separate stream pointer or one column in a mutable stack.
-A separate destination stack may have a different record layout. Column
-updates load every input rack before writing the result.
-Each input pointer advances by its stored width. Full compact loads read
-four records on SSE2 or NEON, eight on AVX2, and sixteen on AVX-512F.
-SSE2 widens packed bytes or 16-bit elements with unpack and shift sequences.
-AVX2 and AVX-512F use signed or unsigned extending loads, and NEON uses
-packed `sshll` or `ushll` extension. Compact SSE2, AVX2 and NEON tails use
-count-guarded transfers before packed extension. AVX-512F masks the
-extending load. The byte/16-bit storage remains compact while the working
-rack uses the profile's full register width. No scalar arithmetic tail is
-introduced, and compact output storage remains work in progress.
-The count may be `i32` or `i64`. The former is sign-extended to the native
-address width at entry, before signed count guards or pointer access.
-Up to eight uniform `f32`, `i32`, `u32` or `bool` arguments use the platform
-C register slots. Integer arguments share their counter with descriptors,
-the count and the stream output pointer, while floats use a separate counter.
-The complete boundary is rejected when either counter exceeds its register
-capacity.
-The traversal copies them into preserved caller-clobbered vector registers,
-and their allocator lifetimes extend across iterations. That prevents an
-argument from being overwritten after its last use in the first rack.
-[Native CPU streams](spec/02_packs_and_run.md#native-cpu-streams) defines
-the accepted subset and caller obligations.
+[The C boundary](spec/02_packs_and_run.md#the-c-boundary) defines the callers'
+obligations.
 
 ## Object verification
 
 `--verify-native` disassembles the object and checks register kernels against
-their profile's instruction list. Native streams use the complete-function
+their profile's instruction list. Native stack runs use the complete-function
 selection check above:
 
 - On SSE2, AVX2, AVX-512 and NEON: no calls, no stack, every rack in one
@@ -509,8 +516,8 @@ physical registers. The system toolchain also owns object formats,
 relocations, linking and start-up. Debug information and exception unwinding
 aren't produced. Rake 0.7.0's x86 and AArch64 backends compile scratches,
 rakes and native mixed programs through
-the limited scalar C boundary above. General runs compile on WebAssembly;
-SSE2, AVX2, AVX-512 and NEON implement the stream subset.
+the limited scalar C boundary above. General runs compile on WebAssembly, and
+stack runs on every profile.
 
 ## Planned GPU pipeline
 

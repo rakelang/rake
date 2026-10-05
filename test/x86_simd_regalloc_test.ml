@@ -22,6 +22,7 @@ let fma_function =
             provenance;
           } ];
     result = Some 3;
+    outputs = [];
     result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
     value_locations = [ (3, loc 2) ];
   }
@@ -47,6 +48,7 @@ let () =
       parameters = [ parameter 0; parameter 1 ];
       instructions = [ M.Addps { dst = 2; left = 0; right = 1; provenance = source } ];
       result = Some 2;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations = [ (2, loc 11) ];
     }
@@ -62,6 +64,7 @@ let () =
       parameters = [ parameter 0 ];
       instructions = [ operation ];
       result = Some 1;
+      outputs = [];
       result_type = Some result_type;
       value_locations = [ (1, loc 31) ];
     }
@@ -117,6 +120,7 @@ let () =
       parameters = List.init 8 parameter;
       instructions = constants @ consumers;
       result = Some 25;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations =
         List.init 9 (fun index -> (8 + index, loc (69 + index)))
@@ -136,6 +140,7 @@ let () =
       parameters = List.init 9 parameter;
       instructions = [];
       result = Some 0;
+      outputs = [];
       result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
       value_locations = [];
     }

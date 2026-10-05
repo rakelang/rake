@@ -64,26 +64,26 @@ pack Particles {
   f32: position_x, velocity_x;
 }
 
-run advance_x(particles: stack Particles, <count: i64>, <dt: f32>) -> f32:
-  for particle in particles using f32s up to <count>:
-    yield particle.position_x + particle.velocity_x * <dt>
+run advance_x(particles: stack Particles, <dt: f32>) -> stack Particles:
+  particles with { position_x: particles.position_x + particles.velocity_x * <dt> }
 ```
 
 ISPC keeps the familiar loop, index, assignment, pointer and C
 interoperability. Values in the gang vary by lane unless marked `uniform`.
-Rake moves the traversal and the columns into `for ... using ... up to ...`,
-`pack` and `stack`, and marks the shared values instead, with angle brackets.
+Rake has no loop or index here: a run applies the calculation to whole
+columns of a `stack`, the compiler splits them into racks, and the shared
+values are marked instead, with angle brackets.
 Its vector code favours pure expressions and bindings that are defined once.
 
 | | ISPC | Rake |
 | --- | --- | --- |
 | Model | imperative C-family SPMD, with loops, assignments, pointers, functions and ordinary control flow | expression-oriented vector data flow, with marked uniforms, fused bindings, tines, through blocks and sweeps |
 | Parallel unit | a gang of program instances, which may be wider than one CPU vector | a rack: one physical CPU vector register or one WebAssembly `v128`. A proposed GPU rack spans a specified warp or subgroup |
-| Columns | `soa<n>` makes an `n`-wide structure of arrays and supports layout conversion | `pack` describes a record, `stack` borrows its columns, and the profile chooses the rack width |
+| Columns | `soa<n>` makes an `n`-wide structure of arrays and supports layout conversion | `pack` describes a record, a `stack` holds its columns and moves into the run that returns it, and the profile chooses the rack width |
 | Divergence | `if`, loops and calls become uniform or varying from their operands | tines name masks, through blocks compute under them, and a sweep picks each lane's result |
 | Machine rules | gang semantics are preserved, and LLVM selects instructions and allocates registers | the compiler also rejects split racks, scalar lane loops, spills and helper calls wherever the profile forbids them |
 | Back end | LLVM for CPUs, and documented Intel Xe GPU targets | Rake's own instruction selection and allocation for SSE2, AVX2, AVX-512F and NEON, and C intrinsics for WebAssembly |
-| Maturity | an established production compiler with C and C++ interoperability, tasking, libraries, tools and CPU and GPU targets | a beta compiler with four physical CPU profiles and WebAssembly. Native mixed programs are an unreleased addition; native runs and GPU targets are WIP* |
+| Maturity | an established production compiler with C and C++ interoperability, tasking, libraries, tools and CPU and GPU targets | a compiler with four physical CPU profiles and WebAssembly. Native stack runs compile on all four; native general runs and GPU targets are WIP* |
 
 *WIP: work in progress.*
 

@@ -19,7 +19,7 @@ type ty =
   | Ptr of ty * pointer_access
   | Function_pointer of ty list * ty
   | Record of string
-  | Stack of string * bool  (** a pack's columns, writable *)
+  | Stack of string  (** a pack's columns and their count *)
   | Str
   | Void
 
@@ -35,8 +35,7 @@ let rec string_of_ty = function
   | Function_pointer (args, result) ->
       "slow(" ^ String.concat ", " (List.map string_of_ty args) ^ ") -> " ^ string_of_ty result
   | Record name -> name
-  | Stack (name, false) -> "stack " ^ name
-  | Stack (name, true) -> "mut stack " ^ name
+  | Stack name -> "stack " ^ name
   | Str -> "string"
   | Void -> "()"
 
@@ -106,10 +105,11 @@ and kind =
   | Convert of Ast.convert * scalar * expr
   | Cond of expr * expr * expr
   | Record_lit of string * (string * expr) list
-  | Stack_lit of string * (string * expr) list  (** a pack's columns, each a view *)
+  | Stack_lit of string * (string * expr) list  (** a pack's columns, each a view of the count *)
+  | Stack_copy of expr  (** copy(s): new columns in the frame, holding the same records *)
   | Array_lit of expr list
   | Addr of expr
-  | Length of expr  (** elements in a view or array *)
+  | Length of expr  (** elements in a view or array, or records in a stack *)
   | Slice of expr * expr * expr  (** view of [count] elements from [start]; checked *)
   | Ptr_view of expr * expr  (** unchecked view of [count] elements at a pointer *)
   | Read_only_view of expr  (** borrow a writable view without write access *)
@@ -159,7 +159,7 @@ type extern_func = { ename : string; eheader : string; eparams : param list; ere
    every load, gather and pure rack computation binds a name. *)
 
 type run_param =
-  | Run_stack of string * string * bool  (** name, pack, writable *)
+  | Run_stack of string * string  (** name, pack *)
   | Run_view of string * scalar * bool
   | Run_uniform of string * scalar
   | Run_rack of string * scalar
@@ -180,10 +180,13 @@ and rkind =
   | R_for of string * expr * expr * expr option * rstmt list
   | R_if of expr * rstmt list * rstmt list
   | R_traverse of traverse
-  | R_chunk_load of string * scalar * string * scalar
-      (** name, rack element, field, stored element: a chunk's column, widened when narrower *)
+  | R_chunk_load of string * scalar * string * string * scalar
+      (** name, rack element, stack, field, stored element: a column's rack,
+          widened when narrower *)
   | R_output of string * string * string  (** output stack, field, rack *)
-  | R_yield of string
+  | R_compact of string * (string * string) list
+      (** selection mask, and each column's rack: the selected records move to
+          the front of the output stack's columns, which take their count *)
   | R_block of rstmt list  (** one unrolled repeat iteration: its names are its own *)
 
 and traverse = {
@@ -194,10 +197,13 @@ and traverse = {
   t_body : rstmt list;
 }
 
+(** How a stack run's result selects records, with the source predicate. *)
+type selection = Every_record | Masked of string | Compacted of string
+
 type run = {
   run_name : string;
   run_params : run_param list;
-  run_stream : scalar option;  (** the output element of the spec-02 stream form *)
+  run_result : (string * selection) option;  (** a stack run's result stack, which moves in *)
   run_body : rstmt list;
   run_loc : Ast.loc;
 }
@@ -271,6 +277,7 @@ let rec string_of_expr (e : expr) =
   | Convert (_, t, a) -> Printf.sprintf "%s(%s)" (string_of_ty (Sc t)) (s a)
   | Cond (c, a, b) -> Printf.sprintf "if %s then %s else %s" (s c) (s a) (s b)
   | Record_lit (n, _) | Stack_lit (n, _) -> n ^ " {...}"
+  | Stack_copy a -> "copy(" ^ s a ^ ")"
   | Array_lit items -> Printf.sprintf "[%d items]" (List.length items)
   | Addr a -> "addr(" ^ s a ^ ")"
   | Length a -> "count(" ^ s a ^ ")"
@@ -300,9 +307,10 @@ and string_of_rstmt indent (st : rstmt) =
   | R_traverse t ->
       Printf.sprintf "%straverse %s (%s) using %s up to %s:\n%s" pad t.t_stack t.t_pack (string_of_ty (Rack t.t_domain)) (string_of_expr t.t_count)
         (string_of_rstmts (indent + 2) t.t_body)
-  | R_chunk_load (n, el, f, stored) -> Printf.sprintf "%scolumn %s : %s = %s (stored %s)\n" pad n (string_of_ty (Rack el)) f (string_of_ty (Sc stored))
+  | R_chunk_load (n, el, owner, f, stored) -> Printf.sprintf "%scolumn %s : %s = %s.%s (stored %s)\n" pad n (string_of_ty (Rack el)) owner f (string_of_ty (Sc stored))
   | R_output (p, f, v) -> Printf.sprintf "%soutput %s.%s <- %s\n" pad p f v
-  | R_yield v -> Printf.sprintf "%syield %s\n" pad v
+  | R_compact (mask, columns) ->
+      Printf.sprintf "%scompact by %s: %s\n" pad mask (String.concat ", " (List.map (fun (f, v) -> f ^ " <- " ^ v) columns))
   | R_block body -> Printf.sprintf "%sunrolled:\n%s" pad (string_of_rstmts (indent + 2) body)
 
 let dump program =
@@ -311,3 +319,30 @@ let dump program =
        (fun r -> Printf.sprintf "\nrun @%s:\n%s" r.run_name (string_of_rstmts 2 r.run_body))
        program.runs
     @ List.map (fun f -> Printf.sprintf "\nslow @%s: %d statements\n" f.fname (List.length f.fbody)) program.slows)
+
+(** The expressions directly inside an expression, and inside a statement. *)
+let rec expr_children (e : expr) =
+  match e.k with
+  | Int _ | Float _ | Bool _ | Str_lit _ | Var _ | Global _ | Function_ref _ -> []
+  | Unary (_, a) | Count_bits (_, a) | Pointer_cast a | Field (a, _) | Convert (_, _, a) | Addr a | Length a
+  | Read_only_view a | Is_null a | Stack_copy a -> [ a ]
+  | Binary (_, a, b) | Compare (_, a, b) | Logic (_, a, b) | Elem (a, b, _) | Ptr_view (a, b) -> [ a; b ]
+  | Cond (a, b, c) | Slice (a, b, c) -> [ a; b; c ]
+  | Math (_, items) | Call (_, items) | Extern_call (_, items) | Array_lit items -> items
+  | Indirect_call (f, items) -> f :: items
+  | Vector_call (_, args) -> List.map (function Arg_memory a | Arg_uniform a -> a) args
+  | Record_lit (_, fields) | Stack_lit (_, fields) -> List.map snd fields
+  | Block (body, value) -> List.concat_map stmt_children body @ Option.to_list value
+
+and stmt_children (s : stmt) =
+  match s.s with
+  | Decl (_, _, value, _) -> Option.to_list value
+  | Assign (a, b) -> [ a; b ]
+  | Eval e -> [ e ]
+  | If (c, a, b) -> c :: List.concat_map stmt_children (a @ b)
+  | While (c, body) -> c :: List.concat_map stmt_children body
+  | For (_, _, a, b, step, body) -> a :: b :: Option.to_list step @ List.concat_map stmt_children body
+  | Return value -> Option.to_list value
+  | Break | Continue -> []
+
+let rec expr_exists predicate (e : expr) = predicate e || List.exists (expr_exists predicate) (expr_children e)

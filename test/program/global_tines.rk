@@ -12,16 +12,17 @@ rake roots_or_zero(values: f32s) -> f32s:
     | #valid(values) => rooted
     | #valid(values) gaps => <0.0>
 
-run roots(input: stack Samples, <count: i64>) -> f32:
-  for chunk in input using f32s up to <count>:
-    yield roots_or_zero(chunk.x)
+run roots(input: stack Samples, output: stack Samples) -> stack Samples:
+  output with { x: roots_or_zero(input.x) }
 
 slow main() -> i32:
   let quiet_nan = 0.0 / 0.0
   values: [7]f32 := [4.0, -4.0, quiet_nan, 9.0, 16.0, -1.0, 25.0]
   output: [7]f32 := [0.0; 7]
   expected: [7]f32 := [2.0, 0.0, 0.0, 3.0, 4.0, 0.0, 5.0]
-  roots(stack Samples { x: values }, <7>, output)
+  let rooted = roots(stack Samples { x: values }, stack Samples { x: output })
+  if count(rooted) != 7:
+    return 9
   for i from 0 up to 7:
     if bitcast(u32, output[i]) != bitcast(u32, expected[i]):
       return i + 1

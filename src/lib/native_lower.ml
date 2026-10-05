@@ -1088,8 +1088,7 @@ let rec lower_statement_in state ~through active_fused (statement : stmt) =
           in
           copies first
       | _ -> error statement.loc "repeat's bounds are integer literals")
-  | SOver _ -> error statement.loc "over loops are not supported by native scratch lowering"
-  | SStore _ | SReturn _ | SYield _ | SBreak | SContinue | SIf _ | SWhile _ | SLoop _ ->
+  | SStore _ | SReturn _ | STine _ | SResult _ | SBreak | SContinue | SIf _ | SWhile _ | SLoop _ ->
       errorf statement.loc "%s is not supported by native scratch lowering"
         (Capabilities.id (Capabilities.feature_of_stmt statement.v))
 
@@ -1270,7 +1269,7 @@ let lower_through ?outer state (through : through) =
                 binding.fused_name binding.fused_type binding.fused_expr
             in
             lower_body (Some region) rest
-        | SLocBind _ | SAssign _ | SOver _ | SUniform _ | SStore _ | SReturn _ | SYield _ | SBreak | SContinue
+        | SLocBind _ | SAssign _ | STine _ | SResult _ | SUniform _ | SStore _ | SReturn _ | SBreak | SContinue
         | SIf _ | SWhile _ | SLoop _ ->
             error statement.loc "effectful statements are forbidden in native through blocks")
   in
@@ -1530,7 +1529,10 @@ let () = inline_call := inline_definition
     as a scratch body. [mask] names a parameter whose lanes are
     the only active ones: a traversal's tail, under whose predication every
     exception-capable operation is sanitised. *)
-let lower_expression ?(profile = Target.Wasm_simd128) ?(condition_bindings = []) ?(expression_bindings = []) ~definitions ~name ~parameters ?mask ~fused loc (expression : expr) =
+(** A traversal kernel: one function computing every output of a rack, which
+    stay in their allocated registers. Returns the function and each output's
+    type. *)
+let lower_kernel ?(profile = Target.Wasm_simd128) ?(condition_bindings = []) ?(expression_bindings = []) ~definitions ~name ~parameters ?mask ~fused loc (outputs : expr list) =
   let state = new_state ~profile ~definitions ~parameter_count:(List.length parameters) in
   let parameters =
     List.mapi (fun index (parameter_name, typ) -> { Ir.id = index; typ; name = Some parameter_name }) parameters
@@ -1560,20 +1562,34 @@ let lower_expression ?(profile = Target.Wasm_simd128) ?(condition_bindings = [])
     let* () = previous in
     let* _ = lower_binding state provenance expression.loc name None expression in
     Ok ()) (Ok ()) expression_bindings in
-  let* value = lower_expr state provenance expression in
+  let* values = List.fold_left (fun values expression ->
+    let* values = values in
+    let* value = lower_expr state provenance expression in
+    Ok (value :: values)) (Ok []) outputs in
+  let values = List.rev values in
   let func =
     {
       Ir.name;
       parameters;
-      result = Some (snd value);
-      body = { instructions = List.rev state.instructions_rev; terminators = [ Ir.Return (Some (fst value)) ] };
+      result = None;
+      body = { instructions = List.rev state.instructions_rev; terminators = [ Ir.Return_values (List.map fst values) ] };
       loc = ir_location loc;
     }
   in
   match Ir.verify_function ~floating_point_exceptions:(floating_point_exceptions state) func with
-  | Ok () -> Ok func
+  | Ok () -> Ok (func, List.map snd values)
   | Error errors ->
       errorf loc "generated invalid native IR: %s" (String.concat "; " (List.map Ir.format_error errors))
+
+(** One rack expression as a function returning it. *)
+let lower_expression ?profile ?condition_bindings ?expression_bindings ~definitions ~name ~parameters ?mask ~fused loc expression =
+  let* func, types =
+    lower_kernel ?profile ?condition_bindings ?expression_bindings ~definitions ~name ~parameters ?mask ~fused loc [ expression ]
+  in
+  match (func.Ir.body.terminators, types) with
+  | [ Ir.Return_values [ value ] ], [ typ ] ->
+      Ok { func with result = Some typ; body = { func.body with terminators = [ Ir.Return (Some value) ] } }
+  | _ -> error loc "a rack expression lowers to one value"
 
 let lower_definition ?(profile = Target.Wasm_simd128) ?(definitions = []) (definition : def) =
   match definition.v with

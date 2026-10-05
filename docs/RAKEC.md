@@ -38,8 +38,11 @@ register kernels. Their `--emit-c`
 output embeds Rake-selected assembly, and their `--emit-obj`
 output is a platform C object with verified kernels. `--verify-native` checks
 those kernels too. Native slow-only units have no vector function to verify,
-so they use `--emit-obj`. SSE2, AVX2, AVX-512 and NEON additionally support the limited
-[native stream traversal](spec/02_packs_and_run.md#native-cpu-streams). Other native runs remain work in progress. A
+so they use `--emit-obj`. SSE2, AVX2, AVX-512 and NEON additionally compile
+[stack runs](spec/02_packs_and_run.md#stack-runs). General runs over views remain
+work in progress on those profiles. A successful build of stack runs ends with
+the [kernel report](spec/02_packs_and_run.md#kernel-report) on standard error,
+which `--no-report` omits. A
 native kernel called from slow code supports uniform `f32`, `bool`, `i32` and `u32`
 parameters and returns `f32`, `bool`, `i32` or `u32`.
 

@@ -120,7 +120,9 @@ and instruction = {
   loc : source_location;
 }
 
-and terminator = Return of value option | Yield
+(** [Return_values] ends a traversal's kernel: its values stay in their
+    allocated registers, where the traversal stores them. *)
+and terminator = Return of value option | Return_values of value list | Yield
 
 and block = { instructions : instruction list; terminators : terminator list }
 
@@ -677,9 +679,14 @@ and verify_block verifier context ~expected_result ~yielding environment block =
       | Some id, Some typ -> require_type verifier context environment id typ
       | None, Some typ -> complain verifier context ("return requires a " ^ string_of_typ typ ^ " value")
       | Some _, None -> complain verifier context "void function must return without a value")
+  | [ Return_values values ] when not yielding ->
+      if expected_result <> None then complain verifier context "a multi-value return has no single result type";
+      List.iter
+        (fun id -> if not (IntMap.mem id environment) then complain verifier context (Printf.sprintf "returned %%%d is not defined" id))
+        values
   | [ Yield ] when yielding -> ()
   | [ Yield ] -> complain verifier context "function body must end in return, not yield"
-  | [ Return _ ] -> complain verifier context "loop body must end in yield, not return"
+  | [ (Return _ | Return_values _) ] -> complain verifier context "loop body must end in yield, not return"
   | [] -> complain verifier context "block has no terminator"
   | _ -> complain verifier context "block has more than one terminator");
   environment
@@ -828,6 +835,7 @@ let rec string_of_instruction indent (instruction : instruction) =
 and string_of_terminator indent = function
   | Return None -> indent ^ "return"
   | Return (Some result) -> indent ^ "return " ^ value result
+  | Return_values results -> indent ^ "return " ^ String.concat ", " (List.map value results)
   | Yield -> indent ^ "yield"
 
 and string_of_block indent block =

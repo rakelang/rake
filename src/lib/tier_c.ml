@@ -158,8 +158,7 @@ let rec ctype u ty =
           (if args = [] then "void" else String.concat ", " args)));
       name
   | Record name -> record_c u name
-  | Stack (stack, false) -> stack_type u stack false
-  | Stack (stack, true) -> stack_type u stack true
+  | Stack stack -> stack_type u stack
   | Rack _ | Mask _ -> "v128_t"
   | Str -> "const char *"
   | Void -> "void"
@@ -181,13 +180,13 @@ and complete u ty =
   | Array (_, t) -> ignore (ctype u ty); complete u t
   | _ -> ()
 
-and stack_type u stack writable =
-  let name = Printf.sprintf "struct rake_%sstack_%s_v1" (if writable then "mut_" else "") stack in
+and stack_type u stack =
+  let name = Printf.sprintf "struct rake_stack_%s_v2" stack in
   if not (Hashtbl.mem u.defined name) then (
     Hashtbl.replace u.defined name ();
     let s = find_pack u.program stack in
     let fields =
-      List.map (fun (f, e) -> Printf.sprintf "    %s%s *%s;\n" (if writable then "" else "const ") (scalar_c e) f) s.pack_fields
+      "    int64_t count;\n" :: List.map (fun (f, e) -> Printf.sprintf "    %s *%s;\n" (scalar_c e) f) s.pack_fields
     in
     Buffer.add_string u.types (Printf.sprintf "%s {\n%s};\n" name (String.concat "" fields)));
   name
@@ -261,11 +260,12 @@ type scope = {
   accesses : string Node_table.t;  (** a run's planned accesses: index or element node to address *)
   dropped : unit Node_table.t;  (** uniform definitions whose every use is a planned, checked access *)
   mutable framed : bool;  (** this slow function keeps large aggregates in Rake's frame stack *)
+  mutable copies : bool;  (** this slow function copies stacks into the frame arena *)
   frame_slots : string Node_table.t;  (** declaration identity -> field in this function's frame *)
 }
 
 let new_scope () =
-  { places = Hashtbl.create 16; accesses = Node_table.create 8; dropped = Node_table.create 8; framed = false; frame_slots = Node_table.create 4 }
+  { places = Hashtbl.create 16; accesses = Node_table.create 8; dropped = Node_table.create 8; framed = false; copies = false; frame_slots = Node_table.create 4 }
 
 let int_literal s value =
   match s with
@@ -297,6 +297,47 @@ let condition text =
       | _ -> closes_at depth (i + 1)
   in
   if n >= 2 && text.[0] = '(' && closes_at 0 0 = n - 1 then text else "(" ^ text ^ ")"
+
+let frame_threshold = 256
+
+(** Large slow aggregates use a bounded arena. WebAssembly reserves it in
+    linear memory; native threads allocate it while a framed call is active.
+    Keeping only the native pointer and cursor in TLS avoids inflating the
+    minimum host-thread stack. Nested calls and C callbacks share the arena. *)
+let frame_helpers u =
+  let storage, allocate = match u.execution_target with
+    | WebAssembly _ ->
+        ("static uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\nstatic size_t rake_frame_top;\n", "")
+    | Native_program _ ->
+        (* A thread allocates its arena once, on its first framed call. The C11
+           thread-specific key frees it when that thread exits. *)
+        ("#include <stdlib.h>\n#include <threads.h>\nstatic _Thread_local uint8_t *rake_frames;\nstatic _Thread_local size_t rake_frame_top;\n\
+          static tss_t rake_frames_owner;\nstatic once_flag rake_frames_once = ONCE_FLAG_INIT;\n\
+          static void rake_frames_create_owner(void)\n{\n    if (tss_create(&rake_frames_owner, free) != thrd_success) __builtin_trap();\n}\n",
+         "    if (!rake_frames) {\n        call_once(&rake_frames_once, rake_frames_create_owner);\n        rake_frames = malloc(RAKE_FRAME_BYTES);\n        if (!rake_frames || tss_set(rake_frames_owner, rake_frames) != thrd_success) __builtin_trap();\n    }\n")
+  in
+  helper u "rake_frame"
+    (Printf.sprintf {|#include <stddef.h>
+#ifndef RAKE_FRAME_BYTES
+#define RAKE_FRAME_BYTES (4u << 20)
+#endif
+%sstatic inline void *rake_frame_enter(size_t size, size_t alignment, size_t *mark)
+{
+    const size_t available = (size_t)RAKE_FRAME_BYTES - rake_frame_top;
+    if (size > available || alignment == 0 || (alignment & (alignment - 1)) != 0) __builtin_trap();
+%s    const uintptr_t address = (uintptr_t)(rake_frames + rake_frame_top);
+    const size_t padding = (alignment - address %% alignment) %% alignment;
+    if (padding > available - size) __builtin_trap();
+    *mark = rake_frame_top;
+    void *const frame = rake_frames + rake_frame_top + padding;
+    rake_frame_top += padding + size;
+    return frame;
+}
+static inline void rake_frame_leave(size_t mark)
+{
+    rake_frame_top = mark;
+}
+|} storage allocate)
 
 let rec expr u scope (e : expr) : string =
   let go = expr u scope in
@@ -405,10 +446,16 @@ let rec expr u scope (e : expr) : string =
         result_type name callback_type (if declarations = [] then "" else ", " ^ String.concat ", " declarations)
         (if result = Void then "" else "return ") (String.concat ", " arguments));
       Printf.sprintf "%s(%s)" name (String.concat ", " (go callee :: List.map go args))
+  | Vector_call (name, args) when List.exists (fun r -> r.run_name = name) u.program.runs ->
+      let prelude, call, result = run_invocation u scope "    " e.loc name args in
+      Printf.sprintf "({\n%s    %s;\n    %s;\n})" prelude call (Option.value result ~default:"(void)0")
   | Vector_call (name, args) ->
       (* A scratch with uniform parameters, reached through its boundary. *)
       let args = List.map (function Arg_uniform a -> go a | Arg_memory a -> go a) args in
       Printf.sprintf "rake_boundary_%s(%s)" name (String.concat ", " args)
+  | Field (base, field) when (match base.ty with Stack _ -> true | _ -> false) ->
+      (* A column of a stack is a view of its records. *)
+      Printf.sprintf "((%s){ (%s).%s, (int32_t)(%s).count })" (ctype u e.ty) (go base) field (go base)
   | Field (base, field) -> (
       match base.ty with
       | Ptr _ -> Printf.sprintf "(%s)->%s" (go base) field
@@ -440,7 +487,33 @@ let rec expr u scope (e : expr) : string =
   | Array_lit items when List.for_all (is_zero u) items -> Printf.sprintf "((%s){0})" (ctype u e.ty)
   | Array_lit items ->
       Printf.sprintf "((%s){ { %s } })" (ctype u e.ty) (String.concat ", " (List.map go items))
-  | Stack_lit _ -> fail e.loc "a pack is built at the run call it is passed to"
+  | Stack_lit (pack, fields) ->
+      (* Every column holds the stack's count of records. *)
+      let stack = stack_type u pack in
+      let views = List.map (fun (f, v) -> (f, ctype u v.ty)) fields in
+      let name = "rake_stack_of_" ^ pack in
+      helper u name
+        (Printf.sprintf "static inline %s %s(%s)\n{\n%s    return (%s){ %s.count, %s };\n}\n" stack name
+           (String.concat ", " (List.map (fun (f, t) -> Printf.sprintf "%s %s" t f) views))
+           (String.concat "" (List.map (fun (f, _) -> Printf.sprintf "    if (%s.count != %s.count) __builtin_trap();\n" f (fst (List.hd views))) (List.tl views)))
+           stack (fst (List.hd views)) (String.concat ", " (List.map (fun (f, _) -> f ^ ".data") views)));
+      Printf.sprintf "%s(%s)" name (String.concat ", " (List.map (fun (_, v) -> go v) fields))
+  | Stack_copy source ->
+      (* The copy's columns come from the frame arena, released when the
+         function returns. *)
+      let pack = match source.ty with Stack p -> p | _ -> assert false in
+      scope.copies <- true;
+      frame_helpers u;
+      let stack = stack_type u pack in
+      let name = "rake_copy_stack_" ^ pack in
+      let columns = (find_pack u.program pack).pack_fields in
+      helper u name
+        (Printf.sprintf "static inline %s %s(%s source)\n{\n    %s copy = source;\n    size_t mark;\n    if (source.count > 0) {\n%s    }\n    (void)mark;\n    return copy;\n}\n"
+           stack name stack stack
+           (String.concat "" (List.map (fun (f, e) ->
+              Printf.sprintf "        copy.%s = rake_frame_enter((size_t)source.count * sizeof(%s), _Alignof(%s), &mark);\n        __builtin_memcpy(copy.%s, source.%s, (size_t)source.count * sizeof(%s));\n"
+                f (scalar_c e) (scalar_c e) f f (scalar_c e)) columns)));
+      Printf.sprintf "%s(%s)" name (go source)
   | Addr place -> "(&" ^ addressable u scope place ^ ")"
   | Length a -> (
       match a.ty with
@@ -643,7 +716,9 @@ and stmt u scope indent (s : stmt) =
       | Array _ when raw_array u place ->
           Printf.sprintf "%s{ const %s rake_tmp = %s; __builtin_memcpy(%s, rake_tmp.e, sizeof rake_tmp.e); }\n" pad (ctype u place.ty) (go v) (go place)
       | _ -> Printf.sprintf "%s%s = %s;\n" pad (addressable u scope place) (go v))
-  | Eval { k = Vector_call (name, args); loc; _ } -> run_call u scope pad loc name args
+  | Eval { k = Vector_call (name, args); loc; _ } when List.exists (fun r -> r.run_name = name) u.program.runs ->
+      let prelude, call, _ = run_invocation u scope pad loc name args in
+      Printf.sprintf "%s{\n%s%s    %s;\n%s}\n" pad prelude pad call pad
   | Eval e -> Printf.sprintf "%s(void)%s;\n" pad (go e)
   | If (c, a, b) ->
       let else_part = if b = [] then "" else Printf.sprintf " else {\n%s%s}" (block u scope (indent + 4) b) pad in
@@ -666,95 +741,86 @@ and stmt u scope indent (s : stmt) =
         pad pad t i (go upto) step pad pad t i (go from) i i next (block u scope (indent + 8) body) pad pad
   | Break -> pad ^ "break;\n"
   | Continue -> pad ^ "continue;\n"
-  | Return None when scope.framed -> pad ^ "if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n" ^ pad ^ "return;\n"
+  | Return None when scope.framed || scope.copies -> leave_frames pad scope ^ pad ^ "return;\n"
   | Return None -> pad ^ "return;\n"
-  | Return (Some v) when scope.framed ->
+  | Return (Some v) when scope.framed || scope.copies ->
       (* The value may read the frame: take it before leaving. *)
-      Printf.sprintf "%s{\n%s    const %s rake_result = %s;\n%s    if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n%s    return rake_result;\n%s}\n"
-        pad pad (ctype u v.ty) (go v) pad pad pad
+      Printf.sprintf "%s{\n%s    const %s rake_result = %s;\n%s%s    return rake_result;\n%s}\n"
+        pad pad (ctype u v.ty) (go v) (leave_frames (pad ^ "    ") scope) pad pad
   | Return (Some v) -> Printf.sprintf "%sreturn %s;\n" pad (go v)
 
 and block u scope indent stmts = String.concat "" (List.map (stmt u scope indent) stmts)
 
-(** A slow call into a run: views become a pointer and a count, packs a
-    descriptor, and each column and the output must hold the traversed count. *)
-and run_call u scope pad loc name args =
+(** Release a function's stack copies and its arena frame. *)
+and leave_frames pad scope =
+  (if scope.copies then pad ^ "rake_frame_leave(rake_copy_base);\n" else "")
+  ^ (if scope.framed then pad ^ "if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n" else "")
+
+(** A slow call into a run: views become a pointer and a count, stacks a
+    descriptor. Returns the statements before the call, the call, and for a
+    stack run the descriptor holding its result. Every stack has the result's
+    count, and the result's columns meet another argument's memory only
+    element for element in a stack column of the same width. *)
+and run_invocation u scope pad loc name args =
   let run = match List.find_opt (fun r -> r.run_name = name) u.program.runs with Some r -> r | None -> fail loc "unknown run %s" name in
   let go = expr u scope in
-  let temps = Buffer.create 128 and passed = ref [] and checks = ref [] in
+  let temps = Buffer.create 128 and passed = ref [] in
   let fresh = let n = ref 0 in fun () -> incr n; Printf.sprintf "rake_arg%d" !n in
-  let params = run.run_params in
-  let counts =
-    (* Stack parameters and the uniform parameter their traversal counts. *)
-    let rec outputs stmts =
-      List.concat_map (fun s -> match s.r with R_output (o, _, _) -> [ o ] | R_for (_, _, _, _, b) | R_block b -> outputs b | R_if (_, a, b) -> outputs a @ outputs b | _ -> []) stmts
-    in
-    let rec traversals stmts =
-      List.concat_map
-        (fun s ->
-          match s.r with
-          | R_traverse t -> (
-              (* The traversed pack, and every pack it stores columns of, hold the count. *)
-              match t.t_count.k with
-              | Var count -> ((t.t_stack, count) :: List.map (fun o -> (o, count)) (outputs t.t_body)) @ traversals t.t_body
-              | _ -> traversals t.t_body)
-          | R_for (_, _, _, _, b) | R_block b -> traversals b
-          | R_if (_, a, b) -> traversals a @ traversals b
-          | _ -> [])
-        stmts
-    in
-    traversals run.run_body
-  in
-  let uniform_value = Hashtbl.create 4 in
+  let result = Option.map fst run.run_result in
+  let stacks = ref [] and views = ref [] in
   List.iteri
     (fun index arg ->
-      match (List.nth_opt params index, arg) with
-      | Some (Run_uniform (pname, s)), Arg_uniform v ->
+      match (List.nth_opt run.run_params index, arg) with
+      | Some (Run_uniform (_, s)), Arg_uniform v ->
           let t = fresh () in
           Buffer.add_string temps (Printf.sprintf "%s    const %s %s = %s;\n" pad (scalar_c s) t (go v));
-          Hashtbl.replace uniform_value pname t;
           passed := t :: !passed
-      | Some (Run_view (_, _, _)), Arg_memory v ->
+      | Some (Run_view (_, s, _)), Arg_memory v ->
           let t = fresh () in
           Buffer.add_string temps (Printf.sprintf "%s    const %s %s = %s;\n" pad (ctype u v.ty) t (go v));
+          views := (t, s) :: !views;
           passed := Printf.sprintf "%s.count" t :: Printf.sprintf "%s.data" t :: !passed
-      | Some (Run_stack (pname, stack, w)), Arg_memory { k = Stack_lit (_, columns); _ } ->
+      | Some (Run_stack (pname, pack)), Arg_memory v ->
           let t = fresh () in
-          let s = find_pack u.program stack in
-          let column_temps =
-            List.map
-              (fun (field, _) ->
-                let v = List.assoc field columns in
-                let c = fresh () in
-                Buffer.add_string temps (Printf.sprintf "%s    const %s %s = %s;\n" pad (ctype u v.ty) c (go v));
-                (field, c))
-              s.pack_fields
-          in
-          Buffer.add_string temps
-            (Printf.sprintf "%s    const %s %s = { %s };\n" pad (stack_type u stack w) t
-               (String.concat ", " (List.map (fun (_, c) -> c ^ ".data") column_temps)));
-          List.iter
-            (fun (pack, count) -> if pack = pname then checks := (count, List.map snd column_temps) :: !checks)
-            counts;
+          Buffer.add_string temps (Printf.sprintf "%s    %s %s = %s;\n" pad (stack_type u pack) t (go v));
+          stacks := (pname, pack, t) :: !stacks;
           passed := ("&" ^ t) :: !passed
-      | None, Arg_memory v when run.run_stream <> None ->
-          (* The stream's output view. *)
-          let t = fresh () in
-          Buffer.add_string temps (Printf.sprintf "%s    const %s %s = %s;\n" pad (ctype u v.ty) t (go v));
-          List.iter (fun (_, count) -> checks := (count, [ t ]) :: !checks) counts;
-          passed := (t ^ ".data") :: !passed
       | _ -> fail loc "argument %d of %s doesn't match its parameter" (index + 1) name)
     args;
   let checks =
-    List.concat_map
-      (fun (count, views) ->
-        match Hashtbl.find_opt uniform_value count with
-        | Some value -> List.map (fun v -> Printf.sprintf "%s    if ((int64_t)%s > (int64_t)%s.count) __builtin_trap();\n" pad value v) views
-        | None -> [])
-      !checks
+    match result with
+    | None -> ""
+    | Some result ->
+        let _, result_pack, r = List.find (fun (p, _, _) -> p = result) !stacks in
+        let others = List.filter (fun (p, _, _) -> p <> result) !stacks in
+        let overlap = "rake_overlaps" in
+        helper u overlap
+          "static inline int rake_overlaps(const void *a, size_t a_bytes, const void *b, size_t b_bytes, int same)\n{\n    const char *x = a, *y = b;\n    if (a_bytes == 0 || b_bytes == 0 || (same && x == y)) return 0;\n    return x < y + b_bytes && y < x + a_bytes;\n}\n";
+        let counts = List.map (fun (_, _, t) -> Printf.sprintf "%s    if (%s.count != %s.count) __builtin_trap();\n" pad t r) others in
+        let columns pack = (find_pack u.program pack).pack_fields in
+        let pairs =
+          List.concat_map
+            (fun (field, element) ->
+              let mine = Printf.sprintf "%s.%s, (size_t)%s.count * %d" r field r (bytes element) in
+              List.concat_map
+                (fun (_, pack, t) ->
+                  List.map
+                    (fun (other, other_element) ->
+                      Printf.sprintf "%s    if (%s(%s, %s.%s, (size_t)%s.count * %d, %d)) __builtin_trap();\n" pad overlap mine t other t
+                        (bytes other_element) (if bytes other_element = bytes element then 1 else 0))
+                    (columns pack))
+                others
+              @ List.map
+                  (fun (t, s) ->
+                    Printf.sprintf "%s    if (%s(%s, %s.data, (size_t)%s.count * %d, 0)) __builtin_trap();\n" pad overlap mine t t (bytes s))
+                  !views)
+            (columns result_pack)
+        in
+        String.concat "" (counts @ pairs)
   in
-  Printf.sprintf "%s{\n%s%s%s    %s(%s);\n%s}\n" pad (Buffer.contents temps) (String.concat "" checks) pad name
-    (String.concat ", " (List.rev !passed)) pad
+  let call = Printf.sprintf "%s(%s)" name (String.concat ", " (List.rev !passed)) in
+  let result = Option.map (fun result -> let _, _, t = List.find (fun (p, _, _) -> p = result) !stacks in t) result in
+  (Buffer.contents temps ^ checks, call, result)
 
 (* ─── Runs ──────────────────────────────────────────────────────────── *)
 
@@ -1060,7 +1126,7 @@ and run_stmt u rs scope indent (s : rstmt) =
       Printf.sprintf "%sif %s {\n%s%s}%s\n" pad (condition (uniform c)) (run_stmts u rs scope (indent + 4) a) pad else_part
   | R_block body -> Printf.sprintf "%s{\n%s%s}\n" pad (run_stmts u rs scope (indent + 4) body) pad
   | R_traverse t -> traverse u rs scope indent t
-  | R_chunk_load _ | R_output _ | R_yield _ -> fail s.rloc "internal: traversal statement outside its traversal"
+  | R_chunk_load _ | R_output _ | R_compact _ -> fail s.rloc "internal: traversal statement outside its traversal"
 
 (** The byte address of a rack or element access. Planned accesses use their
     loop's pointer and a constant offset; the rest form their address here. *)
@@ -1265,7 +1331,7 @@ and loop u rs scope indent var from upto by body =
         | R_pure (_, _, pure, _) -> List.mem name (free_names pure)
         | R_load (_, _, view, index, _) | R_store (view, index, _, _) -> expr_uses name view || index_uses name index
         | R_gather (_, _, view, _, _) -> expr_uses name view
-        | R_location _ | R_set _ | R_chunk_load _ | R_output _ | R_yield _ -> false
+        | R_location _ | R_set _ | R_chunk_load _ | R_output _ | R_compact _ -> false
         | R_for (_, a, b, c, body) -> expr_uses name a || expr_uses name b || Option.fold ~none:false ~some:(expr_uses name) c || uses name body
         | R_if (c, a, b) -> expr_uses name c || uses name a || uses name b
         | R_block b -> uses name b
@@ -1367,7 +1433,10 @@ and traverse u rs scope indent t =
   u.loops <- u.loops + 1;
   let stack = find_pack u.program t.t_pack in
   let l = lanes t.t_domain in
-  let count = expr u scope t.t_count in
+  (* A stack run counts its result stack's records, read through its descriptor. *)
+  let count = match t.t_count.k with
+    | Length { k = Var stack; _ } -> Printf.sprintf "%s->count" (C_identifier.local stack)
+    | _ -> expr u scope t.t_count in
   let rec assigned stmts =
     List.iter
       (fun s -> match s.r with R_set (name, _) -> Hashtbl.replace rs.assigned_in_traversal name () | R_for (_, _, _, _, b) | R_block b -> assigned b | R_if (_, a, b) -> assigned a; assigned b | _ -> ())
@@ -1394,12 +1463,12 @@ and traverse u rs scope indent t =
     let rs = { rs with tail } in
     let load s =
       match s.r with
-      | R_chunk_load (name, element, field, stored) ->
+      | R_chunk_load (name, element, owner, field, stored) ->
           record_type rs name (Rack element);
           if stored <> element then
             Option.iter (fun bounds -> Hashtbl.replace rs.compact_ranges name bounds)
               (Wasm_simd128_widening.compact_column_range stored);
-          let column = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer t.t_stack field) (bytes stored) in
+          let column = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer owner field) (bytes stored) in
           let widen raw =
             if stored = element then raw
             else
@@ -1429,15 +1498,41 @@ and traverse u rs scope indent t =
     u.selected <- "v128.store" :: u.selected;
     let rec stmt s =
       match s.r with
-      | R_yield value ->
-          let out = Printf.sprintf "(uint8_t *)p_result + (uint32_t)%d * rake_i" (bytes t.t_domain) in
-          if tail then (tail_helpers u (bytes t.t_domain * l) (bytes t.t_domain); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes t.t_domain * l) (bytes t.t_domain) out (C_identifier.local value))
-          else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (C_identifier.local value)
       | R_output (output, field, value) ->
-          let element = List.assoc field (find_pack u.program (match Hashtbl.find_opt rs.types output with Some (Stack (s, _)) -> s | _ -> t.t_pack)).pack_fields in
+          let element = List.assoc field stack.pack_fields in
           let out = Printf.sprintf "%s + (uint32_t)%d * rake_i" (column_pointer ~writable:true output field) (bytes element) in
           if tail then (tail_helpers u (bytes element * l) (bytes element); Printf.sprintf "%s        rake_tail_store_%d_%d(%s, %s, rake_r);\n" pad (bytes element * l) (bytes element) out (C_identifier.local value))
           else Printf.sprintf "%s        wasm_v128_store(%s, %s);\n" pad out (C_identifier.local value)
+      | R_compact (mask, racks) ->
+          (* The selection's bits index a table of byte permutations that move
+             the selected lanes' stored bytes to the front of the rack. *)
+          if l > 8 then fail s.rloc "compacting a run whose widest column has 8 bits is work in progress";
+          let lane_bits = 128 / l in
+          u.selected <- Printf.sprintf "i%dx%d.bitmask" lane_bits l :: "i8x16.swizzle" :: "v128.load" :: "i64.store" :: u.selected;
+          let kept = if tail then " & ((1u << rake_r) - 1u)" else "" in
+          let stores =
+            List.map
+              (fun (field, value) ->
+                let b = bytes (List.assoc field stack.pack_fields) in
+                let table = compaction_table u l b in
+                let out = Printf.sprintf "%s + (uint32_t)%d * rake_cursor" (column_pointer ~writable:true t.t_stack field) b in
+                let moved = Printf.sprintf "wasm_i8x16_swizzle(%s, wasm_v128_load(%s[rake_bits]))" (C_identifier.local value) table in
+                if tail then (
+                  tail_helpers u (b * l) b;
+                  Printf.sprintf "%s            if (rake_kept) rake_tail_store_%d_%d(%s, %s, (int32_t)rake_kept);\n" pad (b * l) b out moved)
+                else
+                  (* A full rack's store ends below its own records' end:
+                     the cursor never passes the records already read. *)
+                  match b * l with
+                  | 16 -> Printf.sprintf "%s            wasm_v128_store(%s, %s);\n" pad out moved
+                  | width ->
+                      let store = Printf.sprintf "v128.store%d_lane" (width * 8) in
+                      u.selected <- store :: u.selected;
+                      Printf.sprintf "%s            wasm_v128_store%d_lane(%s, %s, 0);\n" pad (width * 8) out moved)
+              racks
+          in
+          Printf.sprintf "%s        {\n%s            const uint32_t rake_bits = (uint32_t)wasm_i%dx%d_bitmask(%s)%s;\n%s            const uint32_t rake_kept = (uint32_t)__builtin_popcount(rake_bits);\n%s%s            rake_cursor += rake_kept;\n%s        }\n"
+            pad pad lane_bits l (C_identifier.local mask) kept pad (String.concat "" stores) pad pad
       | R_block b -> Printf.sprintf "%s        {\n%s%s        }\n" pad (String.concat "" (List.map stmt b)) pad
       | _ -> run_stmt u rs scope (indent + 8) s
     in
@@ -1463,13 +1558,30 @@ and traverse u rs scope indent t =
        | _ -> "wasm_i8x16_make(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)")
       mask_bits l
   in
+  let compacting = List.exists (fun s -> match s.r with R_compact _ -> true | _ -> false) t.t_body in
+  let cursor = if compacting then pad ^ "    uint32_t rake_cursor = 0;\n" else "" in
+  let count_update = if compacting then Printf.sprintf "%s    %s->count = (int64_t)rake_cursor;\n" pad (C_identifier.local t.t_stack) else "" in
   Printf.sprintf
-    "%s{\n%s    const int64_t rake_count = (int64_t)(%s);\n%s    if (rake_count > 0) {\n%s        if (rake_count > (int64_t)UINT32_MAX) __builtin_trap();\n%s        const uint32_t rake_n = (uint32_t)rake_count;\n%s        const uint32_t rake_full = rake_n & ~(uint32_t)%d;\n%s%s        uint32_t rake_i = 0;\n%s        #pragma clang loop unroll(disable) vectorize(disable)\n%s        for (; rake_i < rake_full; rake_i += %d) {\n%s%s        }\n%s        if (rake_i < rake_n) {\n%s            const int32_t rake_r = %s;\n%s            const v128_t rake_tail = %s;\n%s%s        }\n%s    }\n%s}\n"
-    pad pad count pad pad pad pad (l - 1)
+    "%s{\n%s%s    const int64_t rake_count = (int64_t)(%s);\n%s    if (rake_count > 0) {\n%s        if (rake_count > (int64_t)UINT32_MAX) __builtin_trap();\n%s        const uint32_t rake_n = (uint32_t)rake_count;\n%s        const uint32_t rake_full = rake_n & ~(uint32_t)%d;\n%s%s        uint32_t rake_i = 0;\n%s        #pragma clang loop unroll(disable) vectorize(disable)\n%s        for (; rake_i < rake_full; rake_i += %d) {\n%s%s        }\n%s        if (rake_i < rake_n) {\n%s            const int32_t rake_r = %s;\n%s            const v128_t rake_tail = %s;\n%s%s        }\n%s    }\n%s%s}\n"
+    pad cursor pad count pad pad pad pad (l - 1)
     (Buffer.contents columns ^ (if outer_tail then Printf.sprintf "%s        const int32_t rake_outer_r = rake_r;\n" pad else ""))
     pad pad pad l (indent_lines 4 full) pad pad pad
     (if outer_tail then "(int32_t)(rake_n - rake_i) < rake_outer_r ? (int32_t)(rake_n - rake_i) : rake_outer_r" else "(int32_t)(rake_n - rake_i)")
-    pad mask (indent_lines 4 tail) pad pad pad
+    pad mask (indent_lines 4 tail) pad pad count_update pad
+
+(** For each selection of [lanes] lanes, the byte indices that move the low
+    [element] bytes of each selected lane, in order, to the front. *)
+and compaction_table u lanes element =
+  let name = Printf.sprintf "rake_compaction_%d_%d" lanes element in
+  let lane_bytes = 16 / lanes in
+  let entries = List.init (1 lsl lanes) (fun selected ->
+    let order = List.filter (fun lane -> selected land (1 lsl lane) <> 0) (List.init lanes Fun.id) in
+    let bytes = List.concat_map (fun lane -> List.init element (fun b -> lane * lane_bytes + b)) order in
+    let bytes = bytes @ List.init (16 - List.length bytes) (fun _ -> 255) in
+    "{ " ^ String.concat ", " (List.map string_of_int bytes) ^ " }") in
+  helper u name
+    (Printf.sprintf "static const uint8_t %s[%d][16] __attribute__((aligned(16))) = {\n    %s\n};\n" name (1 lsl lanes) (String.concat ",\n    " entries));
+  name
 
 and indent_lines n text =
   let pad = String.make n ' ' in
@@ -1522,9 +1634,10 @@ let run_function u (run : run) =
   let params = ref [] and entry = Buffer.create 128 in
   List.iter
     (function
-      | Run_stack (name, stack, w) ->
-          record_type rs name (Stack (stack, w));
-          params := Printf.sprintf "const %s *%s" (stack_type u stack w) (C_identifier.local name) :: !params
+      | Run_stack (name, stack) ->
+          record_type rs name (Stack stack);
+          let result = Option.map fst run.run_result = Some name in
+          params := Printf.sprintf "%s%s *%s" (if result then "" else "const ") (stack_type u stack) (C_identifier.local name) :: !params
       | Run_view (name, s, w) ->
           record_type rs name (View (Sc s, w));
           let view = ctype u (View (Sc s, w)) in
@@ -1537,9 +1650,6 @@ let run_function u (run : run) =
           record_type rs name (Rack s);
           params := Printf.sprintf "v128_t %s" (C_identifier.local name) :: !params)
     run.run_params;
-  (match run.run_stream with
-   | Some s -> params := Printf.sprintf "%s *p_result" (scalar_c s) :: !params
-   | None -> ());
   let body = run_stmts u rs scope 4 run.run_body in
   Hashtbl.replace u.run_facts run.run_name
     { Wasm_simd128_toolchain.loops = u.loops; lane_operations = u.lane_operations;
@@ -1549,47 +1659,6 @@ let run_function u (run : run) =
     (if !params = [] then "void" else String.concat ", " (List.rev !params)) (Buffer.contents entry) body
 
 (* ─── The unit ──────────────────────────────────────────────────────── *)
-
-let frame_threshold = 256
-
-(** Large slow aggregates use a bounded arena. WebAssembly reserves it in
-    linear memory; native threads allocate it while a framed call is active.
-    Keeping only the native pointer and cursor in TLS avoids inflating the
-    minimum host-thread stack. Nested calls and C callbacks share the arena. *)
-let frame_helpers u =
-  let storage, allocate = match u.execution_target with
-    | WebAssembly _ ->
-        ("static uint8_t rake_frames[RAKE_FRAME_BYTES] __attribute__((aligned(16)));\nstatic size_t rake_frame_top;\n", "")
-    | Native_program _ ->
-        (* A thread allocates its arena once, on its first framed call. The C11
-           thread-specific key frees it when that thread exits. *)
-        ("#include <stdlib.h>\n#include <threads.h>\nstatic _Thread_local uint8_t *rake_frames;\nstatic _Thread_local size_t rake_frame_top;\n\
-          static tss_t rake_frames_owner;\nstatic once_flag rake_frames_once = ONCE_FLAG_INIT;\n\
-          static void rake_frames_create_owner(void)\n{\n    if (tss_create(&rake_frames_owner, free) != thrd_success) __builtin_trap();\n}\n",
-         "    if (!rake_frames) {\n        call_once(&rake_frames_once, rake_frames_create_owner);\n        rake_frames = malloc(RAKE_FRAME_BYTES);\n        if (!rake_frames || tss_set(rake_frames_owner, rake_frames) != thrd_success) __builtin_trap();\n    }\n")
-  in
-  helper u "rake_frame"
-    (Printf.sprintf {|#include <stddef.h>
-#ifndef RAKE_FRAME_BYTES
-#define RAKE_FRAME_BYTES (4u << 20)
-#endif
-%sstatic inline void *rake_frame_enter(size_t size, size_t alignment, size_t *mark)
-{
-    const size_t available = (size_t)RAKE_FRAME_BYTES - rake_frame_top;
-    if (size > available || alignment == 0 || (alignment & (alignment - 1)) != 0) __builtin_trap();
-%s    const uintptr_t address = (uintptr_t)(rake_frames + rake_frame_top);
-    const size_t padding = (alignment - address %% alignment) %% alignment;
-    if (padding > available - size) __builtin_trap();
-    *mark = rake_frame_top;
-    void *const frame = rake_frames + rake_frame_top + padding;
-    rake_frame_top += padding + size;
-    return frame;
-}
-static inline void rake_frame_leave(size_t mark)
-{
-    rake_frame_top = mark;
-}
-|} storage allocate)
 
 let slow_function u (f : slow_func) =
   let scope = new_scope () in
@@ -1650,8 +1719,18 @@ let slow_function u (f : slow_func) =
       | For (_, _, a, b, c, body) -> framed_expr a @ framed_expr b @ Option.fold ~none:[] ~some:framed_expr c @ framed_decls body
       | _ -> []) stmts
   in
+  (* Stack copies take frame-arena storage, released at every return. *)
+  scope.copies <- List.exists (expr_exists (fun e -> match e.k with Stack_copy _ -> true | _ -> false))
+    (List.concat_map stmt_children f.fbody);
+  if scope.copies then (
+    frame_helpers u;
+    Buffer.add_string entry "    const size_t rake_copy_base = rake_frame_top;\n");
+  let ends_in_return = match List.rev f.fbody with { s = Return _; _ } :: _ -> true | _ -> false in
+  let copies_leave = if scope.copies && not ends_in_return then "    rake_frame_leave(rake_copy_base);\n" else "" in
   match framed_decls f.fbody with
-  | [] -> (signature, Printf.sprintf "%s\n{\n%s%s}\n" signature (Buffer.contents entry) (block u scope 4 f.fbody))
+  | [] ->
+      let body = block u scope 4 f.fbody in
+      (signature, Printf.sprintf "%s\n{\n%s%s%s}\n" signature (Buffer.contents entry) body copies_leave)
   | locals ->
       scope.framed <- true;
       frame_helpers u;
@@ -1665,7 +1744,6 @@ let slow_function u (f : slow_func) =
         (Printf.sprintf "%s {\n%s};\n" frame_type
            (String.concat "" fields));
       let body = block u scope 4 f.fbody in
-      let ends_in_return = match List.rev f.fbody with { s = Return _; _ } :: _ -> true | _ -> false in
       ( signature,
         Printf.sprintf {|%s
 {
@@ -1678,7 +1756,7 @@ let slow_function u (f : slow_func) =
 %s%s%s}
 |} signature frame_type frame_threshold frame_type frame_type frame_type frame_type frame_type
           (Buffer.contents entry) body
-          (if ends_in_return then "" else "    if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n") )
+          (copies_leave ^ if ends_in_return then "" else "    if (rake_arena_frame) rake_frame_leave(rake_frame_mark);\n") )
 
 let escape_bytes contents =
   let b = Buffer.create (String.length contents * 3) in
@@ -1804,6 +1882,29 @@ let boundaries u =
           (if ps = [] then "void" else String.concat ", " ps) name (String.concat ", " (List.mapi (fun i _ -> Printf.sprintf "a%d" i) params)))
     called ""
 
+(** The facts a stack run's kernel report states before its backend's: the
+    domain and lanes, the columns it reads and writes, and its selection. *)
+let run_report profile (run : run) =
+  match run.run_body, run.run_result with
+  | [ { r = R_traverse t; _ } ], Some (result, selection) ->
+      let lanes = if Target.is_wasm profile then 128 / bits t.t_domain else (Target.info profile).f32_lanes * 32 / bits t.t_domain in
+      let rec reads stmts = List.concat_map (fun s -> match s.r with
+        | R_chunk_load (_, _, owner, field, _) -> [ if owner = result then field else owner ^ "." ^ field ]
+        | R_block b -> reads b | _ -> []) stmts in
+      let unique items = List.fold_left (fun acc x -> if List.mem x acc then acc else acc @ [ x ]) [] items in
+      let replaced = List.filter_map (fun s -> match s.r with R_output (_, field, _) -> Some field | _ -> None) t.t_body in
+      let written = match selection with
+        | Compacted _ -> Printf.sprintf "compacts every column of %s in place" result
+        | _ -> Printf.sprintf "replaces %s in place" (String.concat ", " replaced) in
+      let reads = unique (reads t.t_body) in
+      [ Printf.sprintf "%d-bit domain, %d lanes" (bits t.t_domain) lanes;
+        (if reads = [] then written else Printf.sprintf "reads %s; %s" (String.concat ", " reads) written);
+        (match selection with
+         | Every_record -> "selection: every record"
+         | Masked p -> "selection: masked by " ^ p
+         | Compacted p -> "selection: compacted by " ^ p) ]
+  | _ -> []
+
 let emit ?(addressing = Barrier) ?(execution_target = WebAssembly Target.Wasm_simd128) ~source (program : program) =
   (match execution_target with
    | WebAssembly _ -> ()
@@ -1880,12 +1981,11 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly Target.Wasm_si
           Native_traversal.Unsupported (loc, message) -> fail loc "%s" message in
         let prototypes = List.map (fun run ->
           let parameters = List.map (function
-            | Run_stack (name, schema, writable) ->
-                Printf.sprintf "const %s *%s" (stack_type u schema writable) (C_identifier.local name)
+            | Run_stack (name, schema) ->
+                let result = Option.map fst run.run_result = Some name in
+                Printf.sprintf "%s%s *%s" (if result then "" else "const ") (stack_type u schema) (C_identifier.local name)
             | Run_uniform (name, scalar) -> Printf.sprintf "%s %s" (scalar_c scalar) (C_identifier.local name)
             | _ -> assert false) run.run_params in
-          let parameters = parameters @ (match run.run_stream with
-            | None -> [] | Some element -> [ scalar_c element ^ " *rake_out" ]) in
           Printf.sprintf "extern void %s(%s);\n" run.run_name (String.concat ", " parameters)) program.runs in
         prototypes @ [ native_assembly_literal ~profile selected.assembly ], Some selected in
   let native_kernels = if registers = None && traversals = None then None
@@ -1922,4 +2022,14 @@ let emit ?(addressing = Barrier) ?(execution_target = WebAssembly Target.Wasm_si
           Buffer.contents u.expressions ]
       @ prototypes @ [ "\n" ] @ runs @ [ "\n" ] @ List.map snd slows @ [ entry; vector_epilogue ])
   in
-  (unit_text, u.run_facts, native_kernels)
+  let backend_facts = match traversals with
+    | Some selected -> selected.Native_traversal.facts
+    | None ->
+        List.map (fun run ->
+          let compacts = match run.run_result with Some (_, Compacted _) -> true | _ -> false in
+          (run.run_name, (if compacts then [ "compaction: i8x16.swizzle by a table of byte permutations" ] else [])
+            @ [ "tail: lane-sized loads and stores" ])) program.runs in
+  let report = List.map (fun run ->
+    (run.run_name, run_report (target_profile execution_target) run @ Option.value (List.assoc_opt run.run_name backend_facts) ~default:[]))
+    (List.filter (fun run -> run.run_result <> None) program.runs) in
+  (unit_text, u.run_facts, native_kernels, report)

@@ -1,0 +1,146 @@
+source_parent	1e5087dbf326a4b96f68854df9676afeb1949441
+fa47ff9d312bba8a63cf8ea9b73bbacd3d4977d829fd6f9a391553dc8e0150f9  /home/user/code/github.com/rakelang/rake/_build/default/src/bin/main.exe
+8e436053f9daf8adcbb439e7969ef6e58bda498bedd331274f9b5861675e134c  /home/user/code/github.com/rakelang/rake/demo/safe-root/compare.c
+c88e0be15fe2d72cbbe4ab0c99230c2cd9dce30ca8ab66ae84339dc578222742  /home/user/code/github.com/rakelang/rake/demo/safe-root/safe_root.c
+b4e44125e1fb5f2083ab712cd6a729cb9db8dd46b6172adec47f2c5722f83110  /home/user/code/github.com/rakelang/rake/demo/safe-root/safe_root_avx2.c
+adff84669f1d117c36de0a5a72566d9e85a005643a574bd38b4cef75d270957a  /home/user/code/github.com/rakelang/rake/demo/safe-root/safe_root.rk
+ab0e687479c281be31abb9440cd7b6eebf7f56ccea43850e42db2c3405ebd6c4  /home/user/code/github.com/rakelang/rake/demo/safe-root/run.sh
+e01ea1fa84be2a4d5cff9d873dbb82a8a55465e94ec8494b9b9361ec85821861  /home/user/code/github.com/rakelang/rake/.build/safe-root/compare
+3956c411b7bb1840ff3671eaf42ee7d0c8a7e34d560c376862d39170b82cfc0c  /home/user/code/github.com/rakelang/rake/.build/safe-root/c.o
+e454c09816ae7c44e7dabf69431f77a3dea6d27d025620af23e3127bf78e08c6  /home/user/code/github.com/rakelang/rake/.build/safe-root/c-scalar.o
+800b36879b024f9c549e3357c9cb895f25c2e27149606ef693e0e0869fe58e29  /home/user/code/github.com/rakelang/rake/.build/safe-root/c-intrinsics.o
+c23dc45a59eeb40cba068d117f92259d70b25a8ed67f664cbc5919f281e57694  /home/user/code/github.com/rakelang/rake/.build/safe-root/safe_root.o
+c_compiler	gcc (GCC) 14.3.0
+c_flags	-std=gnu11 -O3 -mavx2 -ffp-contract=off -fno-fast-math -fno-math-errno -Wall -Wextra -Werror
+scalar_extra_flags	-fno-tree-vectorize -Dsafe_root_c=safe_root_c_scalar
+cpu	AMD Ryzen 7 5800X3D 8-Core Processor
+elements	1000000
+record	variant	sample	milliseconds
+sample	c-scalar	0	3.951943749
+sample	c-scalar	1	4.821340997
+sample	c-scalar	2	4.261479247
+sample	c-scalar	3	3.956903500
+sample	c-scalar	4	3.962480994
+sample	c-scalar	5	3.950611252
+sample	c-scalar	6	3.956931003
+sample	c-scalar	7	4.293236998
+sample	c-scalar	8	4.110264003
+sample	c-scalar	9	4.004676251
+sample	c-scalar	10	4.002648748
+sample	c-scalar	11	3.967368502
+sample	c-scalar	12	4.057168750
+sample	c-scalar	13	4.286609503
+sample	c-scalar	14	3.967836004
+sample	c-scalar	15	3.954426000
+sample	c-scalar	16	3.960236005
+sample	c-scalar	17	3.942983501
+sample	c-scalar	18	4.245551747
+sample	c-scalar	19	4.121463746
+sample	c-scalar	20	3.937170994
+sample	c-scalar	21	3.935481007
+sample	c-scalar	22	3.933720996
+sample	c-scalar	23	3.983383496
+sample	c-scalar	24	4.277794498
+sample	c-scalar	25	4.092078751
+sample	c-scalar	26	4.022596499
+sample	c-scalar	27	3.989628502
+sample	c-scalar	28	4.041834000
+sample	c-scalar	29	4.199843999
+sample	c-scalar	30	4.197796501
+median	c-scalar	31	4.002648748
+sample	c-auto	0	0.145032755
+sample	c-auto	1	0.145027996
+sample	c-auto	2	0.147532999
+sample	c-auto	3	0.147225495
+sample	c-auto	4	0.146945495
+sample	c-auto	5	0.145877755
+sample	c-auto	6	0.146117745
+sample	c-auto	7	0.170505496
+sample	c-auto	8	0.146050246
+sample	c-auto	9	0.146705497
+sample	c-auto	10	0.147037747
+sample	c-auto	11	0.146498001
+sample	c-auto	12	0.148467749
+sample	c-auto	13	0.148100255
+sample	c-auto	14	0.145878003
+sample	c-auto	15	0.147185507
+sample	c-auto	16	0.146143000
+sample	c-auto	17	0.146277744
+sample	c-auto	18	0.152657994
+sample	c-auto	19	0.144355501
+sample	c-auto	20	0.144612750
+sample	c-auto	21	0.145255253
+sample	c-auto	22	0.144215497
+sample	c-auto	23	0.146710503
+sample	c-auto	24	0.149325249
+sample	c-auto	25	0.146623002
+sample	c-auto	26	0.147867751
+sample	c-auto	27	0.145493002
+sample	c-auto	28	0.146355247
+sample	c-auto	29	0.147112754
+sample	c-auto	30	0.149698004
+median	c-auto	31	0.146623002
+sample	c-intrinsics	0	0.146712999
+sample	c-intrinsics	1	0.146610502
+sample	c-intrinsics	2	0.152775501
+sample	c-intrinsics	3	0.145035498
+sample	c-intrinsics	4	0.145852755
+sample	c-intrinsics	5	0.146875500
+sample	c-intrinsics	6	0.145990256
+sample	c-intrinsics	7	0.149157997
+sample	c-intrinsics	8	0.145025500
+sample	c-intrinsics	9	0.145857754
+sample	c-intrinsics	10	0.146033002
+sample	c-intrinsics	11	0.145145503
+sample	c-intrinsics	12	0.148250503
+sample	c-intrinsics	13	0.148687999
+sample	c-intrinsics	14	0.148460254
+sample	c-intrinsics	15	0.145855505
+sample	c-intrinsics	16	0.146655504
+sample	c-intrinsics	17	0.145000500
+sample	c-intrinsics	18	0.144235251
+sample	c-intrinsics	19	0.145228005
+sample	c-intrinsics	20	0.144200501
+sample	c-intrinsics	21	0.144335499
+sample	c-intrinsics	22	0.143482997
+sample	c-intrinsics	23	0.147585255
+sample	c-intrinsics	24	0.146722996
+sample	c-intrinsics	25	0.150885251
+sample	c-intrinsics	26	0.146455495
+sample	c-intrinsics	27	0.144167745
+sample	c-intrinsics	28	0.147503000
+sample	c-intrinsics	29	0.147240498
+sample	c-intrinsics	30	0.156012997
+median	c-intrinsics	31	0.146455495
+sample	rake	0	0.146932747
+sample	rake	1	0.145645252
+sample	rake	2	0.160540250
+sample	rake	3	0.146885250
+sample	rake	4	0.147545252
+sample	rake	5	0.146652994
+sample	rake	6	0.145817998
+sample	rake	7	0.145662998
+sample	rake	8	0.147140250
+sample	rake	9	0.153100504
+sample	rake	10	0.148005252
+sample	rake	11	0.146282997
+sample	rake	12	0.157032999
+sample	rake	13	0.157262999
+sample	rake	14	0.146642997
+sample	rake	15	0.147095248
+sample	rake	16	0.146535494
+sample	rake	17	0.146908002
+sample	rake	18	0.146877996
+sample	rake	19	0.160773001
+sample	rake	20	0.144033002
+sample	rake	21	0.146922750
+sample	rake	22	0.145417747
+sample	rake	23	0.145805505
+sample	rake	24	0.149275496
+sample	rake	25	0.154190500
+sample	rake	26	0.147652747
+sample	rake	27	0.151840504
+sample	rake	28	0.146855251
+sample	rake	29	0.147482999
+sample	rake	30	0.153877998
+median	rake	31	0.146932747

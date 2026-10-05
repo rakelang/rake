@@ -34,12 +34,12 @@ identifiers after a field type, in a literal or after `.`. A lone
 `_` is the default arm of a sweep, not an identifier. These words are reserved and can't be used as identifiers:
 
 ```text
-and bool bools break by const continue scratch else embed extern f32 f32s f64
-f64s false fma for from gaps i16 i16s i32 i32s i64 i64s i8 i8s if in into lanes
-let mask mut not or pack ptr rake record repeat return rotate_left
+and bool bools break by compact const continue scratch else embed extern f32 f32s
+f64 f64s false fma for from gaps i16 i16s i32 i32s i64 i64s i8 i8s if into
+lanes let mask means mut not or pack ptr rake record repeat return rotate_left
 rotate_right run shift_left shift_right shuffle slow stack state sweep then
-through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked union up using
-means while yield
+through tine to true u16 u16s u32 u32s u64 u64s u8 u8s unchecked union up
+where while with
 ```
 
 `wrap` and `bitcast` are conversions when a parenthesis follows them, as in
@@ -97,7 +97,8 @@ rake safe_root(values: f32s) -> f32s:
 | `scratch name(parameters) -> T:` | straight-line rack computation | [Fused bindings](04_fused_bindings.md) |
 | `rake name(parameters) -> T:` | rack computation with named lane masks | [Tines, through and sweeps](03_tines_and_through.md) |
 | `tine #label(parameters) means predicate` | reusable typed lane predicate | [Tines, through and sweeps](03_tines_and_through.md) |
-| `run name(parameters) -> T:` | vector code over memory | [Packs and runs](02_packs_and_run.md) |
+| `run name(parameters) -> stack Name:` | calculations applied to whole stacks | [Packs, stacks and runs](02_packs_and_run.md) |
+| `run name(parameters):` | a general run over views | [Packs, stacks and runs](02_packs_and_run.md#general-runs) |
 | `pack Name { T: field, field; }` | one record, also defining the fields of its columnar stack | [Packs, stacks and runs](02_packs_and_run.md) |
 | `slow name(parameters) -> T:` | scalar code | [The slow tier](08_slow_tier.md) |
 | `extern slow name(parameters) -> T from "file.h"` | a C function | [The slow tier](08_slow_tier.md) |
@@ -117,10 +118,9 @@ groups, and its literal initialises exactly one field.
 
 Parameters are written `name: type` and separated by commas. A uniform scalar
 parameter is written `<name: type>`. A result type follows `->`. A scratch's
-last expression supplies its result. A rake ends with its sweep. A run declared
-`-> f32` yields racks from a traversal and writes their lanes to an `f32`
-output stream, and a run without a result type writes through its `mut`
-parameters instead. A slow function without a result type returns nothing.
+last expression supplies its result. A rake ends with its sweep. A stack run
+declared `-> stack Name` ends with its result, such as `s with { field: e }`,
+and a general run without a result type writes through its `mut` views. A slow function without a result type returns nothing.
 `return` is reserved for leaving a slow function, not for a scratch.
 
 A scratch, rake or run may call scratches and rakes. The call is inlined, so
@@ -133,7 +133,7 @@ calls nest at most 32 deep and recursion is rejected.
 | `f32` `f64` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `bool` | a scalar |
 | `f32s` `u8s` `i16s` `i32s` `u32s` `i64s` `u64s` | a rack: one vector value of lanes of that element |
 | `mask` | a lane mask |
-| `stack Name`, `mut stack Name` | the columns of a stack, read or written |
+| `stack Name` | a stack: a count of records, one column per field |
 | `Name`, `pack Name` | one pack record |
 | `[]T`, `mut []T` | a view: elements with a runtime count |
 | `[N]T` | an array of `N` elements, or of `N` racks when `T` is a rack |
@@ -157,19 +157,19 @@ The types `i8s`, `u16s`, `f64s` and `bools` parse but have no implementation yet
 | `\| name <\| e`, `\| name: T <\| e` | a fused binding |
 | `return e`, `return` | leaving a slow function |
 | `sweep:` with arms | the final, lane-by-lane result of a rake |
-| `yield e` | the rack a traversal produces for its chunk |
+| `tine #name means p` | a predicate on every record of a stack run |
+| `s with { field: e } where p`, `compact s where p` | a stack run's result |
 | `if c:` … `else if c:` … `else:` | a conditional statement |
 | `while c:` | a loop in slow code |
 | `for i from a up to b:`, `for i from a up to b by s:` | a counted loop, written `for <i: T> from <a> up to <b>:` in vector code |
 | `repeat <i: T> from <0> up to <4>:` | a vector loop with constant bounds, unrolled when it is small |
-| `for chunk in p using f32s up to <n>:` | a traversal of a stack |
 | `break`, `continue` | inside a slow loop |
 | `slow { statements; value }` | a scoped scalar escape in a run or slow function, optionally producing a scalar |
 | `e` | a scratch's final result, or a call evaluated for its effect |
 
 A name is bound once in its scope and can't shadow an enclosing name. A mutable location
 changes with `<-`. [Control flow](05_control_flow.md) defines the
-conditionals and loops, [Packs and runs](02_packs_and_run.md) the traversal,
+conditionals and loops, [Packs and runs](02_packs_and_run.md) stack runs,
 and [the slow tier](08_slow_tier.md) the scalar statements.
 
 ## Tines, through and sweeps
@@ -228,7 +228,7 @@ does.
 Other primary forms are calls `f(a, b)`, conversions `i32(x)` (checked),
 `wrap(u8, x)` (the low bits) and `bitcast(u32, x)` (the same bits), record
 literals `Name { field: e }`, stack constructors `stack Name { field: column }`,
-and array literals `[a, b, c]` and `[e; n]`.
+`copy(s)` and `count(s)` for stacks, and array literals `[a, b, c]` and `[e; n]`.
 
 Rack operations use function-call syntax rather than operators:
 
@@ -242,7 +242,7 @@ Rack operations use function-call syntax rather than operators:
 | `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](06_reductions_and_scans.md) |
 | `sum` `product` `minimum` `maximum` `all` `any` | [Reductions and scans](06_reductions_and_scans.md) |
 | `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | [Reductions and scans](06_reductions_and_scans.md) |
-| `widen(chunk.column)` | [Packs and runs](02_packs_and_run.md) |
+| `widen(s.column)` | [Packs and runs](02_packs_and_run.md) |
 
 A shuffle's lane indices and the lane of `extract` and `insert` are integer
 literals, because the instruction encodes them. Slow code has its own scalar

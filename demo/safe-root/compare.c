@@ -9,10 +9,16 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Independent C ABI oracle: one SoA pointer, a signed count and an output
-   column. No C loop calls a register kernel. roots owns its entire loop. */
-typedef struct { const float *value; } rake_stack_Samples_v1;
-extern void roots(const rake_stack_Samples_v1 *, int64_t, float *);
+/* Independent C ABI oracle: stack descriptors holding a count and a column.
+   No C loop calls a register kernel. roots owns its entire loop. */
+typedef struct { int64_t count; float *value; } rake_stack_Samples_v2;
+extern void roots(const rake_stack_Samples_v2 *, rake_stack_Samples_v2 *);
+
+static void call_roots(const float *values, float *output, size_t count) {
+    const rake_stack_Samples_v2 input = { (int64_t)count, (float *)values };
+    rake_stack_Samples_v2 result = { (int64_t)count, output };
+    roots(&input, &result);
+}
 extern void safe_root_c(const float *, float *, size_t);
 #ifdef SAFE_ROOT_FOUR_WAY
 extern void safe_root_c_scalar(const float *, float *, size_t);
@@ -21,8 +27,7 @@ extern void safe_root_avx2(const float *, float *, size_t);
 typedef void (*root_kernel)(const float *, float *, size_t);
 
 static void rake_roots(const float *values, float *output, size_t count) {
-    const rake_stack_Samples_v1 stack = { values };
-    roots(&stack, (int64_t)count, output);
+    call_roots(values, output, count);
 }
 
 static const struct {
@@ -59,9 +64,8 @@ static void check_tail_memory(void) {
         float expected[65];
         for (size_t i = 0; i < count; ++i) values[i] = special[i % 11];
         safe_root_c(values, expected, count);
-        rake_stack_Samples_v1 stack = { values };
         feclearexcept(FE_ALL_EXCEPT);
-        roots(&stack, (int64_t)count, results);
+        call_roots(values, results, count);
         const int raised = fetestexcept(FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW);
         if (raised) {
             fprintf(stderr, "roots raised floating exceptions 0x%x at count %zu\n", raised, count);
@@ -74,7 +78,7 @@ static void check_tail_memory(void) {
                 abort();
             }
         /* Exact in-place operation is defined. Other overlaps are excluded. */
-        roots(&stack, (int64_t)count, values);
+        call_roots(values, values, count);
         for (size_t i = 0; i < count; ++i)
             if (bits(values[i]) != bits(expected[i])) abort();
 #ifdef SAFE_ROOT_FOUR_WAY
@@ -102,7 +106,11 @@ static void check_tail_memory(void) {
         }
 #endif
     }
-    roots(NULL, -1, NULL);
+    {
+        const rake_stack_Samples_v2 none = { -1, NULL };
+        rake_stack_Samples_v2 empty = { -1, NULL };
+        roots(&none, &empty);
+    }
     munmap(input, page * 2);
     munmap(output, page * 2);
 }
@@ -132,9 +140,8 @@ int main(int argc, char **argv) {
         random ^= random << 13; random ^= random >> 17; random ^= random << 5;
         values[i] = (float)((int32_t)(random % 2000001u) - 1000000) * 0.001f;
     }
-    rake_stack_Samples_v1 stack = { values };
     safe_root_c(values, expected, count + 3);
-    roots(&stack, (int64_t)count + 3, actual);
+    call_roots(values, actual, count + 3);
     for (size_t i = 0; i < count + 3; ++i)
         if (bits(actual[i]) != bits(expected[i])) abort();
 #ifdef SAFE_ROOT_FOUR_WAY
@@ -179,7 +186,7 @@ int main(int argc, char **argv) {
             /* Each pass is an external function call; no LTO or dead-code
                removal. Alternate the order, sharing inputs and warm caches. */
             for (int pass = 0; pass < 4; ++pass) {
-                if (use_rake) roots(&stack, (int64_t)count, actual);
+                if (use_rake) call_roots(values, actual, count);
                 else safe_root_c(values, expected, count);
             }
             const double elapsed = (now() - start) / 4;

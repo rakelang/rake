@@ -68,7 +68,7 @@ rake masked_float_to_unsigned(selector: f32s, values: f32s) -> u32s:
 pack ConversionInput {
   f32: values;
   i32: words;
-  i16: compact;
+  i16: small;
   u32: unsigned_words;
 }
 
@@ -82,46 +82,26 @@ pack ConversionOutput {
   u32: unsigned_words;
 }
 
-run convert_to_signed(input: stack ConversionInput, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    yield to_i32(row.values)
+run convert_to_signed(input: stack ConversionInput, output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { words: to_i32(input.values) }
 
-run convert_to_unsigned(input: stack ConversionInput, <count: i32>) -> u32:
-  for row in input using u32s up to <count>:
-    yield to_u32(row.values)
+run convert_to_unsigned(input: stack ConversionInput, output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { unsigned_words: to_u32(input.values) }
 
-run float_unsigned_destination(input: stack ConversionInput, <count: i64>, output: mut stack ConversionOutput):
-  for row in input using u32s up to <count>:
-    output.unsigned_words <- to_u32(row.values)
+run unsigned_conversion_update(output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { unsigned_words: to_u32(to_f32(output.unsigned_words)) }
 
-run unsigned_conversion_update(input: mut stack ConversionOutput, <count: i32>):
-  for row in input using u32s up to <count>:
-    input.unsigned_words <- to_u32(to_f32(row.unsigned_words))
+run convert_to_float(input: stack ConversionInput, output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { values: to_f32(input.words) }
 
-run convert_to_float(input: stack ConversionInput, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    yield to_f32(row.words)
+run convert_compact(input: stack ConversionInput, output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { values: to_f32(widen(input.small)) }
 
-run convert_unsigned(input: stack ConversionInput, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield to_f32(row.unsigned_words)
+run conversion_update(output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { values: to_f32(to_i32(output.values)) }
 
-run convert_unsigned_compact(input: stack CompactUnsignedInput, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield to_f32(widen(row.words))
+run convert_unsigned(input: stack ConversionInput, output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { values: to_f32(input.unsigned_words) }
 
-run unsigned_conversion_destination(input: stack ConversionInput, <count: i64>, output: mut stack ConversionOutput):
-  for row in input using f32s up to <count>:
-    output.values <- to_f32(row.unsigned_words)
-
-run convert_compact(input: stack ConversionInput, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield to_f32(widen(row.compact))
-
-run conversion_destination(input: stack ConversionInput, <count: i64>, output: mut stack ConversionOutput):
-  for row in input using i32s up to <count>:
-    output.words <- to_i32(row.values)
-
-run conversion_update(input: mut stack ConversionOutput, <count: i32>):
-  for row in input using f32s up to <count>:
-    input.values <- to_f32(to_i32(row.values))
+run convert_unsigned_compact(input: stack CompactUnsignedInput, output: stack ConversionOutput) -> stack ConversionOutput:
+  output with { values: to_f32(widen(input.words)) }

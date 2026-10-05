@@ -96,7 +96,7 @@ let whole_program_code target program =
   | Error message -> Error message
   | Ok checked -> (
       match Tier_c.emit ~addressing:Barrier ~execution_target ~source:"playground.rk" checked with
-      | code, _, _ -> Ok (checked, code)
+      | code, _, _, _ -> Ok (checked, code)
       | exception Tier_c.Emission_error (loc, message) ->
           Error
             (Printf.sprintf "%s:%d:%d: %s emission: %s" loc.file

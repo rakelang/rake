@@ -164,12 +164,12 @@ on SSE2 and NEON, eight on AVX2, or sixteen on AVX-512F.
 Rack work stays in full vector registers. A reduction transfers only its
 completed result to a scalar. Integer masks can select
 float racks, and float masks can select integer racks. The
-[native stream subset](02_packs_and_run.md#native-cpu-streams) accepts `f32`,
-`i32` and `u32` columns while preserving each column's type.
+[native stack runs](02_packs_and_run.md#stack-runs) accept `f32`, `i32` and
+`u32` columns while preserving each column's type.
 Explicit `widen` also loads signed byte and 16-bit columns into `i32s`, or
 unsigned ones into `u32s`. The stored type determines sign or zero extension.
-The [traversal contract](02_packs_and_run.md#native-cpu-streams) covers its
-compact memory transfers and partial racks.
+[Count and tail](02_packs_and_run.md#count-and-tail) covers their compact
+memory transfers and partial racks.
 
 `bitcast` keeps every bit while changing the rack's element type. It works
 between `f32s`, `i32s` and `u32s` on every CPU profile.
@@ -324,7 +324,7 @@ On WebAssembly each numerical conversion above is one instruction except
 reuses the same `v128` bits without a numerical conversion instruction.
 
 `to_f32`, `to_i32` and `to_u32` also compile on all four physical CPU profiles,
-in register kernels and the native stream subset. They preserve the lane
+in register kernels and native stack runs. They preserve the lane
 count. Signed `to_f32` uses a packed integer conversion. Unsigned conversion
 uses a full-width unsigned instruction on AVX-512F and NEON. On SSE2 and
 AVX2 it converts each lane's two 16-bit halves exactly, scales the high
@@ -405,7 +405,7 @@ SSE2, AVX2 and AVX-512F use full-width packed shifts, and NEON uses
 copies each lane's high bit, even when the rack's element type is unsigned.
 
 A runtime `<amount: u32>` also works on every physical profile, in register
-kernels and native streams. Its low five bits give the count, so 32 means
+kernels and native stack runs. Its low five bits give the count, so 32 means
 zero and 4294967295 means 31. The compiler normalises a temporary vector
 register before the packed shift, leaving the input rack and count available
 for later use. The final-object verifier checks that normalisation and the
@@ -466,8 +466,8 @@ through the scalar C ABI. Integer results use the platform's integer return
 register, and their signedness follows the input rack. The transfers preserve
 every bit, including a signalling NaN in a float rack, without floating-point
 arithmetic or exceptions.
-Native stream traversal still rejects extraction until its partial-rack
-participation contract is implemented.
+Native stack runs still reject extraction until its partial-rack participation
+contract is implemented.
 
 ## Lane insertion
 
@@ -493,8 +493,8 @@ The first scratch replaces one lane with an argument. The second copies
 the first lane into the fourth, leaving the other lanes unchanged. These
 transfers preserve signed zeros and NaN payloads without floating-point
 arithmetic or exceptions. The physical profiles support `f32s`, `i32s` and
-`u32s`, while WebAssembly also supports its other integer racks. Native stream
-insertion remains WIP* until its partial-rack participation contract is implemented.
+`u32s`, while WebAssembly also supports its other integer racks. Insertion in
+native stack runs remains WIP* until its partial-rack participation contract is implemented.
 
 ## Shuffles
 
@@ -538,8 +538,8 @@ shuffles use the same bit-preserving transfers, including lanes whose high
 bit is set. The selected
 native sequences keep their temporary values in vector registers and count
 those registers in the no-spill allocation check.
-Native stream shuffles remain WIP* until their partial-rack participation
-contract is implemented.
+Shuffles in native stack runs remain WIP* until their partial-rack
+participation contract is implemented.
 
 ## Bitmasks
 
@@ -572,8 +572,8 @@ Numeric uniform arithmetic uses full-width packed instructions on physical
 profiles, retaining the completed result as a scalar. Boolean results still
 use Boolean operations. Further scalar operations remain WIP*.
 Cross-lane reductions are forbidden in a `through`
-block. Native stream mask reductions remain WIP* until their partial-rack
-participation contract is implemented.
+block. Mask reductions in native stack runs remain WIP* until their
+partial-rack participation contract is implemented.
 
 The native profiles also reduce `i32s` and `u32s` comparison masks. Masks from other
 integer element types remain available on WebAssembly only:
@@ -719,14 +719,14 @@ use, `<scale>`. For numeric uniforms, the use is where the broadcast happens:
 `vbroadcastss` on AVX2 and AVX-512, `shufps` on SSE2, `dup` on NEON and a
 splat on wasm.
 
-A run's boundary is in [packs and runs](02_packs_and_run.md#wasm32-boundary),
+A run's boundary is in [packs and runs](02_packs_and_run.md#the-c-boundary),
 and a whole program's in [the slow tier](08_slow_tier.md). The x86 and AArch64
 backends in Rake 0.7.0 compile native C programs with slow orchestration
 and Rake-selected register kernels. Slow callers can pass uniform `f32`,
 `i32`, `u32` or `bool` arguments and receive `f32`, `bool`, `i32` or `u32` results.
-SSE2, AVX2, AVX-512 and NEON also support the
-[native stream subset](02_packs_and_run.md#native-cpu-streams).
-General native runs and other scalar kernel boundaries remain work in progress.
+SSE2, AVX2, AVX-512 and NEON also compile
+[stack runs](02_packs_and_run.md#stack-runs). General runs over views and
+other scalar kernel boundaries remain work in progress on these profiles.
 
 ## Verification
 
@@ -758,8 +758,8 @@ instruction for an equivalent one, such as a splatted zero for a constant, or
 compute arithmetic on splats of uniforms as scalars and splat the result. The
 verifier accepts both, because both stay in registers.
 
-Native streams have explicit loop and memory instructions. Their verifier
+Native stack runs have explicit loop and memory instructions. Their verifier
 compares each complete function with the separately assembled selection,
-including its literal bytes, and rejects unresolved relocations. The
-[native CPU stream contract](02_packs_and_run.md#native-cpu-streams)
-defines their supported transfers and caller obligations.
+including its literal bytes, and rejects unresolved relocations.
+[The C boundary](02_packs_and_run.md#the-c-boundary) defines the callers'
+obligations.

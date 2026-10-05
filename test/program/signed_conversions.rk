@@ -4,21 +4,29 @@ pack ConversionSamples {
   u32: unsigned_words;
 }
 
-run rounded_floats(input: stack ConversionSamples, <count: i32>) -> i32:
-  for row in input using i32s up to <count>:
-    yield to_i32(row.values)
+pack Integers {
+  i32: value;
+}
 
-run rounded_words(input: stack ConversionSamples, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield to_f32(row.words)
+pack Floats {
+  f32: value;
+}
 
-run rounded_unsigned_words(input: stack ConversionSamples, <count: i32>) -> f32:
-  for row in input using f32s up to <count>:
-    yield to_f32(row.unsigned_words)
+pack Unsigned {
+  u32: value;
+}
 
-run rounded_unsigned_floats(input: stack ConversionSamples, <count: i32>) -> u32:
-  for row in input using u32s up to <count>:
-    yield to_u32(row.values)
+run rounded_floats(input: stack ConversionSamples, output: stack Integers) -> stack Integers:
+  output with { value: to_i32(input.values) }
+
+run rounded_words(input: stack ConversionSamples, output: stack Floats) -> stack Floats:
+  output with { value: to_f32(input.words) }
+
+run rounded_unsigned_words(input: stack ConversionSamples, output: stack Floats) -> stack Floats:
+  output with { value: to_f32(input.unsigned_words) }
+
+run rounded_unsigned_floats(input: stack ConversionSamples, output: stack Unsigned) -> stack Unsigned:
+  output with { value: to_u32(input.values) }
 
 slow main() -> i32:
   words: [7]i32 := [0, 1, -1, 16777217, 16777219, 2147483647, -2147483648]
@@ -26,8 +34,8 @@ slow main() -> i32:
   integers: [7]i32 := [0; 7]
   floats: [7]f32 := [0.0; 7]
   unsigned_words: [7]u32 := [0, 1, 65535, 65536, 16777217, 2147483649, 4294967295]
-  rounded_floats(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, integers)
-  rounded_words(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, floats)
+  let rounded = rounded_floats(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, stack Integers { value: integers })
+  let converted = rounded_words(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, stack Floats { value: floats })
   if integers[0] != 2 or integers[1] != -2 or integers[2] != 0:
     return 1
   if integers[3] != 2147483647 or integers[4] != -2147483648:
@@ -38,12 +46,14 @@ slow main() -> i32:
     return 4
   if floats[5] != 2147483648.0 or floats[6] != -2147483648.0:
     return 5
-  rounded_unsigned_words(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, floats)
+  let unsigned_converted = rounded_unsigned_words(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, stack Floats { value: floats })
   if floats[0] != 0.0 or floats[1] != 1.0 or floats[2] != 65535.0 or floats[3] != 65536.0:
     return 6
   if floats[4] != 16777216.0 or floats[5] != 2147483648.0 or floats[6] != 4294967296.0:
     return 7
-  rounded_unsigned_floats(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, <7>, unsigned_words)
+  let unsigned_rounded = rounded_unsigned_floats(stack ConversionSamples { words: words, values: values, unsigned_words: unsigned_words }, stack Unsigned { value: unsigned_words })
+  if count(rounded) + count(converted) + count(unsigned_converted) + count(unsigned_rounded) != 28:
+    return 20
   if unsigned_words[0] != 2 or unsigned_words[1] != 0 or unsigned_words[2] != 0:
     return 8
   if unsigned_words[3] != 4294967295 or unsigned_words[4] != 0:

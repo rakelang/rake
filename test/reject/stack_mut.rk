@@ -1,0 +1,6 @@
+pack Values {
+  f32: v;
+}
+
+run doubled(values: mut stack Values) -> stack Values:
+  values with { v: values.v * <2.0> }

@@ -325,7 +325,9 @@ let verify_program ~relaxed ~scratches ~runs object_bytes =
           | Some m -> fail (Printf.sprintf "contains %s: vector code calls nothing" m)
           | None -> (
               match List.find_opt (fun m -> not (m = "call" || run_scalar m
-                || (is_simd m && (equivalent facts.selected m || List.mem m facts.alternatives)))) mnemonics with
+                || (is_simd m && (equivalent facts.selected m || List.mem m facts.alternatives))
+                (* A scalar store Rake selected: a compaction's count. *)
+                || ((not (is_simd m)) && List.mem m facts.selected))) mnemonics with
               | Some m -> fail (Printf.sprintf "contains %s, which none of its source operations selects" m)
               | None ->
                   let lane_operations = List.length (List.filter is_lane_operation mnemonics) in

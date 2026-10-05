@@ -30,6 +30,8 @@ Options:
                  offsets fold into load and store immediates; plain emits
                  wasm_simd128.h intrinsics alone.
   -o <file>      Write the selected emission product to <file>.
+  --no-report    Omit the kernel report that a successful build of stack
+                 runs prints on standard error.
 
 The production kernel backends are x86-sse2, x86-avx2, x86-avx512,
 aarch64-neon and wasm-simd128. Rake owns
@@ -41,9 +43,9 @@ On wasm-simd128 each selected vector instruction is a wasm_simd128.h intrinsic.
 for whole programs and WebAssembly. C output alone has not passed final-object
 verification; --verify-native compiles, disassembles and checks the object.
 Native programs call register kernels through f32/i32/u32/bool uniform C boundaries.
-Native SSE2, AVX2, AVX-512 and NEON traverse f32/i32/u32 streams, including
-explicit widening of byte and 16-bit columns and guarded partial racks.
-General native runs remain WIP.
+Native SSE2, AVX2, AVX-512 and NEON compile stack runs over f32/i32/u32 and
+widened byte and 16-bit columns, with masked and compacted selections and
+guarded partial racks. General native runs over views remain WIP.
 
 |}
 
@@ -96,6 +98,7 @@ type opts = {
   mutable filename : string option;
   mutable program_arguments : string list option;
   mutable addressing : Rake.Tier_c.addressing;
+  mutable report : bool;
 }
 
 let source_stem filename =
@@ -151,7 +154,7 @@ let whole_program_c ~addressing ~profile filename program =
   let checked = tier_check filename program in
   let execution_target = Rake.Tier_c.execution_target profile in
   match Rake.Tier_c.emit ~addressing ~execution_target ~source:filename checked with
-  | text, facts, native_kernels -> (checked, text, facts, native_kernels)
+  | text, facts, native_kernels, report -> (checked, text, facts, native_kernels, report)
   | exception Rake.Tier_c.Emission_error (loc, message) ->
       fail (Printf.sprintf "%s:%d:%d: %s emission: %s" loc.file loc.line loc.col
               (Rake.Target.profile_name profile) message)
@@ -198,6 +201,7 @@ let () =
           filename = None;
           program_arguments = None;
           addressing = Rake.Tier_c.Barrier;
+          report = true;
         }
       in
       let select_mode mode option =
@@ -241,6 +245,9 @@ let () =
                 | Error message -> fail ("Error: " ^ message)));
             parse rest
         | [ "--target" ] -> fail "Error: --target requires a profile"
+        | "--no-report" :: rest ->
+            opts.report <- false;
+            parse rest
         | "--wasm-addressing" :: value :: rest ->
             (match value with
             | "barrier" -> opts.addressing <- Rake.Tier_c.Barrier
@@ -318,7 +325,16 @@ let () =
           if mode = Assembly && (whole_program || Rake.Target.is_wasm config.profile) then
             fail "Error: --emit-asm requires physical-target register kernels; use --emit-c for whole programs or WebAssembly";
           if whole_program || (mode = C_source && not (Rake.Target.is_wasm config.profile)) then (
-            let checked, c_source, facts, native_kernels = whole_program_c ~addressing:opts.addressing ~profile:config.profile filename program in
+            let checked, c_source, facts, native_kernels, report = whole_program_c ~addressing:opts.addressing ~profile:config.profile filename program in
+            (* A successful build ends with the facts the compiler used. *)
+            let write_output contents path =
+              write_output contents path;
+              if opts.report && report <> [] && mode <> Native_ir then (
+                Printf.eprintf "rakec: kernel report for %s\n" (Rake.Target.profile_name config.profile);
+                List.iter (fun (run, facts) ->
+                  Printf.eprintf "  run %s: %s\n" run (List.hd facts);
+                  List.iter (Printf.eprintf "    %s\n") (List.tl facts)) report)
+            in
             let default extension = Some (match opts.output with Some path -> path | None -> source_stem filename ^ extension) in
             match mode with
             | Native_ir ->

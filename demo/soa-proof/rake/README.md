@@ -1,16 +1,17 @@
 # Rake fixtures
 
 These sources are the Rake side of the 400-particle structure-of-arrays proof.
-The workload passes `count = 400` at runtime; 400 is not baked into the kernel.
+The workload's stack holds 400 records at runtime; 400 isn't baked into the
+kernel.
 For `f32s`, the selected target fixes the number of lanes in one rack, so
 the source does not name SSE, AVX2, or AVX-512 vector types.
 
 ## Status
 
 - `particles_400_run.rk` is the canonical `advance_x` SoA source. It declares
-  two columnar fields, accepts a runtime count and scalar `dt`, and traverses
-  the pack in target-native chunks. Runs compile for `wasm-simd128` only, so
-  on x86 this harness only type-checks it.
+  two columnar fields and replaces the position column of a stack with a
+  runtime count, using a scalar `dt`. The compiler visits the records in
+  target-native racks. This harness type-checks it.
 - `advance_rack.rk` is the same arithmetic body as a straight-line `scratch`.
   The current AVX2 backend emits an object for it and verifies that its rack
   operations stay in YMM registers without calls, spills, stack use, or scalar
@@ -18,7 +19,7 @@ the source does not name SSE, AVX2, or AVX-512 vector types.
   optimizer substitutes it, removes the dead multiply, and emits one FMA. This
   differs intentionally from the demo's contraction-disabled C and explicit
   multiply/add Rust variants. It proves the current register-only backend
-  slice, not pack traversal.
+  slice, not a stack run.
 - `reject_sin.rk` is the primary fail-closed rejection proof. Rack-level
   `sin(values)` is valid in the frontend, but no current native profile owns a
   compliant inline vector-sine implementation. AVX2 and NEON therefore reject
@@ -57,7 +58,6 @@ produce assembly. The final command must fail during native register allocation
 and report both `17 simultaneously live YMM registers` and
 `no spill fallback is permitted`; it must not produce assembly.
 
-At 400 elements, a full-width traversal performs 25 chunks with 16-lane
-AVX-512 racks, 50 chunks with 8-lane AVX2 racks, or 100 chunks with 4-lane
-128-bit racks. The number of SoA fields remains two on every target; SIMD width
+At 400 elements, a stack run performs 25 racks with 16-lane AVX-512 racks, 50
+with 8-lane AVX2 racks, or 100 with 4-lane 128-bit racks. The number of SoA fields remains two on every target; SIMD width
 changes the lane count per rack, not the number of stacks.

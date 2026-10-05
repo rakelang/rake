@@ -48,10 +48,10 @@ multiply-add.
 
 | Profile | Rack | What compiles |
 | --- | --- | --- |
-| `x86-sse2` | one 128-bit XMM register, 4 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
-| `x86-avx2` | one 256-bit YMM register, 8 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
-| `x86-avx512` | one 512-bit ZMM register, 16 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
-| `aarch64-neon` | one 128-bit vector register, 4 32-bit lanes | float racks and a 32-bit integer subset, as assembly |
+| `x86-sse2` | one 128-bit XMM register, 4 32-bit lanes | float racks, a 32-bit integer subset and stack runs, as assembly |
+| `x86-avx2` | one 256-bit YMM register, 8 32-bit lanes | float racks, a 32-bit integer subset and stack runs, as assembly |
+| `x86-avx512` | one 512-bit ZMM register, 16 32-bit lanes | float racks, a 32-bit integer subset and stack runs, as assembly |
+| `aarch64-neon` | one 128-bit vector register, 4 32-bit lanes | float racks, a 32-bit integer subset and stack runs, as assembly |
 | `wasm-simd128` | one `v128`, 4 `f32` lanes | scratches and rakes over float and integer racks, runs over memory, and whole programs with scalar `slow` code, as C |
 | `wasm-simd128-relaxed` | as `wasm-simd128` | adds the relaxed SIMD operations, by opt-in |
 
@@ -63,26 +63,27 @@ object, and supports uniform `f32`, `i32`, `u32` and `bool` parameters and `f32`
 `bool`, `i32` or `u32` results at the boundary from slow code. Other native
 scalar kernel boundaries remain WIP. Platform C
 imports and exports, header-backed unions, typed C callbacks and process
-arguments are supported too. SSE2, AVX2, AVX-512 and NEON also support
-`f32s`, `i32s` and `u32s` traversals that yield a matching stream or update
-one mutable stack column,
-including a separate destination with its own record layout,
-with checked partial racks. Explicit `widen` reads signed or unsigned byte
-and 16-bit columns into 32-bit working racks. Stored columns stay compact,
-and the tail reads only existing records. Native `bitcast` between `i32s`
+arguments are supported too. SSE2, AVX2, AVX-512 and NEON also compile stack
+runs: calculations applied to whole stacks, which replace columns of the
+result's stack in place, mask them with `where`, or keep only the selected
+records with `compact`, with checked partial racks. Explicit `widen` reads
+signed or unsigned byte and 16-bit columns into 32-bit working racks. Stored
+columns stay compact, and the tail reads only existing records. Native `bitcast` between `i32s`
 and `u32s` preserves every lane's bits. `to_f32` converts either integer type
 numerically, and `to_i32` or `to_u32` rounds and saturates floats to the
-corresponding integer range. These conversions also compile in native streams.
+corresponding integer range. These conversions also compile in native stack
+runs.
 The physical profiles also compile direct uniform
 `f32` comparisons as vector selections, including within through masks and
-stream tails. Native `i32s` and `u32s` support wrapping add/subtract and
+stack run tails. Native `i32s` and `u32s` support wrapping add/subtract and
 bitwise AND/OR/XOR. Signed `i32s` comparisons produce masks for selection
 and mask reductions. `sum`, `product`, `minimum` and `maximum` reduce an
 `i32s` or `u32s` rack to one result of the matching scalar type.
 The corresponding `scan_` operations keep every inclusive prefix in a rack.
 The [operation reference](docs/spec/01_primitives_operations_and_targets.md#integer-racks)
 lists the implemented subset and remaining work.
-These CPU and C ABI additions are included in 0.7.0. On
+The 32-bit integer and C ABI additions are included in 0.7.0, and stack runs
+are unreleased. On
 `wasm-simd128`, a whole program becomes one C file
 with a C entry point, and every selected instruction is written as one
 `wasm_simd128.h` intrinsic.
@@ -97,10 +98,9 @@ pack Samples {
   u8: quality;
 }
 
-run weigh(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
-  for chunk in input using f32s up to <count>:
-    let quality = to_f32(widen(chunk.quality))
-    yield chunk.value * <scale> + quality
+run weigh(samples: stack Samples, <scale: f32>) -> stack Samples:
+  let quality = to_f32(widen(samples.quality))
+  samples with { value: samples.value * <scale> + quality }
 
 run running_sum(x: []f32, out: mut []f32, <n: i32>):
   total := <0.0>
@@ -113,10 +113,9 @@ state calls: i32 := 0
 slow main() -> i32:
   values: [8]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
   qualities: [8]u8 := [0, 1, 0, 1, 0, 1, 0, 1]
-  weighed: [8]f32 := [0.0; 8]
-  weigh(stack Samples { value: values, quality: qualities }, <8>, <0.5>, weighed)
+  let weighed = weigh(stack Samples { value: values, quality: qualities }, <0.5>)
   sums: [8]f32 := [0.0; 8]
-  running_sum(weighed, sums, <8>)
+  running_sum(weighed.value, sums, <8>)
   calls <- calls + 1
   return i32(sums[7] * 4.0) + calls
 ```

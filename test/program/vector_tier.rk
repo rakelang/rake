@@ -21,6 +21,10 @@ pack Totals {
   f32: total;
 }
 
+pack Chosen {
+  f32: value;
+}
+
 scratch scaled(v: f32s, <k: f32>) -> f32s:
   v * <k> + 1.0
 
@@ -114,26 +118,23 @@ run long_repeat(x: []f32, out: mut []f32):
     total <- total * 0.999 + 0.001
   out[<0>] <- total
 
-~~ A rake inlined in a traversal: in the tail, its lanes are also the tail's.
-run roots(input: stack Signal, <count: i64>) -> f32:
-  for chunk in input using f32s up to <count>:
-    yield guarded_root(chunk.x - 2.0)
+~~ A rake inlined in a stack run: in the tail, its lanes are also the tail's.
+run roots(input: stack Signal, output: stack Signal) -> stack Signal:
+  output with { x: guarded_root(input.x - 2.0) }
 
-~~ A gather in a traversal: the tail's inactive lanes hold index 0 - 1 = -1,
+~~ A gather in a stack run: the tail's inactive lanes hold index 0 - 1 = -1,
 ~~ which is neither checked nor read.
-run picked(input: stack Picks, table: []f32, <count: i64>) -> f32:
-  for chunk in input using i32s up to <count>:
-    yield table[chunk.index - 1] * 2.0
+run picked(input: stack Picks, table: []f32, output: stack Chosen) -> stack Chosen:
+  output with { value: table[input.index - 1] * 2.0 }
 
-~~ A nested traversal: for each chunk of left, the lane-wise sum over right's
-~~ chunks of x * w. Both have tails, and the inner one runs in the outer's.
-run crossed(left: stack Left, right: stack Right, out: mut stack Totals, <nl: i64>, <nr: i64>):
-  for a in left using f32s up to <nl>:
-    let x = a.x
-    acc := <0.0>
-    for b in right using f32s up to <nr>:
-      acc <- acc + x * b.w
-    out.total <- acc
+~~ Three stacks of one count, a masked replacement and a compaction.
+run crossed(left: stack Left, right: stack Right, out: stack Totals) -> stack Totals:
+  tine #heavy means right.w > <0.5>
+  out with { total: left.x * right.w } where #heavy
+
+run kept(signal: stack Signal) -> stack Signal:
+  tine #large means signal.x > <2.0>
+  compact signal with { x: signal.x * <2.0> } where #large
 
 ~~ A uniform != in a scratch is ordered too: NaN != NaN is false.
 scratch pick(v: f32s, w: f32s, <a: f32>, <b: f32>) -> f32s:
@@ -175,15 +176,18 @@ slow main() -> i32:
   long_repeat(x, out_r)
   signal: [11]f32 := [0.0, 1.0, 2.0, 3.0, 4.0, 9.0, 16.0, -4.0, 2.5, 6.0, 102.0]
   rooted: [11]f32 := [0.0; 11]
-  roots(stack Signal { x: signal }, <11>, rooted)
+  let rooted_stack = roots(stack Signal { x: signal }, stack Signal { x: rooted })
   picks: [6]i32 := [3, 1, 6, 2, 5, 4]
   values: [6]f32 := [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
   chosen: [6]f32 := [0.0; 6]
-  picked(stack Picks { index: picks }, values, <6>, chosen)
+  let chosen_stack = picked(stack Picks { index: picks }, values, stack Chosen { value: chosen })
   lx: [6]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-  rw: [7]f32 := [0.5, 0.25, 2.0, 1.0, 3.0, 0.125, 4.0]
-  totals: [6]f32 := [0.0; 6]
-  crossed(stack Left { x: lx }, stack Right { w: rw }, stack Totals { total: totals }, <6>, <7>)
+  rw: [6]f32 := [0.5, 0.25, 2.0, 1.0, 3.0, 0.125]
+  totals: [6]f32 := [-1.0; 6]
+  let totals_stack = crossed(stack Left { x: lx }, stack Right { w: rw }, stack Totals { total: totals })
+  survivors := kept(stack Signal { x: signal })
+  if count(rooted_stack) + count(chosen_stack) + count(totals_stack) != 23:
+    return -5
   let quiet = 0.0 / 0.0
   picks_out: [8]f32 := [0.0; 8]
   nan_pick(x, picks_out, <quiet>)
@@ -223,6 +227,9 @@ slow main() -> i32:
     h <- fold(h, bitcast(u32, out_r[i]))
   for i from 0 up to 11:
     h <- fold(h, bitcast(u32, rooted[i]))
+  h <- fold(h, u32(count(survivors)))
+  for i from 0 up to i32(count(survivors)):
+    h <- fold(h, bitcast(u32, survivors.x[i]))
   for i from 0 up to 8:
     h <- fold(h, bitcast(u32, picks_out[i]))
   for i from 0 up to 4:

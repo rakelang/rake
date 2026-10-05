@@ -1,0 +1,11 @@
+~~ A stack's columns hold its count of records: a literal whose columns
+~~ have different lengths traps.
+pack Pair {
+  f32: a, b;
+}
+
+slow main() -> i32:
+  a: [4]f32 := [1.0, 2.0, 3.0, 4.0]
+  b: [6]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+  let pair = stack Pair { a: a, b: b }
+  return i32(count(pair))

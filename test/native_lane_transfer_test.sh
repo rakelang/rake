@@ -101,13 +101,13 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
         fi
         grep -Fq "outside a ${lanes}-lane rack" "${tmp}/outside.log"
     done
-    # Register insertion has no defined native stream-tail participation yet.
-    printf 'pack Values {\n  f32: value;\n}\nrun replace_first(input: stack Values, <count: i32>) -> f32:\n  for row in input using f32s up to <count>:\n    yield insert(row.value, 0, <1.0>)\n' > "${tmp}/stream.rk"
+    # Register insertion has no defined native stack-run tail participation yet.
+    printf 'pack Values {\n  f32: value;\n}\nrun replace_first(input: stack Values) -> stack Values:\n  input with { value: insert(input.value, 0, <1.0>) }\n' > "${tmp}/stream.rk"
     if "$rakec" --emit-c --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
-        echo "$profile accepted insertion without a native stream-tail contract" >&2
+        echo "$profile accepted insertion without a native stack-run tail contract" >&2
         exit 1
     fi
-    grep -Fq 'native stream reductions, scans, extractions, insertions and shuffles are work in progress' "${tmp}/stream.log"
+    grep -Fq 'native stack run reductions, scans, extractions, insertions and shuffles are work in progress' "${tmp}/stream.log"
     printf 'scratch malformed(a: f32s) -> f32s:\n  shuffle(a, [0])\n' > "${tmp}/malformed.rk"
     if "$rakec" --emit-asm --target "$profile" "${tmp}/malformed.rk" > "${tmp}/malformed.log" 2>&1; then
         echo "$profile accepted a short shuffle index list" >&2
@@ -128,10 +128,10 @@ for profile in x86-sse2 x86-avx2 x86-avx512 aarch64-neon; do
     indices=()
     for ((lane=0; lane<lanes; ++lane)); do indices+=("0"); done
     joined="$(IFS=,; printf '%s' "${indices[*]}")"
-    printf 'pack Values {\n  f32: value;\n}\nrun shuffle_rows(input: stack Values, <count: i32>) -> f32:\n  for row in input using f32s up to <count>:\n    yield shuffle(row.value, [%s])\n' "$joined" > "${tmp}/stream.rk"
+    printf 'pack Values {\n  f32: value;\n}\nrun shuffle_rows(input: stack Values) -> stack Values:\n  input with { value: shuffle(input.value, [%s]) }\n' "$joined" > "${tmp}/stream.rk"
     if "$rakec" --emit-c --target "$profile" "${tmp}/stream.rk" > "${tmp}/stream.log" 2>&1; then
-        echo "$profile accepted shuffle without a native stream-tail contract" >&2
+        echo "$profile accepted shuffle without a native stack-run tail contract" >&2
         exit 1
     fi
-    grep -Fq 'native stream reductions, scans, extractions, insertions and shuffles are work in progress' "${tmp}/stream.log"
+    grep -Fq 'native stack run reductions, scans, extractions, insertions and shuffles are work in progress' "${tmp}/stream.log"
 done

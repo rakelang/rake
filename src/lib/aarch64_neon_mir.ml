@@ -73,6 +73,7 @@ type func = {
   parameters : parameter list;
   instructions : instruction list;
   result : vreg option;
+  outputs : vreg list;  (** a traversal kernel's values, left in their registers *)
   result_type : Native_ir.typ option;
   value_locations : (vreg * Native_ir.source_location) list;
 }

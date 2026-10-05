@@ -44,6 +44,7 @@ let function_ =
         instruction 21 (A.Moveaps { dst = 0; source = 12 });
       ];
     result = Some 0;
+    outputs = [];
     result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
     maximum_live = 13;
   }
@@ -59,6 +60,7 @@ let reduction_function =
                scratch = [ 2 ] });
         instruction 42 (A.Moveaps { dst = 0; source = 1 }) ];
     result = Some 0;
+    outputs = [];
     result_type = Some (Rake.Native_ir.Scalar Rake.Native_ir.F32);
     maximum_live = 3;
   }
@@ -74,6 +76,7 @@ let scan_function =
                scratch = [ 2; 3 ] });
         instruction 52 (A.Moveaps { dst = 0; source = 1 }) ];
     result = Some 0;
+    outputs = [];
     result_type = Some (Rake.Native_ir.Rack Rake.Native_ir.F32);
     maximum_live = 4;
   }

@@ -158,23 +158,6 @@ let param_types_of env p loc =
       let expanded = expand_spread env type_name names loc in
       List.map snd expanded
 
-(** Whether a run uses forms that only the tier checker ({!Tier_check}) knows:
-    a general body, view, mutable or rack parameters, or statements beyond the
-    first traversal contract. Such a run is checked and lowered there alone. *)
-let run_needs_tier params (result : result_spec) body =
-  let new_type (t : typ) = match t.v with TArray _ | TView _ | TPtr _ | TMut _ | TNamed _ | TRack _ -> true | _ -> false in
-  let rec new_stmt (s : stmt) =
-    match s.v with
-    | SExpr { v = ESlow _; _ } -> true
-    | SLet _ | SFused _ | SExpr _ -> false
-    | SOver o -> List.exists new_stmt o.over_body
-    | _ -> true
-  in
-  result.result_type = None
-  || List.exists (function PRack (_, Some t) | PScalar (_, Some t) -> new_type t | _ -> false) params
-  || List.exists new_stmt body
-  || (match List.rev body with { v = SOver _; _ } :: before -> List.exists (fun (s : stmt) -> match s.v with SOver _ -> true | _ -> false) before | _ -> true)
-
 (** Register function signatures *)
 let register_func_def env (def: def) =
   match def.v with
@@ -212,23 +195,6 @@ let register_func_def env (def: def) =
             (match find_type env result.result_name with
              | Some t -> t
              | None -> Rack SFloat)
-      in
-      Hashtbl.add env.funcs name (param_types, ret_type)
-  | DRun (_, params, result, body) when run_needs_tier params result body -> ()
-  | DRun (name, params, result, _) ->
-      let param_types = List.concat_map (fun p ->
-        match p with
-        | PRack (_, Some ty) -> [typ_to_t env ty]
-        | PRack (_, None) -> [Rack SFloat]
-        | PScalar (_, Some ty) -> [typ_to_t env ty]
-        | PScalar (_, None) -> [Scalar SFloat]
-        | PSpread (names, type_name) ->
-            let expanded = expand_spread env type_name names def.loc in
-            List.map snd expanded
-      ) params in
-      let ret_type = match result.result_type with
-        | Some ty -> run_result_to_t env ty
-        | None -> Unit
       in
       Hashtbl.add env.funcs name (param_types, ret_type)
   | _ -> ()
@@ -1031,9 +997,6 @@ let rec check_stmt env (stmt: stmt) : env =
   | SExpr e ->
       let _ = infer_expr env e in
       env
-  | SOver over ->
-      let _ = check_over_result env stmt.loc over in
-      env
   | SLoop ({ loop_repeat = true; _ } as l) ->
       if not (is_integer_literal l.loop_from && is_integer_literal l.loop_to) then
         type_errorf stmt.loc "repeat's bounds are integer literals";
@@ -1051,41 +1014,10 @@ let rec check_stmt env (stmt: stmt) : env =
       Option.iter (fun ty -> let d = typ_to_t env ty in if d <> t then type_errorf stmt.loc "Type mismatch: expected %s, got %s" (show_concise d) (show_concise t)) b.bind_type;
       Hashtbl.add env.vars b.bind_name t;
       env
-  | SStore _ | SReturn _ | SYield _ | SBreak | SContinue | SIf _ | SWhile _ | SLoop _ ->
+  | SStore _ | SReturn _ | STine _ | SResult _ | SBreak | SContinue | SIf _ | SWhile _ | SLoop _ ->
       type_errorf stmt.loc "%s is not available here"
         (Capabilities.id (Capabilities.feature_of_stmt stmt.v))
 
-and check_over_result env statement_loc over =
-  let count_t = infer_expr env over.over_count in
-  (match count_t with
-  | Scalar SInt | Scalar SInt64 -> ()
-  | _ ->
-      type_errorf over.over_count.loc
-        "Over loop count must be scalar int/int64, got %s"
-        (show_concise count_t));
-  let chunk_t =
-    match Hashtbl.find_opt env.vars over.over_stack with
-    | Some (Stack (name, fields)) ->
-        let domain = of_prim over.over_domain in
-        Pack (name, List.map (traversal_field domain) fields)
-    | Some t ->
-        type_errorf statement_loc "Expected stack type, got %s" (show_concise t)
-    | None -> type_errorf statement_loc "Undefined stack: %s" over.over_stack
-  in
-  let body_env = { env with vars = Hashtbl.copy env.vars } in
-  Hashtbl.add body_env.vars over.over_chunk chunk_t;
-  List.iter (fun statement -> ignore (check_stmt body_env statement)) over.over_body;
-  match List.rev over.over_body with
-  | { v = SExpr expression; _ } :: _ ->
-      let result = infer_expr body_env expression in
-      ensure_rack_result body_env expression.loc result;
-      result
-  | [] ->
-      type_errorf statement_loc
-        "Over loop must have a body ending in a result expression"
-  | final_statement :: _ ->
-      type_errorf final_statement.loc
-        "Over loop body must end in a result expression"
 
 (** Check tine predicate *)
 let rec check_predicate env (pred: predicate) : unit =
@@ -1216,9 +1148,8 @@ and check_masked_stmt env (stmt: stmt) =
   | SExpr expr -> check_masked_expr env expr
   | SLocBind _ | SAssign _ ->
       require_feature env stmt.loc Capabilities.Masked_mutation
-  | SOver _ -> require_feature env stmt.loc Capabilities.Masked_loop
   | SLoop _ | SWhile _ -> require_feature env stmt.loc Capabilities.Masked_loop
-  | SUniform _ | SStore _ | SReturn _ | SYield _ | SBreak | SContinue | SIf _ ->
+  | SUniform _ | SStore _ | SReturn _ | STine _ | SResult _ | SBreak | SContinue | SIf _ ->
       require_feature env stmt.loc Capabilities.Masked_mutation
 
 (** Check through block *)
@@ -1406,43 +1337,6 @@ let check_scratch env _name params _result body loc =
     type_errorf loc "Return type mismatch: expected %s, got %s"
       (show_concise expected_t) (show_concise actual_t)
 
-(** Check run function definition *)
-let check_run env _name params result body loc =
-  let env' = copy_env env in
-  List.iter (ensure_supported_run_param env' loc) params;
-  (match result.result_type with
-   | Some ty ->
-       require_feature env' ty.loc Capabilities.Result_annotation;
-       let t = run_result_to_t env' ty in
-       if not (is_float_rack t) then
-         require_feature env' ty.loc Capabilities.Value_non_f32
-  | None -> ());
-  add_params_to_env env' params loc;
-  let actual_t =
-    match List.rev body with
-    | { v = SOver over; loc = over_loc } :: preceding_reversed ->
-        List.rev preceding_reversed
-        |> List.iter (fun statement -> ignore (check_stmt env' statement));
-        check_over_result env' over_loc over
-    | [] ->
-        type_errorf loc
-          "Run result '%s' is not produced; the body must end in an over loop"
-          result.result_name
-    | final_statement :: _ ->
-        type_errorf final_statement.loc
-          "Run result '%s' is not produced; the body must end in an over loop"
-          result.result_name
-  in
-  ensure_rack_result env' loc actual_t;
-  let expected_t =
-    match result.result_type with
-    | Some ty -> run_result_to_t env' ty
-    | None -> Rack SFloat
-  in
-  if not (compatible expected_t actual_t) then
-    type_errorf loc "Run result '%s' type mismatch: expected %s, got %s"
-      result.result_name (show_concise expected_t) (show_concise actual_t)
-
 (** C's reserved words. A scratch, rake or run is a C function with its own
     name, so its name can't be one of these. *)
 let c_reserved_words =
@@ -1478,8 +1372,7 @@ let check_def env (def: def) =
         | _ -> type_errorf def.loc "Global tine parameters require explicit rack or uniform types"
       ) parameters;
       check_predicate local predicate
-  | DRun (name, params, result, body) ->
-      if not (run_needs_tier params result body) then check_run env name params result body def.loc
+  | DRun _ -> ()  (* the slow tier checks runs (Tier_check) *)
   | DRecord _ | DUnion _ | DSlow _ | DExtern _ | DState _ | DEmbed _ | DConst _ ->
       ()  (* the slow tier checks these (Tier) *)
 

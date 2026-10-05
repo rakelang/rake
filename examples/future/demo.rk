@@ -51,24 +51,29 @@ rake intersect_flat(
     | #maybe => hit_distance
     | _      => <-1.0>
 
+pack Hits {
+  f32: distance;
+}
+
 run render_all(
   rays: stack Ray,
-  <count: i64>,
+  hits: stack Hits,
   <sphere_cx: f32>,
   <sphere_cy: f32>,
   <sphere_cz: f32>,
   <sphere_radius: f32>
-) -> f32:
-  for ray in rays using f32s up to <count>:
-    yield intersect_flat(
-      ray.ox,
-      ray.oy,
-      ray.oz,
-      ray.dx,
-      ray.dy,
-      ray.dz,
+) -> stack Hits:
+  hits with {
+    distance: intersect_flat(
+      rays.ox,
+      rays.oy,
+      rays.oz,
+      rays.dx,
+      rays.dy,
+      rays.dz,
       <sphere_cx>,
       <sphere_cy>,
       <sphere_cz>,
       <sphere_radius>
     )
+  }

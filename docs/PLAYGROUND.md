@@ -44,18 +44,16 @@ The target menu offers WebAssembly, SSE2, AVX2, AVX-512 and NEON. The browser
 development compiler supports native slow orchestration with uniform `f32`,
 `i32` and `u32` kernel arguments and `f32`, `bool`, `i32` or `u32` results.
 Lessons start on WebAssembly when they contain a whole program. WebAssembly
-covers general memory runs. SSE2, AVX2, AVX-512 and NEON
-also compile `f32`, `i32` and `u32` stream traversals and single-column stack updates.
-Stored byte and 16-bit columns can be explicitly widened into signed or
-unsigned 32-bit racks. `to_f32` converts signed or unsigned integer racks to
-floats, and `to_i32` converts floats to signed integers, including in streams.
-Native stream bodies now support local rack assignments and fixed-count
-`repeat`. Each chunk starts with fresh locations, and earlier `let` bindings
-keep their original values after an assignment. Runtime inner loops and
-state carried between chunks remain work in progress on physical targets.
-General native memory runs
-give the compiler's work-in-progress diagnostic. Updates
-can use a separate destination stack with a different record layout. Every result and
+covers stack runs and general runs over views. SSE2, AVX2, AVX-512 and NEON
+also compile stack runs over `f32`, `i32` and `u32` columns, with masking,
+compaction and several replaced columns. Stored byte and 16-bit columns can be
+explicitly widened into signed or unsigned 32-bit racks. `to_f32` converts
+signed or unsigned integer racks to floats, and `to_i32` converts floats to
+signed integers, including in stack runs. Native stack runs support local rack
+assignments and fixed-count `repeat`. Each rack of records starts with fresh
+locations, and earlier `let` bindings keep their original values after an
+assignment. Runtime inner loops and general runs over views give the
+compiler's work-in-progress diagnostic on physical targets. Every result and
 lane trace comes from Rake's interpreter, using the selected profile's `f32`
 rack width. The browser displays C or assembly without executing that
 generated machine code. Native object verification still requires `rakec`
@@ -94,7 +92,7 @@ updated.
 | 6 | [Fused stages](#6-fused-stages) | `\| name <\| e`, fused multiply-add | the x86 Code tab shows one `vfmadd231ps` |
 | 7 | [Choosing by lane](#7-choosing-by-lane) | masks, `if ... then ... else` on racks | both branches run and a select joins them |
 | 8 | [Tines and sweeps](#8-tines-and-sweeps) | global `#tine` predicates, `through`, `sweep`, `gaps`, optional fallbacks | incomplete coverage and an undefined lane both become compiler errors |
-| 9 | [Columns](#9-columns) | `stack`, `pack`, traversals, `widen`, tails | a count of 6 leaves a tail with two live lanes |
+| 9 | [Columns](#9-columns) | `stack`, `pack`, stack runs, `widen`, tails, `compact` | compaction moves the kept particles to the front of each column |
 | 10 | [A whole program](#10-a-whole-program) | `slow {}`, records, `state`, `mut` | scalar state updates require a block, and vector work resumes at `}` |
 | 11 | [Proved or refused](#11-proved-or-refused) | profiles and their rules | `sin` is refused instead of slowed down |
 | 12 | [Bits](#12-bits) | integer racks, bit operations, `repeat` | a flood fill spreads along a row of a bitboard |
@@ -370,11 +368,12 @@ form and needs no `return` keyword.
 
 Data for vector code is usually stored as columns, one array for each field.
 A `pack` describes one particle with its position, velocity and age. A
-`stack` stores many particles as a separate column for each field.
-`for particle in particles using f32s up to <count>:`
-visits the records a rack at a time. A byte column is stored one byte per
-record, and `widen` turns a chunk of it into a rack of 32-bit lanes when the
-code needs it.
+`stack` stores many particles as a separate column for each field, with a
+count of records. A run applies its calculation to whole columns:
+`particles.position` is the entire position column, and the compiler visits
+the records a rack at a time, including a final partial rack. A byte column is
+stored one byte per record, and `widen` turns it into 32-bit lanes when the
+code needs them.
 
 <!-- rake-check: run 1570 -->
 <!-- playground-starter -->
@@ -384,28 +383,35 @@ pack Particles {
   u8: age;
 }
 
-run advance(particles: stack Particles, <count: i64>, <dt: f32>) -> f32:
-  for particle in particles using f32s up to <count>:
-    let age = to_f32(widen(particle.age))
-    yield particle.position + particle.velocity * <dt> / (age + <1.0>)
+run advance(particles: stack Particles, <dt: f32>) -> stack Particles:
+  let age = to_f32(widen(particles.age))
+  particles with { position: particles.position + particles.velocity * <dt> / (age + <1.0>) }
 
 slow main() -> i32:
   positions: [6]f32 := [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
   velocities: [6]f32 := [4.0, 4.0, 4.0, 4.0, 4.0, 4.0]
   ages: [6]u8 := [0, 1, 3, 0, 1, 3]
-  moved: [6]f32 := [0.0; 6]
-  advance(stack Particles { position: positions, velocity: velocities, age: ages }, <6>, <0.5>, moved)
+  let n = 6
+  particles := stack Particles { position: slice(positions, 0, n), velocity: slice(velocities, 0, n), age: slice(ages, 0, n) }
+  particles <- advance(particles, <0.5>)
   total := 0.0
-  for i from 0 up to 6:
-    total <- total + moved[i]
+  for i from 0 up to i32(count(particles)):
+    total <- total + particles.position[i]
   return i32(total * 10.0)
 ```
 
-Result: `main returned 1570`. Each `yield` writes a rack of results to the
-output, which slow code passes as the last argument. Change the count passed
-to `advance` from `<6>` to `<5>` and run. The second chunk in the Lanes tab
-now has one live lane and three empty ones. The tail loads and stores only
-the record that exists.
+Result: `main returned 1570`. `advance` returns the stack with `position`
+replaced. Calling it moves the stack in, so the program assigns the result
+back to `particles` and reads its column as `particles.position`. Change `let
+n = 6` to `let n = 5` and run. The second rack in the Lanes tab now has one
+live lane and three empty ones. The tail loads and stores only the record
+that exists.
+
+Now keep only the young particles. Add `tine #young means age < <2.0>` after
+the `let` in `advance`, and change its last line to `compact particles with {
+position: ... } where #young`, keeping the same position expression. With
+`n = 6` the result is `main returned 860`: four particles remain, moved to the
+front of each column, and `count(particles)` is 4.
 
 This lesson starts on WebAssembly, with four records per rack. It also
 compiles on SSE2 and NEON with four, AVX2 with eight, or AVX-512 with sixteen.

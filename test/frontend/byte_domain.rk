@@ -2,6 +2,5 @@ pack Ages {
   u8: age;
 }
 
-run copy_ages(ages: stack Ages, <count: i64>) -> u8:
-  for chunk in ages using u8s up to <count>:
-    yield chunk.age
+run older(ages: stack Ages) -> stack Ages:
+  ages with { age: ages.age + 1 }

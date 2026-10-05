@@ -1,0 +1,13 @@
+pack Values {
+  f32: v;
+}
+
+run doubled(values: stack Values) -> stack Values:
+  values with { v: values.v * <2.0> }
+
+slow main() -> i32:
+  data: [4]f32 := [1.0, 2.0, 3.0, 4.0]
+  values := stack Values { v: data }
+  for i from 0 up to 3:
+    let twice = doubled(values)
+  return 0

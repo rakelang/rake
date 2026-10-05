@@ -1,0 +1,13 @@
+~~ A run's result may share memory with another argument only element for
+~~ element: a result column one element past its input traps.
+pack Values {
+  f32: v;
+}
+
+run shifted(input: stack Values, out: stack Values) -> stack Values:
+  out with { v: input.v + <1.0> }
+
+slow main() -> i32:
+  data: [9]f32 := [0.0; 9]
+  let moved = shifted(stack Values { v: slice(data, 0, 8) }, stack Values { v: slice(data, 1, 8) })
+  return i32(count(moved))

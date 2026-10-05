@@ -86,6 +86,7 @@ type func = {
   loc : Native_ir.source_location;
   instructions : instruction list;
   result : vector_register option;
+  outputs : vector_register list;  (** where each traversal output was left *)
   result_type : Native_ir.typ option;
   maximum_live : int;
 }
@@ -118,6 +119,7 @@ let last_uses func =
            List.fold_left (fun uses operand -> I.add operand index uses) uses operands)
          I.empty
   in
+  let uses = List.fold_left (fun uses output -> I.add output (List.length func.M.instructions) uses) uses func.M.outputs in
   match func.M.result with
   | None -> uses
   | Some result -> I.add result (List.length func.instructions) uses
@@ -260,6 +262,7 @@ let allocate_function ?parameter_assignment func =
               instructions = List.rev emitted_rev;
               result;
               result_type = func.result_type;
+              outputs = List.map physical func.outputs;
               maximum_live = !maximum_live;
             }
       | instruction :: rest ->

@@ -10,9 +10,8 @@ output_x[i] = position_x[i] + velocity_x[i] * dt
 
 The headline input contains 400 particles. An `f32s` rack contains 4 lanes on
 SSE2 or NEON, 8 on AVX2, and 16 on AVX-512. Consequently 400 elements require
-100, 50, or 25 full-rack iterations respectively. `stack` declares the SoA
-field schema; it has no length. The caller supplies the pack and an explicit
-runtime count.
+100, 50, or 25 full-rack iterations respectively. A `stack` holds the SoA
+columns and their runtime count, which the caller supplies.
 
 One Rake source is intended to be compiled separately for each target profile.
 It is not runtime dispatch. C and Rust can instead use scalar loops and rely on
@@ -32,9 +31,8 @@ different compiler contract or an explicit FMA intrinsic. This contrast is the
 point of the positive case: Rake chooses the faster legal graph without making
 the source spell a target width or an optimization request.
 
-Runs and pack traversal compile only for `wasm-simd128`, and this harness
-compares x86 code, so the 400-element Rake source is only type-checked here.
-It isn't an end-to-end traversal comparison.
+This harness compares x86 register kernels, so the 400-element stack run is
+only type-checked here. It isn't an end-to-end comparison of whole-stack runs.
 
 The primary negative comparison is strict sine. C and Rust accept an ordinary
 runtime-count `sin` loop; under the recorded strict builds they emit scalar

@@ -90,19 +90,23 @@ scatter, compression, expansion and single-record layouts are planned.
 ## Data layout is explicit
 
 A `pack` describes one record. A `stack` collects those records in
-structure-of-arrays storage, and a traversal visits its columns a rack at a
-time. Conversions between layouts and memory
-operations are written in the source or set by a documented calling
-convention. A traversal's tail never reads or writes past the count, and its
-inactive lanes raise no exception and have no effect.
+structure-of-arrays storage, and a stack run applies calculations to its whole
+columns while the compiler visits them a rack at a time. Conversions between
+layouts and memory operations are written in the source or set by a documented
+calling convention. A stack run's tail never reads or writes past the count,
+and its inactive lanes raise no exception and have no effect.
 
-Today: general runs, stacks and traversals compile on `wasm-simd128`.
-The development compiler adds `f32`, `i32` and `u32` stream traversals and single-column
-stack updates on SSE2, AVX2, AVX-512 and NEON. An update can write its input
-stack or a separate destination with a different record layout.
-Explicit `widen` also reads signed and unsigned byte or 16-bit columns into
-32-bit working racks. Each column advances by its stored element width,
-and a partial rack reads only participating records. Outputs stay 32-bit.
+Stacks are values that move into the run returning them, so every update is in
+place and a copy happens only where the source writes `copy`. A run selects
+records by masking, with `where`, or by compaction, with `compact`, and the
+kernel report states which method each target used.
+
+Today: stack runs compile on SSE2, AVX2, AVX-512, NEON and `wasm-simd128`, and
+general runs over views on `wasm-simd128`. Explicit `widen` reads signed and
+unsigned byte or 16-bit columns into 32-bit working racks. Each column advances
+by its stored element width, and a partial rack reads only participating
+records. Replacements write fields as wide as the run's domain, and compaction
+moves every column.
 Signed and unsigned integer-to-float conversions preserve those 32-bit lanes,
 with masked protection, nearest-even rounding and saturating float-to-integer
 results for both signed and unsigned reverse conversions.
@@ -122,8 +126,8 @@ tier](spec/08_slow_tier.md) describes. The unreleased development compiler
 also compiles slow orchestration with register kernels into native objects.
 Their C unit embeds Rake-selected assembly, which remains opaque to the
 platform C compiler. Slow callers can pass uniform `f32`, `bool`, `i32` and `u32`
-arguments and receive `f32`, `bool`, `i32` or `u32` results. Native runs beyond
-the stream subset and other scalar kernel boundaries remain work in progress.
+arguments and receive `f32`, `bool`, `i32` or `u32` results. Native general runs
+and other scalar kernel boundaries remain work in progress.
 
 ## Compilation is predictable
 

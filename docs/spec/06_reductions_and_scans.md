@@ -81,7 +81,7 @@ multiplication. Use a marked uniform when the scalar meets a rack, as
 including reduced or extracted values. Float negation flips the sign bit,
 preserving zero signs and NaN payloads. Signed negation wraps, so negating
 −2147483648 gives −2147483648. Arithmetic under a partial lane mask remains WIP*,
-including inside a masked traversal. This support is included in Rake 0.7.0.
+including inside a masked stack run. This support is included in Rake 0.7.0.
 
 ## Lane order
 
@@ -112,7 +112,7 @@ subdivisions of an AVX register. An integer scan includes lanes 0 through `i`
 in its result at lane `i`. For a rack holding `[2, 3, 1, 4]`, `scan_sum`
 gives `[2, 5, 6, 10]`.
 Each call starts a new prefix at lane 0. Carrying a running prefix from one
-traversal chunk to the next is separate work in the traversal's body.
+rack to the next is separate work, in a general run's loop.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -146,7 +146,7 @@ signed-zero rule differs.
 ## Restrictions and profiles
 
 Each lane of a reduction or scan depends on the others, so neither can run
-under a mask. They are rejected in a `through` block and in a traversal,
+under a mask. They are rejected in a `through` block and in a stack run,
 where the tail's mask would apply. They are also outside fused bindings: a
 reduction leaves the rack, and a scan orders its lanes.
 

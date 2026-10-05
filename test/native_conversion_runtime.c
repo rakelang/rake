@@ -27,24 +27,22 @@ extern integer_rack masked_float_to_signed(float_rack, float_rack);
 extern unsigned_rack masked_float_to_unsigned(float_rack, float_rack);
 
 typedef struct {
-    const float    *values;
-    const int32_t  *words;
-    const int16_t  *compact;
-    const uint32_t *unsigned_words;
+    int64_t count;
+    float    *values;
+    int32_t  *words;
+    int16_t  *small;
+    uint32_t *unsigned_words;
 } conversion_input;
-typedef struct { const uint16_t *words; } compact_unsigned_input;
-typedef struct { int32_t *words; float *values; uint32_t *unsigned_words; } conversion_output;
-extern void convert_to_signed(const conversion_input *, int32_t, int32_t *);
-extern void convert_to_unsigned(const conversion_input *, int32_t, uint32_t *);
-extern void float_unsigned_destination(const conversion_input *, int64_t, const conversion_output *);
-extern void unsigned_conversion_update(const conversion_output *, int32_t);
-extern void convert_to_float(const conversion_input *, int64_t, float *);
-extern void convert_compact(const conversion_input *, int32_t, float *);
-extern void convert_unsigned(const conversion_input *, int32_t, float *);
-extern void convert_unsigned_compact(const compact_unsigned_input *, int32_t, float *);
-extern void unsigned_conversion_destination(const conversion_input *, int64_t, const conversion_output *);
-extern void conversion_destination(const conversion_input *, int64_t, const conversion_output *);
-extern void conversion_update(const conversion_output *, int32_t);
+typedef struct { int64_t count; uint16_t *words; } compact_unsigned_input;
+typedef struct { int64_t count; int32_t *words; float *values; uint32_t *unsigned_words; } conversion_output;
+extern void convert_to_signed(const conversion_input *, conversion_output *);
+extern void convert_to_unsigned(const conversion_input *, conversion_output *);
+extern void unsigned_conversion_update(conversion_output *);
+extern void convert_to_float(const conversion_input *, conversion_output *);
+extern void convert_compact(const conversion_input *, conversion_output *);
+extern void conversion_update(conversion_output *);
+extern void convert_unsigned(const conversion_input *, conversion_output *);
+extern void convert_unsigned_compact(const compact_unsigned_input *, conversion_output *);
 
 static const uint32_t edge_values[] = {
     0, 1, 0xffffffffu, 0x7fffffffu, 0x80000000u, 0x80000001u,
@@ -185,57 +183,61 @@ static void check_streams(void)
     for (int32_t count = 0; count <= 65; ++count) {
         uint32_t *raw = (uint32_t *)((char *)memory[0] + page) - count;
         uint32_t *words = (uint32_t *)((char *)memory[1] + page) - count;
-        int16_t *compact = (int16_t *)((char *)memory[2] + page) - count;
+        int16_t *small = (int16_t *)((char *)memory[2] + page) - count;
         uint32_t *output = (uint32_t *)((char *)memory[3] + page) - count;
         uint32_t *destination = (uint32_t *)((char *)memory[4] + page) - count;
         for (int32_t i = 0; i < count; ++i) {
             raw[i] = i % 2 ? rounding_inputs[(i + count) % rounding_count] : edge_values[(i + count) % edge_count];
             words[i] = edge_values[(i + count) % edge_count];
-            compact[i] = (int16_t)(i * 1003 - 32000);
+            small[i] = (int16_t)(i * 1003 - 32000);
         }
-        conversion_input input = { (const float *)raw, (const int32_t *)words, compact, words };
-        conversion_output result = { (int32_t *)destination, (float *)raw, destination };
-        convert_to_unsigned(&input, count, output);
-        float_unsigned_destination(&input, count, &result);
-        for (int32_t i = 0; i < count; ++i) {
-            check_word(output[i], expected_float_to_unsigned(raw[i]));
-            check_word(destination[i], output[i]);
-        }
-        unsigned_conversion_update(&result, count);
+        conversion_input input = { count, (float *)raw, (int32_t *)words, small, words };
+        conversion_output out = { count, (int32_t *)output, (float *)output, output };
+        conversion_output result = { count, (int32_t *)destination, (float *)raw, destination };
+        convert_to_unsigned(&input, &out);
+        for (int32_t i = 0; i < count; ++i) check_word(output[i], expected_float_to_unsigned(raw[i]));
+        convert_to_unsigned(&input, &result);
+        for (int32_t i = 0; i < count; ++i) check_word(destination[i], output[i]);
+        unsigned_conversion_update(&result);
         for (int32_t i = 0; i < count; ++i)
             check_word(destination[i], expected_float_to_unsigned(expected_unsigned_to_float(output[i])));
-        convert_to_signed(&input, count, (int32_t *)output);
-        conversion_destination(&input, count, &result);
-        for (int32_t i = 0; i < count; ++i) {
-            check_word(output[i], expected_float_to_signed(raw[i]));
-            check_word(destination[i], output[i]);
-        }
-        convert_to_float(&input, count, (float *)output);
+        convert_to_signed(&input, &out);
+        for (int32_t i = 0; i < count; ++i) check_word(output[i], expected_float_to_signed(raw[i]));
+        convert_to_signed(&input, &result);
+        for (int32_t i = 0; i < count; ++i) check_word(destination[i], output[i]);
+        convert_to_float(&input, &out);
         for (int32_t i = 0; i < count; ++i) check_word(output[i], expected_signed_to_float(words[i]));
-        convert_compact(&input, count, (float *)output);
-        for (int32_t i = 0; i < count; ++i) check_word(output[i], expected_signed_to_float((uint32_t)(int32_t)compact[i]));
-        conversion_update(&result, count);
-        for (int32_t i = 0; i < count; ++i) check_word(raw[i], expected_signed_to_float(destination[i]));
-        convert_unsigned(&input, count, (float *)output);
+        convert_compact(&input, &out);
+        for (int32_t i = 0; i < count; ++i) check_word(output[i], expected_signed_to_float((uint32_t)(int32_t)small[i]));
+        /* The result's values column is the input's values column, element for element. */
+        conversion_update(&result);
+        for (int32_t i = 0; i < count; ++i) {
+            const uint32_t original = i % 2 ? rounding_inputs[(i + count) % rounding_count] : edge_values[(i + count) % edge_count];
+            check_word(raw[i], expected_signed_to_float(expected_float_to_signed(original)));
+            raw[i] = original;
+        }
+        convert_unsigned(&input, &out);
         for (int32_t i = 0; i < count; ++i) check_word(output[i], expected_unsigned_to_float(words[i]));
-        unsigned_conversion_destination(&input, count, &result);
-        for (int32_t i = 0; i < count; ++i) check_word(raw[i], output[i]);
-        compact_unsigned_input compact_input = { (const uint16_t *)compact };
-        convert_unsigned_compact(&compact_input, count, (float *)output);
+        compact_unsigned_input compact_input = { count, (uint16_t *)small };
+        convert_unsigned_compact(&compact_input, &out);
         for (int32_t i = 0; i < count; ++i)
-            check_word(output[i], expected_unsigned_to_float((uint16_t)compact[i]));
-        convert_to_unsigned(&input, count, raw);
+            check_word(output[i], expected_unsigned_to_float((uint16_t)small[i]));
+        /* Exact in-place results over input columns. */
+        conversion_output over_raw = { count, NULL, NULL, raw };
+        convert_to_unsigned(&input, &over_raw);
         for (int32_t i = 0; i < count; ++i)
-            check_word(raw[i], expected_float_to_unsigned(expected_unsigned_to_float(words[i])));
-        convert_unsigned(&input, count, (float *)words);
+            check_word(raw[i], expected_float_to_unsigned(i % 2 ? rounding_inputs[(i + count) % rounding_count] : edge_values[(i + count) % edge_count]));
+        conversion_output over_words = { count, NULL, (float *)words, NULL };
+        convert_unsigned(&input, &over_words);
         for (int32_t i = 0; i < count; ++i)
             check_word(words[i], expected_unsigned_to_float(edge_values[(i + count) % edge_count]));
     }
-    conversion_input inaccessible = { memory[0], memory[1], memory[2], memory[1] };
-    convert_to_signed(&inaccessible, -1, NULL);
-    convert_to_unsigned(&inaccessible, -1, NULL);
-    convert_to_float(&inaccessible, -1, NULL);
-    convert_unsigned(&inaccessible, -1, NULL);
+    conversion_input inaccessible = { -1, memory[0], memory[1], memory[2], memory[1] };
+    conversion_output none = { -1, NULL, NULL, NULL };
+    convert_to_signed(&inaccessible, &none);
+    convert_to_unsigned(&inaccessible, &none);
+    convert_to_float(&inaccessible, &none);
+    convert_unsigned(&inaccessible, &none);
     for (unsigned i = 0; i < 5; ++i) if (munmap(memory[i], 2 * page)) abort();
 }
 

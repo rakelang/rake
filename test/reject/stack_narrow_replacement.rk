@@ -1,0 +1,8 @@
+pack Particles {
+  f32: position;
+  u8: age;
+}
+
+run aged(particles: stack Particles) -> stack Particles:
+  let moved = particles.position + <1.0>
+  particles with { age: widen(particles.age) + <1> }

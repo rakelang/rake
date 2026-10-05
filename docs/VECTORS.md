@@ -269,8 +269,8 @@ so stores don't replace inputs before they have been read.
 | In-place / out-of-place update | Store into the input's storage, or into separate output storage. In-place vector work needs explicit rules for overlapping inputs and outputs. |
 
 Traversal and update describe a whole pass over data, rather than one SIMD
-instruction. In Rake, a [run](spec/02_packs_and_run.md#traversals) performs the
-traversal and applies rack expressions to its columns. Uniform loop control
+instruction. In Rake, a [stack run](spec/02_packs_and_run.md#stack-runs)
+describes the update on whole columns, and the compiler performs the traversal. Uniform loop control
 and address calculation advance through memory while the lane arithmetic
 stays vectorised. Traversal alone doesn't request non-temporal stores or
 guarantee a particular cache policy.

@@ -3,10 +3,8 @@ test/frontend/byte_domain.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/predicated_select.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/masked_partial_ops.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/mixed_storage_widen.rk	frontend	x86-avx2	8	frontend	pass	-
-test/frontend/over_loop.rk	frontend	x86-avx2	8	frontend	pass	-
+test/frontend/stack_runs.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/rake_with_tines.rk	frontend	x86-avx2	8	frontend	pass	-
-test/frontend/supported_run_int.rk	frontend	x86-avx2	8	frontend	pass	-
-test/frontend/supported_run_int64.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/sweep_overlap_priority.rk	frontend	x86-avx2	8	frontend	pass	-
 test/frontend/nested_comments.rk	frontend	x86-avx2	8	frontend	pass	-
 test/native/capability_fused.rk	native	x86-avx2	8	native-object	pass	-
@@ -57,7 +55,9 @@ test/program/trap/gather_bounds.rk	trap	wasm-simd128	4	program	trap	-
 test/program/trap/index_bounds.rk	trap	wasm-simd128	4	program	trap	-
 test/program/trap/rack_load_bounds.rk	trap	wasm-simd128	4	program	trap	-
 test/program/trap/slice_bounds.rk	trap	wasm-simd128	4	program	trap	-
-test/program/trap/traversal_count.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/column_count.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/stack_counts.rk	trap	wasm-simd128	4	program	trap	-
+test/program/trap/overlap.rk	trap	wasm-simd128	4	program	trap	-
 test/program/network.rk	program	wasm-simd128	4	program	differential	-
 test/program/speck.rk	program	wasm-simd128	4	program	differential	-
 test/abi/runs.rk	abi	wasm-simd128	4	program	boundary	-
@@ -82,8 +82,6 @@ test/reject/run_calls_slow.rk	reject	wasm-simd128	4	frontend	reject	vector code 
 test/reject/run_branch_read.rk	reject	wasm-simd128	4	frontend	reject	an if's branches compute on values: read memory before the if
 test/reject/run_scatter.rk	reject	wasm-simd128	4	frontend	reject	wasm-simd128 has no scatter: a store takes a uniform index
 test/reject/run_while.rk	reject	wasm-simd128	4	frontend	reject	vector code loops are counted
-test/reject/run_nested_yield.rk	reject	wasm-simd128	4	frontend	reject	a nested traversal can't yield or store
-test/program/trap/output_count.rk	trap	wasm-simd128	4	program	trap	-
 test/program/slow_blocks.rk	program	wasm-simd128	4	program	differential	-
 test/program/callbacks.rk	program	wasm-simd128	4	program	differential	-
 test/program/trap/null_callback.rk	trap	wasm-simd128	4	program	trap	-
@@ -100,3 +98,8 @@ test/reject/global_tine_unmarked_uniform.rk	reject	x86-avx2	8	frontend	reject	un
 test/reject/sweep_numeric_coverage.rk	reject	x86-avx2	8	frontend	reject	Sweep does not provably cover every lane
 test/abi/native_conversions.rk	abi	wasm-simd128	4	program	boundary	-
 test/program/signed_conversions.rk	program	wasm-simd128	4	program	differential	-
+test/reject/stack_used_after_move.rk	reject	wasm-simd128	4	frontend	reject	was moved into a run
+test/reject/stack_moved_in_loop.rk	reject	wasm-simd128	4	frontend	reject	was moved into a run
+test/reject/stack_mut.rk	reject	wasm-simd128	4	frontend	reject	drop mut
+test/reject/stack_run_without_result.rk	reject	wasm-simd128	4	frontend	reject	a stack run ends with its result
+test/reject/stack_narrow_replacement.rk	reject	wasm-simd128	4	frontend	reject	replacing u8 field age

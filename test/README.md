@@ -50,11 +50,10 @@ differential, the whole-program differential and the C boundary of runs:
 nix develop --command bash -c 'dune build && bash test/full_tests.sh'
 ```
 
-The whole-program stream fixture compares nested integer and Boolean uniform
-choices with scalar expected values over full and partial WebAssembly racks.
-It checks every remainder and that each call leaves the output beyond its
-count unchanged. Final-object verification also checks that the choices stay
-on racks before partial stores.
+The whole-program stack-run fixture compares nested integer and Boolean
+uniform choices with scalar expected values over full and partial WebAssembly
+racks, for stacks of every length from zero to seven. Final-object verification
+also checks that the choices stay on racks before partial stores.
 
 `tools/release_gate.sh` runs every check, including the OCaml unit tests
 (`dune runtest` and both object integration aliases), the AArch64 differential under QEMU, the capability
@@ -86,43 +85,23 @@ signed-zero transfer and Boolean/bitset returns through the scalar C boundary, a
 both the selected-profile interpreter and hand-derived lane counts. Native
 general memory runs remain work in progress.
 
-`test/native_stream_test.sh` checks the SSE2, AVX2, AVX-512 and NEON stream subset
-against independent scalar C. One to four input columns end at guard pages,
-as does the output, for counts from zero through 65. The checks cover every
-tail remainder, exact in-place output, inactive-lane arithmetic and an unread
-byte column in the descriptor. Signed and unsigned 32-bit columns check
-wrapping multiplication, absolute values, unsigned clamps, literal and runtime shifts
-and mixed float/integer masks against scalar bit arithmetic. Their streams,
-in-place updates and separate destinations use the same guarded counts.
-C and Rake callers pass scale, bias
-and threshold uniforms, including a quiet-NaN threshold. Direct uniform
-comparisons choose signed roots, checking both arms
-and quiet-NaN conditions over guarded tails without exceptions from untaken
-work. C and Rake callers exercise the condition, including in-place output.
-An eight-argument case checks argument-register preservation over multiple racks and in-place
-output. Mixed `f32`/`i32`/`u32`/`bool` arguments check the independent C register
-counters and the output pointer's position. Signed and unsigned boundaries,
-deliberately set unused Boolean bits and nested protected roots are checked
-against scalar C over every guarded count. A six-uniform mixed-type update
-checks persistent slots, and a separate destination checks descriptor layout.
-Mutable descriptors check a column update through C and Rake callers,
-an unread destination column, unchanged independent columns and null unused
-pointers. C and Rake callers use a separate output descriptor with a different
-record layout. C checks null unused pointers and exact aliasing with an input
-column. The count oracle checks both `i32` and `i64`, including unspecified
-upper bits in an `i32` argument and empty and negative counts. Each profile
-also checks a million-element safe-root pass plus a
-three-element tail. AVX-512 uses capable hardware or
-Intel SDE, and NEON uses AArch64 QEMU. The shared independent C numerical
-oracle checks all six comparisons, including quiet NaNs and exception flags,
-on the x86 and NEON register kernels.
-
-The same guarded stream checks cover `i8`, `u8`, `i16` and `u16` stored
-columns widened into 32-bit racks. Scalar C checks signed extension,
-unsigned products, wrapping sums, retained inputs, column updates and
-separate destination layouts for counts from zero through 65. Signedness
-bitcasts are compared as memory bits, including values with bit 31 set.
-The interpreter runs the compact fixture at every CPU profile's rack width.
+`test/native_stream_test.sh` checks stack runs on SSE2, AVX2, AVX-512 and NEON
+against independent scalar C. Every column ends at a guard page, for counts
+from zero through 65, so a transfer past the count faults. The checks cover
+every tail remainder, a read-only input stack beside the result's, an exact
+in-place result over an input column, inactive-lane arithmetic without
+floating-point exceptions, and empty stacks with null columns. Two replaced
+columns share one kernel. Compact `u8`, `i16`, `u16` and `i8` columns are
+widened into 32-bit lanes and checked against scalar sums. Integer, float and
+Boolean uniforms arrive in every register class, including a `bool` whose
+upper bits a trampoline sets, and eight `f32` uniforms survive across racks.
+An unrolled `repeat` multiplies by 59,049 over ten iterations. A masked
+update changes only the selected particles, and two compactions keep 8-, 16-
+and 32-bit columns in order, one replacing a column of the kept records, with
+the descriptor's count checked after each. Each profile also checks a
+million-element safe-root pass plus a three-element tail, and the fixture's
+`main` agrees between the selected-profile interpreter and WebAssembly.
+AVX-512 uses capable hardware or Intel SDE, and NEON uses AArch64 QEMU.
 
 `test/native_conversion_test.sh` checks signed `i32s`/`f32s` and
 unsigned `u32s`/`f32s` conversions
@@ -130,9 +109,9 @@ against an integer-only binary32 oracle, independent of host conversion
 instructions. Boundary values and raw bit patterns cover nearest-even ties,
 saturation, infinities and NaNs on all four physical profiles. Fused
 compositions retain their input racks, masked calls check exception flags,
-and stream inputs and outputs end at guard pages for every count from zero
-through 65. Those streams include compact signed and unsigned input, a separate output
-descriptor and exact in-place updates. Independent assembled objects reject
+and stack-run inputs and results end at guard pages for every count from zero
+through 65. Those runs include compact signed and unsigned input, a separate
+result stack and exact in-place updates. Independent assembled objects reject
 scalar and narrowed conversion instructions. The whole-program fixture
 agrees with explicit expected values in each selected-profile interpreter
 and compiled WebAssembly. The unsigned integer-bit oracle also checks the
@@ -141,7 +120,7 @@ WebAssembly vector ABI in both directions, including masked use, in both address
 `wasm_simd128_verify_test.ml` independently compiles packed comparison and
 extending-multiply C objects. The verifier rejects them without narrower
 operand bounds, then accepts them when source-derived bounds justify the
-instructions. The stream fixture also compiles and agrees with scalar
+instructions. The stack-run fixture also compiles and agrees with scalar
 expected values in both WebAssembly addressing modes.
 
 The shared fold oracle compares the four reductions and inclusive scans with
@@ -168,7 +147,7 @@ both still-live inputs and a shuffle whose two arguments share a register.
 Malformed sources check the selected profile's index and width diagnostics.
 Independent assembled objects require authorization for permutations and
 literal index loads, while a rack store remains rejected even with that
-authorization. Native stream sources check refusal of lane transfers whose
+authorization. Native stack-run sources check refusal of lane transfers whose
 partial-rack participation is not yet defined.
 
 The same C oracle checks every possible float comparison mask at each

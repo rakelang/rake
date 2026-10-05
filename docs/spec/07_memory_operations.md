@@ -26,7 +26,7 @@ semantics. Slow code uses the same `[unchecked i]` spelling for its elements.
 
 Inside a mask, only the active lanes take part. The mask of a memory access is
 the conjunction of the masks that apply to it, from a `through` block and from
-a traversal's tail. An inactive lane is never checked, and it computes no
+a stack run's tail. An inactive lane is never checked, and it computes no
 address and makes no access. A full load followed by a blend doesn't meet this
 rule, because it touches the inactive lanes' memory.
 
@@ -70,10 +70,10 @@ is four `i32x4.extract_lane`, each forming an address, and four
 `v128.load32_lane` into a zeroed rack. The sequence is the same for every
 gather, with no loop and no branch.
 
-In a traversal's tail only the active lanes are checked and loaded: a switch
+In a stack run's tail only the active lanes are checked and loaded: a switch
 on the uniform remainder issues one, two or three lane loads, and the
-inactive lanes are zero. A gather in a traversal needs a 32-bit domain, so
-that its lanes are the traversal's. A gather can't appear in a conditional's
+inactive lanes are zero. A gather in a stack run needs a 32-bit domain, so
+that its lanes are the run's. A gather can't appear in a conditional's
 branches, as [control flow](05_control_flow.md#conditional-expressions)
 explains, and it isn't allowed in a fused binding, because it reads memory.
 

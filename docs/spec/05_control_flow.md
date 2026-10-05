@@ -34,7 +34,7 @@ or an extracted `f32` bound as a uniform.
 The physical profiles broadcast the operands, compare them as vectors and
 select the same branch in every participating lane. Both branches have
 instructions, with benign operands substituted for untaken work that could
-raise floating-point exceptions. A surrounding `through` or traversal tail
+raise floating-point exceptions. A surrounding `through` or a stack run's tail
 also limits participation.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
@@ -83,9 +83,8 @@ scratch pick_first(near: f32s, far: f32s) -> f32s:
 ```
 
 These native Boolean conditions and C `bool` parameters are included in
-Rake 0.7.0. The native `f32`, `i32` and `u32` stream subset also takes
-`i32`, `u32` and `bool` uniforms within its
-[C register boundary](02_packs_and_run.md#native-cpu-streams).
+Rake 0.7.0. Native stack runs also take `i32`, `u32` and `bool` uniforms within
+their [C register boundary](02_packs_and_run.md#the-c-boundary).
 
 In slow code, only the chosen branch is evaluated.
 
@@ -126,12 +125,24 @@ WebAssembly each rack location stays one `v128` value in a local. In
 `test/program/vector_tier.rk`, a `repeat` of 5000 trips compiles to a loop of
 one `f32x4.mul`, one `f32x4.add` and the counter.
 
-The native stream subset accepts these unrolled repeats too, including
-nested copies and updates to local rack locations or arrays of racks.
-Assignments preserve earlier immutable snapshots, and each traversal chunk
-starts with fresh locations. Repeats beyond the unrolling budget still fail
-native compilation. [Repeated rack updates](02_packs_and_run.md#repeated-rack-updates)
-shows a stream example.
+Native stack runs accept these unrolled repeats too, including nested copies
+and updates to local rack locations or arrays of racks. Assignments preserve
+earlier immutable snapshots, and each rack of records starts with fresh
+locations. Repeats beyond the unrolling budget still fail native compilation.
+
+<!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
+```rake
+pack Samples {
+  f32: value;
+}
+
+run cubes(samples: stack Samples) -> stack Samples:
+  let value = samples.value
+  power := value
+  repeat <i: i32> from <0> up to <2>:
+    power <- power * value
+  samples with { value: power }
+```
 
 ## Loops and branches in runs
 
@@ -168,14 +179,12 @@ slow main() -> i32:
 A run has no `while`, `break`, `continue` or `return`, so every vector loop
 runs a counted number of iterations. Mutable rack locations, such as
 `total := <0.0>`, and arrays of them, such as `acc: [8]i32s := <0>`, carry
-values across iterations. In a traversal's tail an assignment updates only
+values across iterations. In a stack run's tail an assignment updates only
 the active lanes.
 
-A traversal, `for chunk in input using f32s up to <count>:`, is a different
-loop: it visits a stack's records a rack at a time, as [packs and
-runs](02_packs_and_run.md) define. A counted loop may contain a traversal, and
-a traversal may contain counted loops, `repeat`, statement `if` and a
-traversal of the same lane count.
+A stack run has no loop of its own: the compiler visits its stacks' records a
+rack at a time, as [packs and runs](02_packs_and_run.md) define. Its body may
+contain `repeat`, counted loops and statement `if`.
 
 ## Slow control flow
 

@@ -1,0 +1,17 @@
+~~ Every stack in a run call has the result's count: the call traps.
+pack In {
+  f32: x;
+}
+
+pack Out {
+  f32: y;
+}
+
+run copy(input: stack In, out: stack Out) -> stack Out:
+  out with { y: input.x }
+
+slow main() -> i32:
+  x: [8]f32 := [0.0; 8]
+  y: [5]f32 := [0.0; 5]
+  let copied = copy(stack In { x: x }, stack Out { y: y })
+  return i32(count(copied))

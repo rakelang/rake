@@ -1,0 +1,6 @@
+pack Values {
+  f32: v;
+}
+
+run doubled(values: stack Values) -> stack Values:
+  let twice = values.v * <2.0>

@@ -5,8 +5,16 @@ pack Samples {
   u8: quality;
 }
 
+pack Scaled {
+  f32: result;
+}
+
 pack Pair {
   f32: a, b;
+}
+
+pack Quotients {
+  f32: quotient;
 }
 
 pack Both {
@@ -17,30 +25,34 @@ pack Bytes {
   u8: v;
 }
 
-run scale_values(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
-  for chunk in input using f32s up to <count>:
-    let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
-    yield chunk.value * <scale> + quality
+pack Particle {
+  f32: x, v;
+  u8: alive;
+}
 
-run divide(input: stack Pair, <count: i64>) -> f32:
-  for row in input using f32s up to <count>:
-    yield row.a / row.b
+run scale_values(input: stack Samples, output: stack Scaled, <scale: f32>) -> stack Scaled:
+  let quality = to_f32(bitcast(i32s, widen(input.quality)))
+  output with { result: input.value * <scale> + quality }
 
-run both(input: stack Pair, out: mut stack Both, <count: i64>):
-  for row in input using f32s up to <count>:
-    out.sum <- row.a + row.b
-    out.difference <- row.a - row.b
+run divide(input: stack Pair, output: stack Quotients) -> stack Quotients:
+  output with { quotient: input.a / input.b }
 
-run total(input: stack Pair, totals: mut []f32, <count: i64>):
-  sums := <0.0>
-  for row in input using f32s up to <count>:
-    sums <- sums + row.a
-  totals[<0>] <- sums
+run both(input: stack Pair, out: stack Both) -> stack Both:
+  out with { sum: input.a + input.b, difference: input.a - input.b }
 
 run offset(x: []f32, out: mut []f32, shift: f32s, <n: i32>):
   for <i: i32> from <0> up to <n> by <4>:
     out[<i>] <- x[<i>] + shift
 
-run floor_bytes(input: stack Bytes, <count: i64>) -> u8:
-  for chunk in input using u8s up to <count>:
-    yield max(chunk.v, 10)
+run floor_bytes(input: stack Bytes) -> stack Bytes:
+  input with { v: max(input.v, 10) }
+
+run advance(particles: stack Particle, <dt: f32>) -> stack Particle:
+  let alive = widen(particles.alive)
+  tine #moving means alive != <0>
+  particles with { x: particles.x + particles.v * <dt> } where #moving
+
+run survivors(particles: stack Particle) -> stack Particle:
+  let alive = widen(particles.alive)
+  tine #kept means alive != <0>
+  compact particles where #kept

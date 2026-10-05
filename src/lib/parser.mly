@@ -38,12 +38,6 @@ let scratch_body statements =
       List.rev preceding @ [ { v = SLet { bind_name = canonical_result_name; bind_type = None; bind_expr = value }; loc } ]
   | _ -> statements
 
-(* A traversal ends in its yield, represented as the body's final expression. *)
-let traversal_body statements =
-  match List.rev statements with
-  | { v = SYield value; loc } :: preceding -> List.rev preceding @ [ { v = SExpr value; loc } ]
-  | _ -> statements
-
 (* A minus before a literal is part of it, as a negative literal. *)
 let negate (e : expr) startpos endpos =
   match e.v with
@@ -88,10 +82,13 @@ let slow_body statements =
 
 (* Tokens: Tines and control *)
 %token <string> TINE_REF
-%token TINE MEANS GAPS THROUGH SWEEP ELSE INTO RETURN YIELD IN
+%token TINE MEANS GAPS THROUGH SWEEP ELSE INTO RETURN
+
+(* Tokens: Stack run results *)
+%token WITH WHERE COMPACT
 
 (* Tokens: Iteration *)
-%token FOR USING UP TO
+%token FOR UP TO
 
 (* Tokens: Bindings *)
 %token LET
@@ -244,8 +241,8 @@ rake_def:
 rake_setup_stmt:
   | LET b = binding NEWLINE { mk_node (SLet b) $startpos $endpos }
 
-(* run name(params) -> stored-type: a traversal yielding the output stream;
-   run name(params): a general body writing its mutable views and stacks. *)
+(* run name(params) -> stack Pack: a stack run, ending in its result;
+   run name(params): a general body writing its mutable views. *)
 run_def:
   | RUN name = IDENT LPAREN ps = separated_list(COMMA, scratch_param) RPAREN
     ARROW result_type = typ body = block {
@@ -522,24 +519,29 @@ simple_stmt:
   | e = expr { mk_node (SExpr e) $startpos $endpos }
   | RETURN e = expr { mk_node (SReturn (Some e)) $startpos $endpos }
   | RETURN { mk_node (SReturn None) $startpos $endpos }
-  | YIELD e = expr { mk_node (SYield e) $startpos $endpos }
+  | TINE name = TINE_REF MEANS p = predicate {
+      mk_node (STine { tine_name = name; tine_pred = p }) $startpos $endpos
+    }
+  | stack = IDENT WITH LBRACE inits = separated_list(COMMA, field_init) RBRACE
+    selection = option(where_clause) {
+      mk_node (SResult { result_stack = stack; result_fields = inits; result_where = selection;
+        result_compact = false }) $startpos $endpos
+    }
+  | COMPACT stack = IDENT selection = where_clause {
+      mk_node (SResult { result_stack = stack; result_fields = []; result_where = Some selection;
+        result_compact = true }) $startpos $endpos
+    }
+  | COMPACT stack = IDENT WITH LBRACE inits = separated_list(COMMA, field_init) RBRACE
+    selection = where_clause {
+      mk_node (SResult { result_stack = stack; result_fields = inits; result_where = Some selection;
+        result_compact = true }) $startpos $endpos
+    }
   | BREAK { mk_node SBreak $startpos $endpos }
   | CONTINUE { mk_node SContinue $startpos $endpos }
 
 compound_stmt:
   | IF c = expr body = block rest = else_part { mk_node (SIf (c, body, rest)) $startpos $endpos }
   | WHILE c = expr body = block { mk_node (SWhile (c, body)) $startpos $endpos }
-  (* for chunk in stack using f32s up to <count>: ... yield value *)
-  | FOR chunk = IDENT IN stack = IDENT USING domain = rack_prim_type
-    UP TO count = simple_expr body = block {
-      mk_node (SOver {
-        over_stack = stack;
-        over_domain = domain;
-        over_count = count;
-        over_chunk = chunk;
-        over_body = traversal_body body;
-      }) $startpos $endpos
-    }
   | FOR v = loop_var FROM a = expr UP TO z = expr step = option(preceded(BY, expr)) body = block {
       let name, uniform, t = v in
       mk_node (SLoop { loop_var = name; loop_uniform = uniform; loop_type = t; loop_from = a;
@@ -549,6 +551,12 @@ compound_stmt:
       let name, uniform, t = v in
       mk_node (SLoop { loop_var = name; loop_uniform = uniform; loop_type = t; loop_from = a;
         loop_to = z; loop_by = None; loop_body = body; loop_repeat = true }) $startpos $endpos
+    }
+
+(* where #alive, where (#a and #b) gaps: the records a stack run's result selects *)
+where_clause:
+  | WHERE tr = tine_ref {
+      match tr with TRSingle name -> mk_node (PTineRef name) $startpos $endpos | TRComposed p -> p
     }
 
 else_part:

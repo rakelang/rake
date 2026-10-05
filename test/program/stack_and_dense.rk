@@ -3,15 +3,17 @@ pack Samples {
   u8: quality;
 }
 
-run scale_values(input: stack Samples, <count: i64>, <scale: f32>) -> f32:
-  for chunk in input using f32s up to <count>:
-    let quality = to_f32(bitcast(i32s, widen(chunk.quality)))
-    yield chunk.value * <scale> + quality
+pack Scaled {
+  f32: result;
+}
 
-run choose_scale(input: stack Samples, <count: i32>, <mode: i32>, <scale: f32>, <enabled: bool>) -> f32:
-  for chunk in input using f32s up to <count>:
-    let value = chunk.value
-    yield if <enabled> then (if <mode> < <0> then value * <scale> else value) else <0.0>
+run scale_values(input: stack Samples, output: stack Scaled, <scale: f32>) -> stack Scaled:
+  let quality = to_f32(bitcast(i32s, widen(input.quality)))
+  output with { result: input.value * <scale> + quality }
+
+run choose_scale(input: stack Samples, output: stack Scaled, <mode: i32>, <scale: f32>, <enabled: bool>) -> stack Scaled:
+  let value = input.value
+  output with { result: if <enabled> then (if <mode> < <0> then value * <scale> else value) else <0.0> }
 
 ~~ out[g] = sum over p of dot(pair p, weights row p, group g), for groups of 4 outputs
 run dense(bits: []i32, weights: []i16, out: mut []i32, <pairs: i32>, <groups: i32>):
@@ -39,7 +41,9 @@ slow main() -> i32:
   values: [7]f32 := [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
   qualities: [7]u8 := [1, 1, 2, 2, 3, 3, 4]
   out: [7]f32 := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-  scale_values(stack Samples { value: values, quality: qualities }, <7>, <0.5>, out)
+  let scaled = scale_values(stack Samples { value: values, quality: qualities }, stack Scaled { result: out }, <0.5>)
+  if count(scaled) != 7:
+    return 1
   chosen: [7]f32 := [-1.0; 7]
   ~~ Scalar expected results cover every partial rack and both uniform choices.
   for n from 0 up to 8:
@@ -48,7 +52,10 @@ slow main() -> i32:
       let enabled = choice % 2 = 0
       for i from 0 up to 7:
         chosen[i] <- -1.0
-      choose_scale(stack Samples { value: values, quality: qualities }, <n>, <mode>, <2.0>, <enabled>, chosen)
+      let input = stack Samples { value: slice(values, 0, n), quality: slice(qualities, 0, n) }
+      let result = choose_scale(input, stack Scaled { result: slice(chosen, 0, n) }, <mode>, <2.0>, <enabled>)
+      if count(result) != i64(n):
+        return 1
       for i from 0 up to 7:
         let expected = if i >= n then -1.0 else (if enabled then (if mode < 0 then values[i] * 2.0 else values[i]) else 0.0)
         if chosen[i] != expected:

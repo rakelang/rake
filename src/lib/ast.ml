@@ -284,32 +284,25 @@ and stmt_kind =
   | SAssign of ident * expr            (** x <- e (mutates existing location) *)
   | SFused of fused_binding            (** | x <| e (verified inlineable SSA) *)
   | SExpr of expr                      (** expression statement *)
-  | SOver of over_loop                 (** for chunk in stack using f32s up to <count> *)
   | SUniform of binding                (** let <name: T> = e: a uniform scalar in vector code *)
   | SStore of expr * expr              (** place <- e, for a field, element or rack location *)
   | SReturn of expr option             (** return, return e *)
-  | SYield of expr                     (** yield e, the last statement of a traversal *)
+  | STine of tine                      (** tine #name means p, in a stack run *)
+  | SResult of stack_result            (** a stack run's result, its last statement *)
   | SBreak
   | SContinue
   | SIf of expr * stmt list * stmt list  (** if c: ... else: ... *)
   | SWhile of expr * stmt list
   | SLoop of counted_loop              (** for i from a up to b, repeat <i: i32> from <a> up to <b> *)
 
-(** Stack traversal: iterate over storage in target-native rack chunks.
-    for chunk in stack using f32s up to <count>:
-      yield expression
-
-    Expands to:
-      for i = 0 to ceil(count / lanes):
-        chunk = load_pack(stack, i * lanes)
-        body (with tail masking on last iteration)
-*)
-and over_loop = {
-  over_stack: ident;                    (** stack variable to iterate *)
-  over_domain: prim;                   (** physical rack type fixing logical lanes *)
-  over_count: expr;                    (** element count expression *)
-  over_chunk: ident;                   (** binding for each pack chunk *)
-  over_body: stmt list;                (** body executed per chunk *)
+(** A stack run's result: [result_stack] with [result_fields] replaced, in
+    the records [result_where] selects, keeping only those records when
+    [result_compact]. *)
+and stack_result = {
+  result_stack: ident;
+  result_fields: field_init list;
+  result_where: predicate option;
+  result_compact: bool;
 }
 
 (** A counted loop. [loop_repeat] marks the fixed-count vector form, whose

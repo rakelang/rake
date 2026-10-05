@@ -75,7 +75,10 @@ let use_counts (func : N.func) =
       IntMap.empty func.body.instructions
   in
   List.fold_left
-    (fun counts -> function N.Return value -> Option.fold ~none:counts ~some:(count counts) value | N.Yield -> counts)
+    (fun counts -> function
+      | N.Return value -> Option.fold ~none:counts ~some:(count counts) value
+      | N.Return_values values -> List.fold_left count counts values
+      | N.Yield -> counts)
     counts func.body.terminators
 
 let dead_multiply_values definitions original rewritten =

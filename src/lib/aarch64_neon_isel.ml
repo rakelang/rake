@@ -235,7 +235,7 @@ let select_function (func : N.func) =
           else []
       | N.Const (N.Int32 bits | N.Uint32 bits) ->
           let id, _ = result func.name index instruction in
-          let returned = List.exists (function N.Return (Some value) -> value = id | _ -> false) func.body.terminators in
+          let returned = List.exists (function N.Return (Some value) -> value = id | N.Return_values values -> List.mem id values | _ -> false) func.body.terminators in
           (match N.IntMap.find_opt id constant_uses with
           | Some operations when not returned && operations <> []
               && List.for_all (function
@@ -540,9 +540,10 @@ let select_function (func : N.func) =
             "operation has no mapping in this native 32-bit rack profile"
     in
     let instructions = List.concat (List.mapi select func.body.instructions) in
-    let result =
+    let result, outputs =
       match func.body.terminators with
-      | [ N.Return result ] -> result
+      | [ N.Return result ] -> (result, [])
+      | [ N.Return_values values ] -> (None, values)
       | _ -> fail func.name "native function must have exactly one return terminator"
     in
     Ok
@@ -560,6 +561,7 @@ let select_function (func : N.func) =
             func.parameters;
         instructions;
         result;
+        outputs;
         result_type = func.result;
         value_locations =
           List.rev_append !internal_locations

@@ -29,7 +29,7 @@ type feature =
   | Expr_inline_tines | Expr_fma | Expr_outer | Expr_tuple
   | Expr_broadcast | Expr_unit
   | Stmt_let | Stmt_location | Stmt_assign | Stmt_fused
-  | Stmt_expression | Stmt_over
+  | Stmt_expression | Stmt_tine | Stmt_result
   | Predicate_expr | Predicate_comparison | Predicate_is
   | Predicate_and | Predicate_or | Predicate_not | Predicate_tine_ref
   | Rake_tines | Rake_through | Rake_sweep
@@ -44,7 +44,7 @@ type feature =
   | Type_array | Type_view | Type_pointer | Type_mutable | Type_record
   | Def_record | Def_union | Def_slow | Def_extern | Def_state | Def_embed | Def_const
   | Expr_string | Expr_index | Expr_conversion | Expr_if | Expr_array | Expr_slow
-  | Stmt_store | Stmt_return | Stmt_yield | Stmt_break | Stmt_continue
+  | Stmt_store | Stmt_return | Stmt_break | Stmt_continue
   | Stmt_if | Stmt_while | Stmt_loop | Stmt_repeat | Stmt_uniform
 
 type entry = {
@@ -146,7 +146,8 @@ let all = [
   supported Stmt_assign "statement.assignment" "statement" "location assignment";
   supported Stmt_fused "statement.fused" "statement" "verified pure inlineable-SSA bindings";
   supported Stmt_expression "statement.expression" "statement" "expression statements";
-  supported Stmt_over "statement.over" "statement" "stack iteration";
+  supported Stmt_tine "statement.tine" "statement" "local tines in a stack run";
+  supported Stmt_result "statement.stack-result" "statement" "a stack run's result: with, where and compact";
   unavailable Predicate_expr "predicate.expression" "predicate" "mask expressions as predicates (no source syntax)";
   supported Predicate_comparison "predicate.comparison" "predicate" "comparisons";
   unavailable Predicate_is "predicate.is" "predicate" "is and is-not comparisons (no source syntax)";
@@ -160,7 +161,7 @@ let all = [
   unavailable Masked_user_call "masked.user-call" "masked" "user-defined calls inside through blocks";
   unavailable Masked_modulo "masked.modulo" "masked" "modulo inside through blocks";
   unavailable Masked_mutation "masked.mutation" "masked" "mutable bindings and assignments inside through blocks";
-  unavailable Masked_loop "masked.loop" "masked" "over loops inside through blocks";
+  unavailable Masked_loop "masked.loop" "masked" "loops inside through blocks";
   unavailable Masked_cross_lane "masked.cross-lane" "masked"
     "reductions and scans inside through blocks";
   supported Integer_rack_comparison "operator.integer-rack-comparison" "operator"
@@ -202,7 +203,6 @@ let all = [
   supported Expr_array "expression.array" "expression" "array literals";
   supported Stmt_store "statement.store" "statement" "stores to fields, elements and memory";
   supported Stmt_return "statement.return" "statement" "return";
-  supported Stmt_yield "statement.yield" "statement" "yield, ending a traversal";
   supported Stmt_break "statement.break" "statement" "break";
   supported Stmt_continue "statement.continue" "statement" "continue";
   supported Stmt_if "statement.if" "statement" "if, else if and else statements";
@@ -288,8 +288,8 @@ let feature_of_param = function
 let feature_of_stmt = function
   | SLet _ -> Stmt_let | SLocBind _ -> Stmt_location
   | SAssign _ -> Stmt_assign | SFused _ -> Stmt_fused
-  | SExpr _ -> Stmt_expression | SOver _ -> Stmt_over
-  | SUniform _ -> Stmt_uniform | SStore _ -> Stmt_store | SReturn _ -> Stmt_return | SYield _ -> Stmt_yield
+  | SExpr _ -> Stmt_expression | STine _ -> Stmt_tine | SResult _ -> Stmt_result
+  | SUniform _ -> Stmt_uniform | SStore _ -> Stmt_store | SReturn _ -> Stmt_return
   | SBreak -> Stmt_break | SContinue -> Stmt_continue | SIf _ -> Stmt_if
   | SWhile _ -> Stmt_while | SLoop { loop_repeat = true; _ } -> Stmt_repeat | SLoop _ -> Stmt_loop
 
