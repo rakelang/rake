@@ -340,9 +340,7 @@ The platform compiler lowers explicit slow code and supplies the System V
 AMD64 or AAPCS64 C ABI. It cannot rewrite the opaque kernel assembly, which
 the final-object verifier checks using Rake's selected instruction contract.
 `test/native_program_test.sh` compares scalar and mixed results with the
-selected-profile interpreter. Independent C checks header-backed struct
-layout and imports/exports on x86 and under AArch64 QEMU; known lane counts
-also check the x86 reduction fixtures.
+selected-profile interpreter. Independent C checks header-backed struct layout and imports/exports on x86 and under AArch64 QEMU, while known lane counts provide another check of the x86 reduction fixtures.
 
 A process entry with parameters gets a compiler-owned adapter for
 `int main(int argc, char **argv)`. The adapter copies the pointer array into
@@ -392,9 +390,7 @@ cross-binutils assemble and disassemble the object, and
 `test/neon_backend_test.sh` compares exact result bits under QEMU.
 
 On `wasm-simd128`, a rack is one `v128` in the WebAssembly virtual machine.
-Rake adheres to that machine's fiction. It selects virtual SIMD instructions
-and locals, but doesn't try to replace the WebAssembly runtime's physical
-register allocation. A value used once is computed where it is consumed, and
+Rake selects WebAssembly's virtual SIMD instructions and locals, leaving physical register allocation to the runtime. A value used once is computed where it is consumed, and
 one used more than once is kept in a local. The output is C, one
 `wasm_simd128.h` intrinsic for each selected instruction, because some wasm32
 toolchains accept only C and reject `v128` operands to inline assembly.

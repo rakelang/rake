@@ -85,8 +85,7 @@ process arguments.
 
 Without an explicit target, `--interpret` uses WebAssembly's four `f32` lanes.
 `--target` selects the reference rack width, so an AVX2 float reduction uses
-eight lanes and an AVX-512 reduction uses sixteen. This interprets the source;
-it does not execute the generated machine code.
+eight lanes and an AVX-512 reduction uses sixteen. This mode interprets the source instead of executing the generated machine code.
 
 [Primitives, operations, and targets](spec/01_primitives_operations_and_targets.md#profiles) explains how
 `native` chooses a profile and what `--width` checks, and [packs and

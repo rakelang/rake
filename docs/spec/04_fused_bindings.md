@@ -19,8 +19,7 @@ scratch advance(positions: f32s, velocities: f32s) -> f32s:
   moved
 ```
 
-The type annotation, as in `scaled: f32s`, is optional, and when present it
-must match the expression's type. A fused name is a value, like a `let` name:
+The optional type annotation, as in `scaled: f32s`, needs to match the expression's type when provided. A fused name is a value, like a `let` name:
 it is bound once, and it isn't a memory location, an evaluation point or a
 rounding boundary. `scaled` exists for the reader. The two stages above are
 the same computation as `| moved <| positions + velocities * <0.5>`.

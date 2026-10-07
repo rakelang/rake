@@ -37,8 +37,7 @@ tabs under it:
 | Code | the selected target's output: C with WebAssembly intrinsics, native kernel assembly, or native mixed C with opaque kernel assembly |
 | Messages | the compiler's errors, each also underlined in the editor at its line and column |
 
-Stepping through a program in the Lanes tab shows one instruction acting on
-all the lanes at once, the idea the whole tutorial builds on.
+Stepping through a program in the Lanes tab shows how one instruction acts on all lanes at once, which provides the basis for the tutorial.
 
 The target menu offers WebAssembly, SSE2, AVX2, AVX-512 and NEON. The browser
 development compiler supports native slow orchestration with uniform `f32`,
@@ -59,7 +58,7 @@ rack width. The browser displays C or assembly without executing that
 generated machine code. Native object verification still requires `rakec`
 and the platform toolchain outside the browser.
 
-## How it works
+## Browser compiler and interpreter
 
 The compiler runs in the page. `rakec` is OCaml, and `js_of_ocaml` compiles
 its front end, interpreter and emitters for the browser, so the playground

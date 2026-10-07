@@ -25,8 +25,7 @@ AVX-512F, then AVX2 with FMA, then SSE2 on x86, or Advanced SIMD on AArch64.
 A build for another machine specifies its profile. Other CPU architectures
 and the scalar fallback remain WIP*. The compiler rejects unsupported targets.
 
-`--width n` asserts the `f32` lane count. It must equal the profile's, and a
-mismatch is an error before any code is generated. The compiler never meets
+`--width n` asserts the `f32` lane count. The supplied count needs to match the selected profile, with a mismatch producing an error before code generation. The compiler never meets
 it by splitting or narrowing a rack.
 
 GPU targets are designs, outside the implemented table above:
@@ -441,7 +440,7 @@ scratch step_east(here: u64s, open: u64s, board: u64s, <carry: u32>) -> u64s:
 ## Lane extraction
 
 `extract(values, 3)` takes lane 3 of a rack and returns its scalar value.
-Lane indices start at zero and must be integer literals within the selected
+Lane indices start at zero and need to be integer literals within the selected
 profile's width: 0–3 on SSE2 and NEON, 0–7 on AVX2, and 0–15 on AVX-512.
 `wasm-simd128` supports extraction from its float and integer rack types.
 The physical profiles support `f32s`, `i32s` and `u32s`.
@@ -501,9 +500,7 @@ native stack runs remains WIP* until its partial-rack participation contract is 
 `shuffle(a, [i0, i1, ...])` builds a rack from lanes of `a` chosen by static
 indices, one for each lane. `shuffle(a, b, [i0, i1, ...])` chooses from both,
 with `b`'s lanes numbered after `a`'s as if the two racks were laid end to
-end. Indices may repeat or omit input lanes. The list must contain exactly
-the output rack's lane count, and each index must be within its one or two
-input racks. The physical profiles support `f32s`, `i32s` and `u32s`.
+end. Indices may repeat or omit input lanes. The list needs exactly one index per output lane, with each index falling within the one or two input racks. The physical profiles support `f32s`, `i32s` and `u32s`.
 WebAssembly also supports its other integer rack types.
 
 <!-- rake-check: verify x86-sse2 aarch64-neon wasm-simd128 -->
@@ -590,8 +587,7 @@ Float arithmetic is IEEE 754 binary32, rounded to nearest with ties to even.
 Every comparison with a NaN operand is false, `!=` included, so `a != b`
 means that `a` and `b` are ordered and different.
 
-Native kernels inherit the caller's floating-point environment. The caller
-must select round-to-nearest with ties to even and disable flushing subnormals
+Native kernels inherit the caller's floating-point environment. The caller needs to select round-to-nearest with ties to even and disable flushing subnormals
 to zero: `FTZ` and `DAZ` are clear in x86's `MXCSR`, and `FZ` is clear in
 AArch64's `FPCR`. NEON also requires `FPCR.AH` clear on processors with
 alternative floating-point handling. That bit changes `fmin` and `fmax`'s

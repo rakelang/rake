@@ -1,6 +1,6 @@
 # Tines, through and sweeps
 
-Define the tines, rake data through them, then sweep the results. A tine
+Tines select lanes, through blocks compute under those masks, and the sweep chooses each lane's result. A tine
 describes which lanes to select. A through block computes under that mask,
 and the sweep chooses the value that leaves each lane.
 

@@ -68,9 +68,7 @@ in source order:
 | `compact s where p` | keep only the records where `p` holds |
 | `compact s with { ... } where p` | replace the fields, then keep those records |
 
-The result is the run's last statement. It names one stack parameter, `s`,
-whose pack is the run's declared result. Fields it doesn't name keep their
-values. A replacement's value has the field's working rack type, so an `f32`
+The run's last statement specifies one stack parameter, `s`, whose pack is the declared result. Fields omitted from that statement keep their values. A replacement's value has the field's working rack type, so an `f32`
 field takes `f32s`. Replacing a byte or 16-bit field is work in progress.
 
 `p` is any predicate a rake's sweep accepts: a local tine, a global tine
@@ -101,14 +99,13 @@ compaction with vector instructions:
 | `wasm-simd128` | `i8x16.swizzle` by a byte table indexed by the selection bits |
 | SSE2 | a jump to one of 16 fixed `pshufd` permutations |
 
-The [kernel report](#kernel-report) names the method each build used.
+The [kernel report](#kernel-report) identifies the method used by each build.
 Compacting a run whose widest column has 8 bits is work in progress on
 WebAssembly.
 
 ### Several stacks
 
-A run can read stacks other than its result. They must have the same count as
-the result's stack:
+A run can read stacks other than its result. They need to have the same count as the result's stack:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -161,8 +158,7 @@ slow main() -> i32:
 
 After `doubled(samples)`, the old value of `samples` is gone. Reading it is a
 compile error until it is assigned again, as `samples <- doubled(samples)`
-does. A stack moved in one branch of an `if` counts as moved after it, and a
-stack moved inside a loop must be assigned again before the next iteration.
+does. A stack moved in one branch of an `if` counts as moved after it, and a stack moved inside a loop needs to be assigned again before the next iteration.
 
 `copy(samples)` creates a stack with its own columns and the same records,
 and leaves `samples` usable. The copy's columns come from the slow function's
@@ -376,12 +372,11 @@ The caller owns all the storage, and a run never allocates, keeps or frees
 it. A run reads each column pointer once and writes the result's count, which
 only a compaction changes. With a count of zero or less, the columns may be
 null. Every column holds at least `count` elements, and every stack in a call
-has the same count. Slow code calling a run checks these and traps. A C caller
-must meet them. On WebAssembly a positive count is at most 2^32 - 1.
+has the same count. Slow code calling a run checks these and traps. A C caller needs to satisfy the same conditions. On WebAssembly a positive count is at most 2^32 - 1.
 
 The result's columns may share storage with another argument only when an
 element of one starts at exactly the same address as the corresponding element
-of the other, for an in-place update. Otherwise their storage must be disjoint.
+of the other, for an in-place update. Otherwise their storage needs to be disjoint.
 The C declaration has no `restrict`, because that exact aliasing is allowed.
 
 On x86-64 Linux a stack run follows System V, and on AArch64 Linux it follows
@@ -405,8 +400,7 @@ runs are work in progress and fail compilation.
 
 The final-object verifier compares each native run with its separately
 assembled selection, including branch offsets, memory operands and embedded
-literals. Any difference or unresolved relocation is rejected. On WebAssembly
-every SIMD instruction in a run must be one its source operations select.
+literals. Any difference or unresolved relocation is rejected. On WebAssembly, every SIMD instruction in a run needs to come from instruction selection for its source operations.
 
 `test/native_stream_test.sh` checks native stack runs against independent C
 results, with exact in-place output and every tail remainder, columns ending at

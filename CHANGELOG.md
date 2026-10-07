@@ -24,7 +24,7 @@ only when the compiler implements it and the tests cover it.
 - One native kernel computes every output of a rack, so values the outputs
   share are computed once.
 - A successful build of stack runs ends with a kernel report on standard
-  error, naming each run's domain, columns, selection and its method, and
+  error, listing each run's domain, columns, selection and selection method, and
   tail transfers. `--no-report` omits it.
 - Stack descriptors are `struct rake_stack_P_v2`, a leading `int64_t count`
   followed by the column pointers. The result's descriptor is passed
@@ -470,9 +470,9 @@ only when the compiler implements it and the tests cover it.
   both object modes check the kernels in the final compiled object. Other
   scalar kernel boundaries remain work in progress.
 - The interpreter accepts an explicit target profile for reference `f32`
-  rack widths. The browser emits native mixed C and interprets it at that
-  profile's width; it does not execute native machine code.
-- Native slow frames are thread-local; independent host threads can call
+  rack widths. The browser emits native mixed C and uses interpretation at that
+  profile's width instead of executing native machine code.
+- Native slow frames are thread-local, allowing independent host threads to call
   exported functions with large recursive locals. Module state stays shared.
 - Pointer fields in C struct declarations are checked against
   `sizeof(void *)`, rather than assuming a wasm32 pointer.
@@ -546,8 +546,7 @@ Changes since 0.3.0.
   shared by the interpreter, slow code and racks.
 - Conditional expressions choose by a mask on every profile, and by a
   uniform on `wasm-simd128`.
-- A uniform must be marked where it meets a rack: `values * <factor>`, not
-  `values * factor`. The type checker reports the unmarked name.
+- A uniform needs angle brackets when used with a rack: `values * <factor>`. The type checker reports the unmarked name.
 - `wrap` and `bitcast` are conversions only before a parenthesis, so they
   remain usable as identifiers. A scratch, rake or run can't be named after a C
   keyword, since each becomes a C function of its own name.

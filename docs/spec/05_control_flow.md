@@ -1,7 +1,6 @@
 # Control flow
 
-Rake has two kinds of choice. A uniform condition chooses the same branch for
-every lane. A mask chooses a branch independently in each lane.
+Rake has two kinds of choice: a uniform condition chooses the same branch for every lane, while a mask chooses independently in each lane.
 In vector code, both choices use vector selection. Slow code can branch
 around statements. Tines, through blocks and sweeps are the
 named form of the second kind, defined in [tines, through and

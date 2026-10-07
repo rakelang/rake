@@ -137,9 +137,7 @@ specified regions, rather than performance advice alone.
 Bend 2 asks the programmer to provide independent calls that take roughly
 the same time. Its current guide describes a binary fork–join scheduler
 that distributes that work once, without moving tasks afterwards. A `!`
-after a call sends it and its nested parallel calls to the GPU. Those
-constructs distribute task parallelism; they don't define a per-rack
-no-spill contract. This comparison uses the [Bend 2 guide at revision
+after a call sends it and its nested parallel calls to the GPU. Bend's constructs describe parallel calls, while Rake's proposed GPU checks concern lane mapping and register use within a rack. This comparison uses the [Bend 2 guide at revision
 75cc360](https://github.com/bendlang/bend/blob/75cc36027d1ead249c6f8a2e6d22dfe75b261c17/guide/GUIDE.md#parallelism).
 The ISPC guides were checked at [documentation revision
 c22f07f](https://github.com/ispc/ispc.github.com/tree/c22f07f9f626e32393741ccb5f3c7e145db40bbd).

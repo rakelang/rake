@@ -22,8 +22,7 @@ boundaries are still work in progress.
 Runs now apply calculations to whole stacks. A stack carries its count, moves
 into the run that returns it and is updated in place, and `copy` is its only
 copy. A run selects records by masking with `where` or by compaction with
-`compact`, and a successful build ends with a kernel report naming each run's
-selection method. Stack runs compile on SSE2, AVX2, AVX-512, NEON and
+`compact`, and a successful build ends with a kernel report identifying each run's selection method. Stack runs compile on SSE2, AVX2, AVX-512, NEON and
 WebAssembly, with one kernel per rack computing every output, full and partial
 racks, final-byte verification and independent C and guard-page checks. They
 take up to eight uniform `f32`, `i32`, `u32` or `bool` arguments within the
@@ -56,8 +55,7 @@ unions. Rake-owned union layouts and interpreted union storage remain work in
 progress. Pointer types now retain C's read-only pointee qualifiers,
 including in callback signatures. We will check layouts, alignment, field
 offsets and imported/exported calls against independently compiled C headers on x86-64
-and AArch64. Scalar lowering inside `slow` may use the platform C compiler;
-that permission will never apply to rack work outside the block.
+and AArch64. Scalar lowering inside `slow` may use the platform C compiler, but rack work outside the block will remain excluded from that permission.
 
 Slow-local frames now use C-defined size and alignment, including
 header-backed aggregates nested in arrays or Rake records. Small frames stay
@@ -348,8 +346,7 @@ inspect. Import syntax will be part of that complete design.
 
 We will keep the tutorial, diagnostics and reference examples aligned so that
 `<uniform>`, `#tine`, fused `| name <| value` bindings, `through` and `sweep`
-are introduced when a learner first needs them. Compiler messages will name
-the same concepts as the documentation and point to the relevant lesson.
+are introduced when a learner first needs them. Compiler messages will use the documentation's terminology and point to the relevant lesson.
 
 Global tines now provide reusable typed predicates, and `gaps` supplies exact
 mask inversion. Optional fallbacks are checked through Boolean coverage and

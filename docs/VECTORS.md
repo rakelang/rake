@@ -79,8 +79,7 @@ and [WebAssembly vector instructions](https://webassembly.github.io/spec/core/sy
 
 ### Moving values between lanes
 
-A shuffle reads values already in registers. A gather reads values from
-memory. Both use indices, but their storage, latency and memory effects differ.
+A shuffle reads values already in registers, whereas a gather reads from memory. Although both use indices, their storage, latency and memory effects differ.
 
 | Term | Meaning and example |
 | --- | --- |
