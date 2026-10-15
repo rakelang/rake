@@ -1,0 +1,3 @@
+~~ A shuffle names one rack width's lanes, so each width has its own fixture.
+scratch reversed_4_lanes(values: f32s) -> f32s:
+  shuffle(values, [3, 2, 1, 0])

@@ -107,6 +107,9 @@ let disassembled_functions ~relaxed listing =
            match (!current, String.index_opt trimmed ':') with
            | Some name, Some colon when colon > 0 && trimmed.[0] <> '.' && trimmed.[0] <> '#' ->
                let instruction = String.trim (String.sub trimmed (colon + 1) (String.length trimmed - colon - 1)) in
+               (* A relocation line names its symbol after a tab, which the
+                  raw-byte split below would misread as an instruction. *)
+               if not (String.starts_with ~prefix:"R_WASM_" instruction) then
                (* With raw bytes shown (the relaxed profile), the bytes come first, then a tab. *)
                let raw, instruction =
                  if relaxed then

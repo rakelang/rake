@@ -1,15 +1,11 @@
 # Fused bindings
 
-*Binding* is general programming terminology for associating a name with a
-value. A declaration introduces the name, and a definition supplies its
-meaning. Rake's `let name = expression` does both: it gives the expression's
-value a name that later code can use.
-
-*Fusion* is a compiler term for combining separate pieces of work so they
-can execute together. Rake's `| name <| expression` binds one stage of a
-fused vector calculation. Read it from right to left: the expression flows
-into `name`. Consecutive stages line up on their leading bars, so we can
-follow the calculation down the page:
+Rake's `let name = expression` gives an expression's value a name. A fused
+binding, `| name <| expression`, binds one stage of a fused vector
+calculation, and fusion lets the compiler combine those stages so they execute
+together. Read a stage from right to left: the expression flows into `name`.
+Consecutive stages line up on their leading bars, so the calculation reads
+down the page:
 
 <!-- rake-check: verify x86-avx2 aarch64-neon wasm-simd128 -->
 ```rake
@@ -19,18 +15,19 @@ scratch advance(positions: f32s, velocities: f32s) -> f32s:
   moved
 ```
 
-The optional type annotation, as in `scaled: f32s`, needs to match the expression's type when provided. A fused name is a value, like a `let` name:
-it is bound once, and it isn't a memory location, an evaluation point or a
-rounding boundary. `scaled` exists for the reader. The two stages above are
-the same computation as `| moved <| positions + velocities * <0.5>`.
+The optional type annotation, as in `scaled: f32s`, needs to match the
+expression's type. A fused name is a value, like a `let` name: it's bound
+once, and it isn't a memory location, an evaluation point or a rounding
+boundary. `scaled` exists for the reader, and the two stages above are the
+same computation as `| moved <| positions + velocities * <0.5>`.
 
-## The contract
+## Permitted expressions
 
 Every rack on the implemented profiles lives in one physical CPU register or
 one WebAssembly `v128` value, with no source-visible spills. A fused
-binding requires its expression to be pure data flow that the
-compiler can emit as one contiguous run of vector instructions. The compiler
-proves that or rejects the binding. It never falls back to something weaker.
+binding's expression needs to be pure data flow, emitted as one contiguous
+run of vector instructions. The compiler proves this or rejects the binding,
+and never falls back to something weaker.
 
 A fused expression may contain arithmetic, comparisons, mask logic, uniforms,
 `if ... then ... else`, `fma`, shuffles, and calls to these built-in
@@ -45,9 +42,9 @@ relaxed_madd relaxed_nmadd relaxed_min relaxed_max
 
 It can't contain a call to a scratch, rake or other function, a reduction, a
 scan, `extract`, `insert`, `bitmask`, indexing or another memory access, a
-conversion such as `bitcast`, or a record or array. A function's effects
-aren't inferred yet, so a user-defined call can't enter a fused region even
-when it is pure. A rejection gives the binding and the reason:
+conversion such as `bitcast`, or a record or array. The compiler doesn't infer
+a function's effects yet, so a user-defined call can't enter a fused region
+even when it's pure. A rejection gives the binding and the reason:
 
 <!-- rake-check: reject "Fused binding contract for 'total' rejected: reduction is not an inlineable expression shape" -->
 ```rake
@@ -66,23 +63,23 @@ the profile. Different profiles may therefore round one floating-point
 expression differently.
 
 The compiler implements part of that. It substitutes fused identifiers, and on
-`x86-avx2`, `x86-avx512` and `aarch64-neon` it contracts an `f32` multiply feeding an add in the
-same fused region into one fused multiply-add, removing the multiply when
-nothing else uses it. `advance` above compiles to one `vfmadd231ps` on AVX2
-and AVX-512, and one `fmla` on NEON. A multiply and an add outside a fused region, or in
-two different regions, stay separate. `wasm-simd128` contracts nothing,
-because WebAssembly SIMD128 has no fused multiply-add. SSE2 also keeps the
-multiply and add separate, because its ISA has no fused instruction. Reassociation,
-factoring, distribution and the sharing of subexpressions aren't implemented.
-Integer multiply and add retain their wrapping integer semantics. This
-floating-point rewrite doesn't apply to them.
+`x86-avx2`, `x86-avx512` and `aarch64-neon` it contracts an `f32` multiply
+feeding an add in the same fused region into one fused multiply-add, removing
+the multiply when nothing else uses it. `advance` above compiles to one
+`vfmadd231ps` on AVX2 and AVX-512, and one `fmla` on NEON. A multiply and an
+add outside a fused region, or in two different regions, stay separate.
+`x86-sse2` and `wasm-simd128` contract nothing, because neither instruction
+set has a fused multiply-add. Reassociation, factoring, distribution and the
+sharing of subexpressions aren't implemented. Integer multiply and add keep
+their wrapping semantics, so this floating-point rewrite never applies to
+them.
 
-`fma(a, b, c)` requires `a * b + c` rounded once. The compiler also forms fused multiply-adds
-where the source permits contraction. On AVX2, AVX-512 and NEON it is one fused instruction,
-and `--verify-native` checks that the object holds exactly the fused
-multiply-adds the compiler selected, both contracted and explicit.
-SSE2 and `wasm-simd128` reject `fma`. Rake has no slower, stricter arithmetic mode: a
-program that depends on an exact operation specifies it explicitly.
+`fma(a, b, c)` computes `a * b + c` with a single rounding. On AVX2, AVX-512
+and NEON it's one fused instruction, and `--verify-native` checks that the
+object's fused multiply-adds, both contracted and explicit, match the
+compiler's selection exactly. SSE2 and `wasm-simd128` reject `fma`. Rake has
+no slower, stricter arithmetic mode, so a program that depends on an exact
+operation specifies it explicitly.
 
 Reductions and scans have a defined lane order. That order is part of their
 result, and fusion never reassociates it, even when their input comes from a

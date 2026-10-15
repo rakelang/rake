@@ -14,7 +14,7 @@ Usage:
   rakec --emit-obj <file.rk>          Assemble Rake-owned code to an object
   rakec --verify-native <file.rk>     Verify and emit a Rake-owned object
   rakec --interpret <file.rk> [-- args...]  Run main in Rake's executable semantics
-  rakec --print-capabilities          Print the frontend semantic contract
+  rakec --print-capabilities          Print what the frontend checks and each profile compiles
   rakec --print-targets               Print available native profiles
   rakec --version                     Show version
   rakec --help                        Show this help
@@ -128,8 +128,8 @@ let resolve_target_config opts =
 let parse_program filename =
   match parse_file filename with Ok program -> program | Error message -> fail message
 
-let typecheck program =
-  match Rake.Typecheck.check program with
+let typecheck ?target program =
+  match Rake.Typecheck.check ?target program with
   | Ok environment -> environment
   | Error message -> fail message
 
@@ -145,13 +145,13 @@ let is_whole_program (program : Rake.Ast.program) =
         m.mod_defs)
     program
 
-let tier_check filename program =
-  match Rake.Tier_check.check ~base_dir:(Filename.dirname filename) program with
+let tier_check ?target filename program =
+  match Rake.Tier_check.check ~base_dir:(Filename.dirname filename) ?target program with
   | Ok checked -> checked
   | Error message -> fail message
 
 let whole_program_c ~addressing ~profile filename program =
-  let checked = tier_check filename program in
+  let checked = tier_check ~target:(Rake.Capabilities.Profile profile) filename program in
   let execution_target = Rake.Tier_c.execution_target profile in
   match Rake.Tier_c.emit ~addressing ~execution_target ~source:filename checked with
   | text, facts, native_kernels, report -> (checked, text, facts, native_kernels, report)
@@ -309,18 +309,19 @@ let () =
           if not (Filename.check_suffix filename ".rk") then
             fail (Printf.sprintf "Unknown file type: %s (expected .rk)" filename);
           let program = parse_program filename in
-          let _ =
+          let target =
             match (opts.target_selection, opts.width) with
-            | None, None -> None
-            | _ -> Some (resolve_target_config opts)
+            | None, None -> Rake.Capabilities.Frontend
+            | _ -> Rake.Capabilities.Profile (resolve_target_config opts).profile
           in
-          let _ = typecheck program in
-          if is_whole_program program then ignore (tier_check filename program);
+          let _ = typecheck ~target program in
+          if is_whole_program program then ignore (tier_check ~target filename program);
           Printf.printf "Parsed and type-checked %s successfully.\n" filename
       | (Native_ir | C_source | Assembly | Object | Verify_native) as mode ->
           let program = parse_program filename in
-          let _ = typecheck program in
           let config = resolve_target_config opts in
+          report_backend (Rake.Native_backend.require_backend config);
+          let _ = typecheck ~target:(Rake.Capabilities.Profile config.profile) program in
           let whole_program = is_whole_program program in
           if mode = Assembly && (whole_program || Rake.Target.is_wasm config.profile) then
             fail "Error: --emit-asm requires physical-target register kernels; use --emit-c for whole programs or WebAssembly";

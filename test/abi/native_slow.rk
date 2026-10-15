@@ -20,6 +20,14 @@ extern slow native_packet_make(values: ptr i32) -> NativePacket from "native_slo
 extern slow native_packet_check(packet: ptr const NativePacket) -> i64 from "native_slow.h"
 extern slow native_frame_wait() from "native_slow.h"
 extern slow native_frame_storage_check(block: ptr const NativeFrameBlock, expected: i32) from "native_slow.h"
+extern slow native_text_length(text: ptr const u8) -> i32 from "native_slow.h"
+
+pack NativeSample {
+  f32: value;
+  i32: quality;
+}
+
+embed native_bytes from "interop.bin"
 
 state empty_native_pointer: ptr i32
 
@@ -79,3 +87,9 @@ slow rake_frame_packet(seed: i32) -> NativePacket:
   for index from 0 up to 128:
     local[index] <- seed + index
   return NativePacket { tag: 9, weight: f64(local[127]), values: empty_native_pointer, samples: [u16(local[0]), u16(local[63]), u16(local[127])] }
+
+~~ A string literal, embedded bytes, a pack value and a slow block, natively.
+slow rake_slow_values() -> i32:
+  let sample: pack NativeSample = NativeSample { value: 1.5, quality: 4 }
+  let length: i32 = slow { native_text_length("rake") }
+  return length * 100 + i32(native_bytes[15]) + sample.quality

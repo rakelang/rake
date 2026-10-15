@@ -20,6 +20,7 @@ run() {
 
 run "build" dune build -j "${RAKE_BUILD_JOBS:-1}"
 run "capability evidence" bash test/check_capability_evidence.sh
+run "capability profiles against the fixtures" bash test/capability_profile_test.sh
 if "$check_website"; then
   run "release identity" bash tools/check_release_identity.sh
 else
@@ -31,9 +32,9 @@ run "portable compiler tests" dune runtest -j "${RAKE_BUILD_JOBS:-1}" --force
 run "native object integration tests" dune build -j "${RAKE_BUILD_JOBS:-1}" @runtest-native --force
 run "WebAssembly object integration tests" dune build -j "${RAKE_BUILD_JOBS:-1}" @runtest-wasm --force
 run "target profiles" bash test/target_profile_test.sh
-run "native semantic differential runtime" bash test/native_backend_test.sh
-run "SSE2, AVX2 and AVX-512 scalar-oracle agreement" bash test/x86_profiles_test.sh
-run "AArch64 NEON semantic differential runtime" bash test/neon_backend_test.sh
+run "AVX2 selection and object checks" bash test/native_backend_test.sh
+run "reference and oracle agreement on every runtime profile" bash test/native_runtime_test.sh
+run "AArch64 NEON selection and object checks" bash test/neon_backend_test.sh
 run "native lane-transfer bits, lane bounds and scalar C ABI" bash test/native_lane_transfer_test.sh
 run "native 32-bit integer semantics and vector C ABI" bash test/native_integer_rack_test.sh
 run "native and WebAssembly numeric conversions and C ABI" bash test/native_conversion_test.sh

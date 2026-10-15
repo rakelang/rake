@@ -1,14 +1,13 @@
 # Memory operations
 
-Runs read and write memory through views and packs. This page defines the
-accesses, the gather, which is implemented for `wasm-simd128`, and the
-scatter, compression and expansion, which are designs that no backend
-implements yet.
+Runs read and write memory through views and packs. This page defines
+accesses and the gather, implemented on `wasm-simd128`. Scatter,
+compression and expansion are designs, and no backend implements them yet.
 
 ## Accesses
 
-A view, `[]T`, is a count of elements of type `T`. A run reads and writes it
-in three ways:
+A view, `[]T`, is a count of elements of type `T`, and a run reads and
+writes it with these forms:
 
 | Form | Meaning |
 | --- | --- |
@@ -17,17 +16,18 @@ in three ways:
 | `view[indices]` | a gather: element `indices[k]` in each lane `k` |
 | `view[<i>] <- rack` | a store of consecutive elements starting at element `i` |
 
-Indices count elements, never bytes, and there is no pointer arithmetic. An
-access is checked: it traps, before touching memory, unless every element it
-reads or writes is in bounds. `view[unchecked <i>]` and
-`view[unchecked indices]` drop the check. The caller is responsible for
-keeping the access in bounds. An unchecked access out of bounds is outside Rake's
-semantics. Slow code uses the same `[unchecked i]` spelling for its elements.
+Indices count elements, never bytes, and there's no pointer arithmetic.
+Accesses are checked, so an access traps before touching memory unless all of
+its elements are in bounds. `view[unchecked <i>]` and
+`view[unchecked indices]` drop the check, which makes the caller responsible
+for keeping the access in bounds. An unchecked access out of bounds is outside
+Rake's semantics. Slow code uses the same `[unchecked i]` spelling for its
+elements.
 
-Inside a mask, only the active lanes take part. The mask of a memory access is
+Inside a mask, only the active lanes take part. A memory access's mask is
 the conjunction of the masks that apply to it, from a `through` block and from
 a stack run's tail. An inactive lane is never checked, and it computes no
-address and makes no access. A full load followed by a blend doesn't meet this
+address and makes no access. A full load followed by a blend breaks this
 rule, because it touches the inactive lanes' memory.
 
 ## Gather
@@ -70,12 +70,12 @@ is four `i32x4.extract_lane`, each forming an address, and four
 `v128.load32_lane` into a zeroed rack. The sequence is the same for every
 gather, with no loop and no branch.
 
-In a stack run's tail only the active lanes are checked and loaded: a switch
-on the uniform remainder issues one, two or three lane loads, and the
-inactive lanes are zero. A gather in a stack run needs a 32-bit domain, so
-that its lanes are the run's. A gather can't appear in a conditional's
-branches, as [control flow](05_control_flow.md#conditional-expressions)
-explains, and it isn't allowed in a fused binding, because it reads memory.
+In a stack run's tail, a switch on the uniform remainder checks and loads
+only the active lanes, issuing one, two or three lane loads, and the inactive
+lanes are zero. A gather in a stack run needs a 32-bit domain, so that its
+lanes are the run's. A gather can't appear in a conditional's branches, as
+[control flow](05_control_flow.md#conditional-expressions) explains, and it
+isn't allowed in a fused binding, because it reads memory.
 
 ## Scatter
 
@@ -88,19 +88,19 @@ run spread(x: []f32, places: []i32, out: mut []f32):
   out[places[<0>]] <- x[<0>]
 ```
 
-Storing the lanes one at a time would be the hidden scalar loop that Rake
-rules out. The rest of this section is a design for profiles with a scatter
+Rake rules out hidden scalar loops, so it won't store the lanes one at a
+time. The rest of this section is a design for profiles with a scatter
 instruction.
 
 A scatter would write one element for each active lane through a writable
-view, and produce no value. The checked scatter would check, before its first
+view and produce no value. The checked scatter would check, before its first
 store, that every active index is in bounds and that no two active lanes have
 the same index, and trap otherwise, leaving memory unchanged. The unchecked
 scatter would require both. Two active lanes with one destination have no
-first-wins or last-wins meaning: unique destinations let a native scatter
-instruction store its lanes in any order. A scatter would
-be excluded from fused regions, and allowed under a mask only where the
-backend can suppress every inactive store.
+first-wins or last-wins meaning, because unique destinations let a native
+scatter instruction store its lanes in any order. A scatter would be excluded
+from fused regions, and allowed under a mask only where the backend can
+suppress every inactive store.
 
 ## Compression and expansion
 
@@ -133,7 +133,7 @@ This section is a design. The x86 backend has no runs, so it has no gather.
 
 An AVX2 gather of 32-bit elements would use `vgatherdps` with scale four and
 the access's mask as its mask operand. The instruction clears its mask
-register, so the backend would copy a mask that is still live. A checked
+register, so the backend would copy a still-live mask first. A checked
 gather would add the bounds check before it. AVX2 has no scatter instruction,
 so `x86-avx2` would reject scatter. Compression and expansion could use a
 mask's bits, a table of permutations and `vpermps`.

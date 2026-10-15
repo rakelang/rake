@@ -1,8 +1,9 @@
 # Reductions and scans
 
 A reduction combines every lane of a rack into one scalar. A scan returns a
-rack whose lane `i` holds the reduction of lanes 0 to `i`. Both have identifiers
-rather than operators, so they are easy to find in code and to read aloud.
+rack whose lane `i` holds the reduction of lanes 0 to `i`. Both are spelled
+as identifiers rather than operators, so they're easy to find in code and to
+read aloud.
 
 | Form | Operand | Result | Each step |
 | --- | --- | --- | --- |
@@ -24,15 +25,12 @@ rather than operators, so they are easy to find in code and to read aloud.
 | `scan_product(x)` | `i32s` / `u32s` | same rack type | wrapping 32-bit multiplication |
 | `scan_minimum(x)` / `scan_maximum(x)` | `i32s` / `u32s` | same rack type | signed / unsigned extrema |
 
-Nothing converts an operand to fit. Arithmetic reductions and scans accept
-float or 32-bit integer racks, and `all` and `any`
-require masks. `extract(x, lane)` and
-`bitmask(m)`, defined in [primitives, operations, and targets](01_primitives_operations_and_targets.md),
-also turn a rack into a scalar.
+Nothing converts an operand to fit. `extract(x, lane)`, defined in [primitives, operations, and targets](01_primitives_operations_and_targets.md),
+also turns a rack into a scalar.
 
-A scratch can return a reduction's scalar. In a run, `let <x: T> = ...` binds
-one as a uniform. The following WebAssembly run computes the spread once,
-then broadcasts it into the output rack:
+A scratch can return a reduction's scalar, and in a run `let <x: T> = ...`
+binds one as a uniform. This WebAssembly run computes the spread once, then
+broadcasts it into the output rack:
 
 <!-- rake-check: run 103 -->
 ```rake
@@ -55,9 +53,8 @@ slow main() -> i32:
   return i32(sums[3] * 10.0 + width[0])
 ```
 
-Rake 0.7.0 also accepts arithmetic on uniform results inside
-register kernels. For example, subtracting a rack's minimum from its maximum
-produces one `f32` value:
+Register kernels also accept arithmetic on uniform results, so subtracting a
+rack's minimum from its maximum produces one `f32` value:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -72,16 +69,14 @@ scratch negative_total(values: f32s) -> f32:
   -sum(values)
 ```
 
-Physical profiles broadcast the scalar operands into full racks, use packed
-arithmetic and keep the completed result as a uniform. `f32` supports
-addition, subtraction, multiplication and division with a binary32 rounding
-at each step. `i32` and `u32` support wrapping addition, subtraction and
-multiplication. Use a marked uniform when the scalar meets a rack, as
-`<offset>` does above. Unary minus also accepts `f32` and `i32` uniforms,
-including reduced or extracted values. Float negation flips the sign bit,
-preserving zero signs and NaN payloads. Signed negation wraps, so negating
-−2147483648 gives −2147483648. Arithmetic under a partial lane mask remains WIP*,
-including inside a masked stack run. This support is included in Rake 0.7.0.
+`f32` uniforms support addition, subtraction, multiplication and division,
+with a binary32 rounding at each step, while `i32` and `u32` support wrapping
+addition, subtraction and multiplication. When the scalar meets a rack, mark
+it as a uniform, as `<offset>` is above. Unary minus also accepts `f32` and
+`i32` uniforms. Float negation flips the sign bit, preserving zero signs and
+NaN payloads, and signed negation wraps, so negating −2147483648 gives
+−2147483648. Arithmetic under a partial lane mask, including inside a masked
+stack run, remains WIP* (*work in progress*).
 
 ## Lane order
 
@@ -96,23 +91,20 @@ A reduction returns `p[N - 1]`, and a scan returns `p[0]` to `p[N - 1]`, so
 every scan is inclusive. The fold always runs from lane 0 upwards. No
 implementation may use a tree, reassociate, contract, or keep a wider
 intermediate, so each addition and multiplication rounds to binary32 in turn.
-A rack always has lanes, so there is no empty case and no identity value.
+A rack always has lanes, so there's no empty case and no identity value.
 
 Mask reductions use associative bitwise operations, so their implementation
 may combine lane groups in a tree. `all` and `any` give the same truth value
-in any order. `bitmask` preserves each lane's bit position.
+in any order, and `bitmask` preserves each lane's bit position.
 
-Integer reductions return the same element type as their input, and integer
-scans return the same rack type. Addition and multiplication wrap modulo 2³²,
-including on signed inputs. Extrema retain
-the input's signed or unsigned ordering. These operations are associative,
-so their implementation can combine lane groups in a tree without changing
-the result. A reduction includes every lane, including values across the
-subdivisions of an AVX register. An integer scan includes lanes 0 through `i`
-in its result at lane `i`. For a rack holding `[2, 3, 1, 4]`, `scan_sum`
-gives `[2, 5, 6, 10]`.
-Each call starts a new prefix at lane 0. Carrying a running prefix from one
-rack to the next is separate work, in a general run's loop.
+Integer addition and multiplication wrap modulo 2³², including on signed
+inputs, and integer extrema keep the input's signed or unsigned ordering.
+These operations are associative, so an implementation can combine lane
+groups in a tree without changing the result. A reduction includes every
+lane, including values across the subdivisions of an AVX register. For a rack
+holding `[2, 3, 1, 4]`, `scan_sum` gives `[2, 5, 6, 10]`. Each call starts a
+new prefix at lane 0, and carrying a running prefix from one rack to the next
+is separate work, in a general run's loop.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -146,24 +138,13 @@ signed-zero rule differs.
 ## Restrictions and profiles
 
 Each lane of a reduction or scan depends on the others, so neither can run
-under a mask. They are rejected in a `through` block and in a stack run,
-where the tail's mask would apply. They are also outside fused bindings: a
-reduction leaves the rack, and a scan orders its lanes.
+under a mask. They're rejected in a `through` block and in a stack run, where
+the tail's mask would apply. They're also outside fused bindings, because a
+reduction leaves the rack and a scan orders its lanes.
 
-| Profile | Reductions and scans | `all`, `any`, `bitmask` on float masks |
-| --- | :-: | :-: |
-| `x86-sse2` | yes | yes |
-| `x86-avx2` | yes | yes |
-| `x86-avx512` | yes | yes |
-| `aarch64-neon` | yes | yes |
-| `wasm-simd128` | yes | yes |
-
-NEON reductions and scans, and native mask reductions, are included in
-Rake 0.7.0.
-
-Rake 0.7.0 also supports all four reductions and inclusive
-scans on `i32s` and `u32s` across these profiles. Scans and reductions at other integer
-widths remain WIP* (*work in progress*).
+Every profile supports the reductions, scans and mask reductions on `f32s`,
+`i32s`, `u32s` and float masks. Scans and reductions at other integer widths
+remain WIP*.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -171,50 +152,33 @@ scratch running_total(values: f32s) -> f32s:
   scan_sum(values)
 ```
 
-On SSE2, AVX2 and AVX-512, a float fold takes three, seven or fifteen ordered
-steps respectively. The steps use shuffles,
-permutations, blends and packed arithmetic, and a reduction's scalar returns
-in `xmm0`.
+| Profile | Float reduction or scan | Mask reductions |
+| --- | --- | --- |
+| `x86-sse2` | 3 ordered steps | 2 permute-and-combine stages |
+| `x86-avx2` | 7 ordered steps | 3 stages |
+| `x86-avx512` | 15 ordered steps | 4 stages |
+| `aarch64-neon` | 3 steps, each broadcasting the next lane with `dup` before full-width arithmetic, with `ins` placing a scan's prefix | 2 stages |
+| `wasm-simd128` | 3 steps, each moving a lane into place with `i8x16.shuffle` | `all` and `any` as `all_true` and `v128.any_true` |
 
-NEON also takes three ordered steps. Each broadcasts the next lane into a
-complete register with `dup`, then applies full-width arithmetic to the
-running prefix. A scan inserts that prefix into the corresponding lane with
-`ins`. A reduction returns the low `f32` lane of `v0`, following AAPCS64.
-For strict extrema, `fmin` or `fmax` supplies the numerical result, followed
-by a quiet comparison and selection of `0x7fc00000` if it is NaN.
-The allocator accounts for these intermediate registers, and the object
-verifier permits their lane transfers only in selected cross-lane functions.
+The x86 steps use shuffles, permutations, blends and packed arithmetic. Where
+a machine minimum or maximum handles NaN differently, a comparison afterwards
+selects `0x7fc00000`. NEON uses a quiet comparison after `fmin` or `fmax`,
+while `wasm-simd128` follows `f32x4.min` or `f32x4.max` with an `f32x4.ne`
+self-comparison of each operand, a `v128.or` and a `v128.bitselect`, because
+WebAssembly leaves a NaN result's payload unspecified.
 
-Native mask reductions use two packed permutation-and-combine stages on
-SSE2 and NEON, three on AVX2, or four on AVX-512F. `all` combines with AND,
-and `any` with OR, then converts the result to zero or one with a vector
-mask. `bitmask` first assigns each true lane its bit weight, then combines
-the weights with OR. One temporary vector register is included in the
-no-spill allocation check. Only the completed result crosses into the C
-integer return register. Independent C checks every possible lane mask at
-each physical width, including complement and composed masks.
+Mask reductions combine with AND for `all` and OR for `any`, then a vector
+mask converts the result to zero or one. `bitmask` first gives each true lane
+its bit weight, then combines the weights with OR. Integer reductions combine
+disjoint lane groups with full-width shuffles and packed arithmetic or
+extrema. Integer scans combine prefixes at distances 1, 2, 4 and 8 as the
+rack width requires, filling the initial lanes with the operation's neutral
+value and carrying prefixes across AVX register subdivisions.
 
-Integer reductions use the existing full-width shuffles and packed arithmetic
-or extrema. Each stage combines disjoint lane groups, and the completed value
-crosses the integer C return boundary through a lane extraction. No scalar
-lane arithmetic is introduced.
-
-Integer scans combine prefixes at distances 1, 2, 4 and 8 as the rack width
-requires. Each packed stage shuffles earlier prefixes into place and fills
-the initial lanes with the operation's neutral value. Full-width transfers
-include prefixes that cross AVX register subdivisions. An independent
-sequential C fold checks every prefix's wrapping bits and signedness,
-including computations that use the original rack again.
-
-On `wasm-simd128`, each of a float reduction's three steps moves lane `i`
-to lane 0 with one `i8x16.shuffle` and combines it with the running value. A
-scan keeps the running prefix in a rack and, for lanes 1 to 3, combines the
-previous prefix with lane `i` and shuffles the result into lane `i`. A
-minimum or maximum step is `f32x4.min` or `f32x4.max`, then an `f32x4.ne`
-self-comparison of each operand, a `v128.or` and a `v128.bitselect` of the
-canonical NaN, because WebAssembly leaves a NaN result's payload unspecified.
-`all` and `any` are the mask width's `all_true` and `v128.any_true`.
-The physical profiles share an independent scalar C oracle that checks
-left-fold rounding, zero signs, canonical extrema and NaNs at every position.
-`test/program/vector_tier.rk` compares the four reductions, `scan_sum`,
-`scan_maximum`, `all`, `any` and `bitmask` with the interpreter.
+Integer reductions introduce no scalar lane arithmetic. A float result
+returns in `xmm0` on x86 and in the low lane of `v0` on NEON, following
+AAPCS64, while integer and mask results cross into the C integer return
+register only once complete. The allocator counts NEON's intermediate
+registers and the mask reductions' one temporary vector register, and the
+object verifier permits lane transfers only in selected cross-lane
+functions.

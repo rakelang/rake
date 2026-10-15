@@ -22,6 +22,7 @@ NativePacket native_packet_make(int32_t *values);
 int64_t native_packet_check(const NativePacket *packet);
 void native_frame_wait(void);
 void native_frame_storage_check(const NativeFrameBlock *block, int32_t expected);
+int32_t native_text_length(const uint8_t *text);
 
 /* These are implemented in the separately compiled Rake object. */
 int64_t rake_packet_score(const NativePacket *packet);
@@ -29,5 +30,6 @@ int64_t rake_packet_update(NativePacket *packet);
 NativePacket rake_packet_make(int32_t *values);
 int32_t rake_frame_sum(int32_t seed, int32_t depth);
 NativePacket rake_frame_packet(int32_t seed);
+int32_t rake_slow_values(void);
 
 #endif

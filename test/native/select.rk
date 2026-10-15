@@ -19,3 +19,7 @@ scratch quiet_equal(left: f32s, right: f32s) -> f32s:
 
 scratch quiet_different(left: f32s, right: f32s) -> f32s:
   select(left != right, <1.0>, <0.0>)
+
+~~ A mask can be passed in as well as computed.
+scratch masked_choice(selection: mask, values: f32s, fallback: f32s) -> f32s:
+  select(selection, values, fallback)

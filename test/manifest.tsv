@@ -16,6 +16,9 @@ test/native/add.rk	native	x86-avx2	8	native-object	pass	-
 test/native/bitcast.rk	native	x86-avx2	8	native-object	pass	-
 test/native/simple_scratch.rk	native	x86-avx2	8	native-object	pass	-
 test/native/select.rk	native	x86-avx2	8	native-object	pass	-
+test/native/shuffle_4.rk	native	x86-sse2	4	native-object	pass	-
+test/native/shuffle_8.rk	native	x86-avx2	8	native-object	pass	-
+test/native/shuffle_16.rk	native	x86-avx512	16	native-object	pass	-
 test/native/scalar_parameter.rk	native	x86-avx2	8	native-object	pass	-
 test/native/absolute.rk	native	x86-avx2	8	native-object	pass	-
 test/native/extrema.rk	native	x86-avx2	8	native-object	pass	-

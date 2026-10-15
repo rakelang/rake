@@ -1,9 +1,8 @@
 # Syntax
 
-This page is the reference for Rake's source syntax: its layout, identifiers,
-literals, definitions, types, statements and expressions. The other pages
-define what each form means. A form that parses can still be unavailable on a
-target, and the compiler reports that separately from a syntax error.
+The other pages define what each form means. A form that parses can still be
+unavailable on a target, and the compiler reports that separately from a
+syntax error.
 
 ## Layout
 
@@ -12,9 +11,8 @@ the lines of that body are indented further than the line that opened it,
 all by the same amount. A body ends when a line returns to an outer
 indentation. Indentation uses spaces, and a tab in indentation is an error.
 
-Lines inside parentheses, brackets or data braces continue the line they
-started on, so a long parameter list can be spread over several lines. A
-multiline pack or record body is indented. A `slow { ... }` body restores
+Lines inside parentheses, brackets or data braces continue their starting
+line, while a multiline pack or record body is indented. A `slow { ... }` body restores
 statement layout, even inside a call: its statements are indented, and its
 closing brace returns to the opening line's indentation. Empty braces need
 no body. On one line, a slow block separates statements with semicolons.
@@ -30,8 +28,9 @@ with letters, digits and underscores. A name that starts with an uppercase
 letter is a type name, used for packs and records, such as `Samples`.
 Records and header-backed unions may also retain lowercase C typedef
 identifiers. Primitive type spellings such as `i32` may appear as member
-identifiers after a field type, in a literal or after `.`. A lone
-`_` is the default arm of a sweep, not an identifier. These words are reserved and can't be used as identifiers:
+identifiers after a field type, in a literal or after `.`. A lone `_` is
+the default arm of a sweep. These words are reserved and can't be used as
+identifiers:
 
 ```text
 and bool bools break by compact const continue scratch else embed extern f32 f32s
@@ -51,26 +50,26 @@ Integers are written in decimal or in hexadecimal with `0x`. A decimal
 literal up to 2^64 - 1 is accepted, and one above 2^63 - 1 is read as the bit
 pattern of a `u64`. Floats need a decimal point or an exponent: `1.0`, `2.`
 and `1e-3`. `true` and `false` are the Boolean literals. A string literal in
-double quotes specifies a file after `from`, or passes text to a C function. Its
-escapes are kept as written, for C to read.
+double quotes gives a file after `from`, or passes text to a C function, and
+its escapes are kept as written for C to read.
 
 A minus sign before a literal makes it negative, and a minus sign between two
 operands subtracts, so `n-1` and `n - 1` mean the same. A literal's type comes
 from the value beside it or the type expected where it stands: in `x * 2`
 with `x` an `f32s`, the `2` is a float rack constant.
 
-Three marks carry machine meaning, and each has one role:
+Three marks carry machine meaning:
 
 - `<value>` is uniform, one scalar shared by every lane. The brackets appear
   where a uniform is declared, as in `<scale: f32>`, and where it is used, as
   in `<scale>`. They also mark literals and elements used as uniforms:
-  `<0.5>`, `<-1>`, `<config.limit>` and `<weights[i]>`. A broadcast from a
-  scalar into a rack is therefore always visible in the source.
-- `#active` is a tine, a named lane mask. The `#` sits directly against the
+  `<0.5>`, `<-1>`, `<config.limit>` and `<weights[i]>`, so a broadcast from a
+  scalar into a rack is always visible in the source.
+- `#active` is a tine, a named lane mask, with the `#` directly against the
   name.
 - `| result <| expression` binds one stage of a fused computation. Read it
-  from right to left: the expression flows into `result`. The leading bar
-  lines up consecutive stages.
+  from right to left: the expression flows into `result`, and the leading
+  bar lines up consecutive stages.
 
 ## Definitions
 
@@ -120,8 +119,9 @@ Parameters are written `name: type` and separated by commas. A uniform scalar
 parameter is written `<name: type>`. A result type follows `->`. A scratch's
 last expression supplies its result. A rake ends with its sweep. A stack run
 declared `-> stack Name` ends with its result, such as `s with { field: e }`,
-and a general run without a result type writes through its `mut` views. A slow function without a result type returns nothing.
-`return` is reserved for leaving a slow function, not for a scratch.
+and a general run without a result type writes through its `mut` views. A
+slow function without a result type returns nothing, and `return` only
+leaves a slow function.
 
 A scratch, rake or run may call scratches and rakes. The call is inlined, so
 calls nest at most 32 deep and recursion is rejected.
@@ -139,12 +139,12 @@ calls nest at most 32 deep and recursion is rejected.
 | `[N]T` | an array of `N` elements, or of `N` racks when `T` is a rack |
 | `ptr T`, `ptr const T` | a C pointer with writable or read-only pointed-to storage |
 | `Name` | a record |
-| `mut T` | a parameter the callee writes |
+| `mut T` | a parameter written by the callee |
 
-`f32s` racks work on every production profile. WebAssembly implements the
-integer racks `u8s`, `i16s`, `i32s`, `u32s`, `i64s` and `u64s`. The development
-compiler also supports [a native 32-bit integer subset](01_primitives_operations_and_targets.md#integer-racks).
-The types `i8s`, `u16s`, `f64s` and `bools` parse but have no implementation yet.
+Every production profile implements `f32s`. WebAssembly also implements the
+integer racks in the table, and the native profiles
+[a 32-bit integer subset](01_primitives_operations_and_targets.md#integer-racks).
+`i8s`, `u16s`, `f64s` and `bools` parse but have no implementation yet.
 
 ## Statements
 
@@ -167,16 +167,16 @@ The types `i8s`, `u16s`, `f64s` and `bools` parse but have no implementation yet
 | `slow { statements; value }` | a scoped scalar escape in a run or slow function, optionally producing a scalar |
 | `e` | a scratch's final result, or a call evaluated for its effect |
 
-A name is bound once in its scope and can't shadow an enclosing name. A mutable location
-changes with `<-`. [Control flow](05_control_flow.md) defines the
-conditionals and loops, [Packs and runs](02_packs_and_run.md) stack runs,
-and [the slow tier](08_slow_tier.md) the scalar statements.
+A name is bound once in its scope and can't shadow an enclosing name.
+[Control flow](05_control_flow.md) defines the conditionals and loops,
+[Packs and runs](02_packs_and_run.md) the stack runs, and
+[the slow tier](08_slow_tier.md) the scalar statements.
 
 ## Tines, through and sweeps
 
-A global tine defines a reusable predicate with typed inputs. Local tines
-can refer directly to a rake's inputs. A rake's body is, in order, any
-setup bindings, any local tines, its through blocks and the sweep:
+A global tine takes typed inputs, while a local tine can refer directly to
+a rake's inputs. A rake's body holds any setup bindings, then any local
+tines, its through blocks and the sweep:
 
 ```rake
 rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
@@ -192,14 +192,14 @@ rake clamp_band(values: f32s, <low: f32>, <high: f32>) -> f32s:
 ```
 
 A tine's predicate uses comparisons, other tines, parentheses, `not`, `and`
-and `or`, and arithmetic and fields on its operands. Calls apply global
-tines, as in `#valid(values)`, but ordinary function calls aren't permitted.
-Postfix `gaps` inverts a tine or parenthesised predicate. A through block
-selects a local tine, a global application or a composed predicate.
-`else` is optional: without it, only the selected lanes have a defined
-value. `into` binds that result. A sweep takes the first matching arm for
-each lane and requires provable total coverage. A final `_` supplies any
-remaining lanes, or a `gaps` arm can cover them explicitly.
+and `or`, and arithmetic and fields on its operands. Calls in a predicate
+apply global tines, as in `#valid(values)`, and ordinary function calls
+aren't permitted. Postfix `gaps` inverts a tine or parenthesised predicate.
+A through block selects a local tine, a global application or a composed
+predicate, and `into` binds its result. Without the optional `else` value,
+only the selected lanes have a defined value. A sweep takes the first
+matching arm for each lane and needs provable total coverage, and a final
+`_` or a `gaps` arm can complete it.
 [Tines, through and sweeps](03_tines_and_through.md) defines the coverage
 and partial-value rules.
 
@@ -219,18 +219,17 @@ From the lowest precedence to the highest:
 | `a.field`, `a[i]`, `a[unchecked i]` | fields and indexing |
 | literals, identifiers, marks, calls, `(e)` | |
 
-A comparison of floats is false when either operand is NaN, and that includes
-`!=`: Rake's `!=` means "ordered and different". Integer arithmetic in slow
-code traps on overflow, and the wrapping forms `wrap_add`, `wrap_sub` and
-`wrap_mul` are explicit. A rack's integer arithmetic wraps, as its hardware
-does.
+A comparison of floats is false when either operand is NaN, including
+`!=`, so Rake's `!=` means "ordered and different". Integer arithmetic in
+slow code traps on overflow unless it uses `wrap_add`, `wrap_sub` or
+`wrap_mul`, while a rack's integer arithmetic wraps.
 
 Other primary forms are calls `f(a, b)`, conversions `i32(x)` (checked),
 `wrap(u8, x)` (the low bits) and `bitcast(u32, x)` (the same bits), record
 literals `Name { field: e }`, stack constructors `stack Name { field: column }`,
 `copy(s)` and `count(s)` for stacks, and array literals `[a, b, c]` and `[e; n]`.
 
-Rack operations use function-call syntax rather than operators:
+Rack operations are written as function calls:
 
 | Operations | Page |
 | --- | --- |
@@ -239,20 +238,20 @@ Rack operations use function-call syntax rather than operators:
 | `dot` `narrow` `widen_low` `widen_high` `to_f32` `to_i32` `to_u32` `bitmask` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `bit_and` `bit_or` `bit_xor` `bit_andnot` `shift_bits_left` `shift_bits_right` `shift_bits_right_signed` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `shuffle(a, [3, 2, 1, 0])`, `shuffle(a, b, [0, 4, 1, 5])` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
-| `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Reductions and scans](06_reductions_and_scans.md) |
+| `extract(rack, 2)`, `insert(rack, 2, <x>)` | [Primitives, operations, and targets](01_primitives_operations_and_targets.md) |
 | `sum` `product` `minimum` `maximum` `all` `any` | [Reductions and scans](06_reductions_and_scans.md) |
 | `scan_sum` `scan_product` `scan_minimum` `scan_maximum` | [Reductions and scans](06_reductions_and_scans.md) |
 | `widen(s.column)` | [Packs and runs](02_packs_and_run.md) |
 
 A shuffle's lane indices and the lane of `extract` and `insert` are integer
-literals, because the instruction encodes them. Slow code has its own scalar
-functions, listed in [the slow tier](08_slow_tier.md).
+literals, because the instruction encodes them. [The slow tier](08_slow_tier.md)
+lists slow code's scalar functions.
 
 These forms parse but have no implementation on any profile: `@` (the lane
 index), `lanes` (the lane count), `zip_low`, `shift_left`, `shift_right`,
 `rotate_left` and `rotate_right` (lane moves), and the math functions `sin`,
-`cos`, `tan`, `pow` and `atan2`. The compiler rejects a program that uses
-them and says which feature is missing.
+`cos`, `tan`, `pow` and `atan2`. The compiler rejects them and reports the
+missing feature.
 
 ## Tokens
 

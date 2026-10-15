@@ -152,7 +152,8 @@ compiler selected. On WebAssembly, Rake keeps to the virtual machine's
 physical register allocation. A wasm run also contains the uniform address,
 loop and bounds work written in the source, but it never scalarises rack work.
 `rakec --help` lists every mode, `--print-targets` the profiles and
-`--print-capabilities` each language feature's status.
+`--print-capabilities` each language feature's status in the frontend and on
+each profile.
 
 ## Documentation
 

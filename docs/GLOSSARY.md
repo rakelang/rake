@@ -1,6 +1,6 @@
 # Glossary
 
-Rake's language and compiler terminology. The [vectors cheat sheet](VECTORS.md)
+Rake's language and compiler terms. The [vectors cheat sheet](VECTORS.md)
 explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 
 ## Rake's terms
@@ -14,7 +14,7 @@ explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 | gaps | the exact Boolean complement of a tine or composed mask, including lanes with NaNs that failed its comparisons |
 | through block | code that computes under a mask, with an optional `else` value for other lanes. Without `else`, only selected lanes are defined |
 | sweep | the choice of each lane's result in priority order, with masks that provably cover every lane or a final `_` |
-| scratch | a function of racks without a tine/through/sweep body |
+| scratch | a function of racks with no tines, through blocks or sweep |
 | rake | a function of racks with tines, through blocks and a sweep |
 | run | vector code over memory: traverse stacks and apply rakes or scratches to racks from their columns |
 | slow code | scalar code, marked `slow`, that holds no racks |
@@ -23,8 +23,8 @@ explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 | pack | one record described by a `pack` declaration, with its fields stored together |
 | stack | a count of packs transposed into one contiguous column for each field |
 | stack run | a run that applies calculations to whole stacks and returns one: `s with { field: e }` |
-| masking | `where p`: a stack run replaces fields only in the records `p` selects |
-| compaction | `compact s where p`: a stack run keeps only the records `p` selects |
+| masking | `where p`: a stack run replaces fields only in the records selected by `p` |
+| compaction | `compact s where p`: a stack run keeps only the records selected by `p` |
 | move | passing a stack to the run that returns it, which updates its columns in place |
 | view | `[]T`, elements with a count, borrowed from the caller |
 | profile | a named target, such as `x86-avx2`, that fixes the rack width and the rules |
@@ -36,7 +36,7 @@ explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 | --- | --- |
 | front end, back end | the front end parses and checks source, and the back end selects instructions, assigns registers and writes the program |
 | SSA | static single assignment: a representation in which each value is defined once, which makes data dependencies explicit |
-| declaration, definition | a declaration introduces a name and may give its type. A definition supplies the value or behaviour it denotes. A language construct can do both |
+| declaration, definition | a declaration introduces a name and may give its type. A definition supplies the name's value or behaviour. A language construct can do both |
 | binding, reference | a binding associates a name with a value or other program entity, and a reference uses that name within its scope. Rake's immutable value bindings don't designate memory locations |
 | fusion | combining separate pieces of work so they can execute together, such as merging loops into one pass or forming a fused multiply-add. Rake uses fused bindings for stages of pure vector calculations |
 | instruction selection | choosing the machine instructions for each operation |
@@ -45,7 +45,6 @@ explains CPU SIMD and GPU terms, with examples of lane and memory operations.
 | assembler | the tool that encodes textual assembly as object code |
 | LLVM | a compiler infrastructure with optimisation, instruction selection and register allocation for multiple targets |
 | ABI | application binary interface: the rules for passing arguments, returning values and laying out data |
-| System V ABI | the calling convention most Unix-like x86-64 systems use |
+| System V ABI | the calling convention of most Unix-like x86-64 systems |
 | AAPCS64 | the procedure call standard for 64-bit Arm |
-| conformance corpus | the accepted and rejected example programs that check the compiler against the language's rules |
-| OCaml, Dune, Nix | the language the compiler is written in, its build system, and the package manager that pins the tools in `nix develop` |
+| OCaml, Dune, Nix | the compiler's implementation language, its build system, and the package manager that pins the tools in `nix develop` |

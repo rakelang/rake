@@ -21,7 +21,7 @@ test "$(head -n 1 "${evidence}")" = "${expected_header}" \
   || fail "unexpected evidence-table header"
 
 "${rakec}" --print-capabilities >"${tmp}/capabilities.tsv"
-awk -F '\t' 'NR > 2 { print $3 "\t" $2 }' "${tmp}/capabilities.tsv" \
+awk -F '\t' 'NR > 2 && $1 == "frontend" { print $3 "\t" $2 }' "${tmp}/capabilities.tsv" \
   | sort >"${tmp}/compiler"
 awk -F '\t' 'NR > 1 { print $1 "\t" $2 }' "${evidence}" \
   | sort >"${tmp}/evidence"
@@ -35,6 +35,11 @@ test "$(wc -l <"${tmp}/evidence")" -eq \
 diff -u "${tmp}/compiler" "${tmp}/evidence" \
   || fail "compiler capability catalog and evidence table differ"
 
+runtime_reference_case() {
+  test -f "${project_root}/test/native_runtime_test.sh" &&
+    grep -q "^$1	" "${project_root}/test/native/reference_cases.tsv"
+}
+
 valid_evidence_id() {
   local feature="$1"
   local evidence_id="$2"
@@ -44,8 +49,14 @@ valid_evidence_id() {
     "capability:${feature}") return 0 ;;
     fixture:*) test -f "${project_root}/${value}" ;;
     dune:*) grep -Fq "(name ${value})" "${project_root}/test/dune" ;;
-    runtime:add|runtime:select|runtime:scalar-broadcast|runtime:predication|runtime:reductions|runtime:scans)
-      test -f "${project_root}/test/native_backend_test.sh" ;;
+    # Runtime evidence is a reference case that test/native_runtime_test.sh
+    # runs on every profile compiling its function.
+    runtime:add) runtime_reference_case lowering_add ;;
+    runtime:select) runtime_reference_case choose_positive ;;
+    runtime:scalar-broadcast) runtime_reference_case scale_and_add ;;
+    runtime:predication) runtime_reference_case guarded_partial ;;
+    runtime:reductions) runtime_reference_case strict_reduce_add ;;
+    runtime:scans) runtime_reference_case strict_scan_add ;;
     verify:add|verify:select|verify:scalar-broadcast|verify:predication|verify:reductions|verify:scans)
       test -f "${project_root}/test/native_backend_test.sh" ;;
     docs:*) test -f "${project_root}/${value}" ;;

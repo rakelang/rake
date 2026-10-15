@@ -221,6 +221,7 @@ type program = {
   slows : slow_func list;
   runs : run list;
   vector_defs : Ast.def list;  (** scratches, rakes and their reusable tine predicates *)
+  used_features : Capabilities.feature list;  (** every feature the checkers admitted, in catalogue order *)
 }
 
 let find_pack program name = List.find (fun s -> s.pack_name = name) program.packs

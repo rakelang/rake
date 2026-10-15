@@ -1,21 +1,17 @@
 # GPU profiles
 
-This page defines the planned GPU execution contract. Rake currently has no
-GPU compiler, runtime or device-artifact verifier. CPU coverage and native
-C interoperation come first. The first GPU backend will target NVIDIA PTX
-and verify an ahead-of-time cubin. Portable SPIR-V and a direct physical
-backend are later directions.
-
-The purpose is to preserve useful parallel work across GPU lanes, keep
-temporary values in registers where the profile requires it, and make memory
-and synchronisation costs explicit. Hardware schedules warps. Rake will
-control the algorithm's lane mapping and check the resulting execution structure.
+Rake doesn't have a GPU compiler, runtime or device-artifact verifier yet,
+because CPU coverage and native C interoperation come first. In this design,
+the hardware schedules warps while Rake controls the algorithm's lane
+mapping, keeps temporaries in registers where the profile requires it, and
+makes memory and synchronisation costs explicit. The first backend will
+target NVIDIA PTX and verify an ahead-of-time cubin.
 
 <figure class="diagram diagram-gpu-rack">
 <div class="diagram-scroll" tabindex="0" role="region" aria-label="GPU rack diagram, scroll horizontally on a narrow screen">
 <svg viewBox="0 0 680 264" role="img" aria-labelledby="gpu-rack-title gpu-rack-description">
 <title id="gpu-rack-title">A GPU rack spans a warp</title>
-<desc id="gpu-rack-description">A column maps to 32 thread lanes. Each lane calculates its own value. A mask disables selected lanes. Hardware schedules the warp, while Rake defines and verifies the lane mapping.</desc>
+<desc id="gpu-rack-description">A column maps to 32 thread lanes, and a mask disables selected lanes. Hardware schedules the warp, while Rake defines and verifies the lane mapping.</desc>
 <text class="diagram-label" x="18" y="24">Proposed NVIDIA rack: 32 thread lanes</text>
 <rect class="diagram-cell diagram-cell-active" x="18" y="40" width="644" height="34" rx="4"/>
 <text class="diagram-value" x="340" y="57">Column in memory: values 0 … 31</text>
@@ -40,14 +36,14 @@ control the algorithm's lane mapping and check the resulting execution structure
 <figcaption>One rack spans a warp. Grey lanes illustrate a programmer-selected mask.</figcaption>
 </figure>
 
-## A rack is a group of lanes
+## Racks and lanes
 
-A CPU rack occupies one vector register. A GPU rack will span a specified
-warp, wave or subgroup, with each invocation holding one lane's value.
-Arithmetic in each invocation is the parallel lowering. A hidden loop that
-processes all rack elements inside one invocation would violate the contract.
-NVIDIA's [SIMT model](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#simt-execution-model)
-describes warp execution and masked paths.
+A CPU rack occupies one vector register, whereas a GPU rack will span a
+specified warp, wave or subgroup, with each invocation holding one lane's
+value, as in NVIDIA's
+[SIMT model](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/advanced-kernel-programming.html#simt-execution-model).
+A hidden loop that processes every rack element inside one invocation breaks
+the profile's rules.
 
 | Property | Physical CPU profile | Proposed NVIDIA profile |
 | --- | --- | --- |
@@ -59,26 +55,22 @@ describes warp execution and masked paths.
 | Physical registers | allocated by Rake | allocated by NVIDIA, then checked in the cubin |
 | Scheduling | Rake's instruction sequence, executed by the CPU | NVIDIA's instruction schedule and hardware warp scheduling |
 
-Partial masks are legitimate program choices. Rake cannot make arbitrary
-inputs keep every lane active. It can distinguish uniform control from
-lane-varying control and refuse compiler-introduced serialization. A declared
-masked path may still use fewer lanes while it executes.
+Partial masks are legitimate program choices, and Rake can't make arbitrary
+inputs keep every lane active. It can tell uniform control from lane-varying
+control, though, and refuse serialization introduced by the compiler.
 
 ## First profile: NVIDIA PTX
 
-The proposed identifier is `nvidia-ptx-sm120`. It fixes PTX ISA 8.7,
-`sm_120`, 64-bit addressing and a 32-lane rack. It supports only that SM
-architecture initially. The selected toolchain is CUDA 12.8.1, with the exact
-tool binaries to be pinned by hash in the implementation. See the [PTX 8.7
-specification](https://docs.nvidia.com/cuda/archive/12.8.1/parallel-thread-execution/index.html)
-and [CUDA 12.8.1 component versions](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-toolkit-release-notes/index.html#cuda-toolkit-major-component-versions).
+The proposed profile, `nvidia-ptx-sm120`, fixes [PTX ISA
+8.7](https://docs.nvidia.com/cuda/archive/12.8.1/parallel-thread-execution/index.html),
+`sm_120`, 64-bit addressing and a 32-lane rack, and initially supports only
+that SM architecture. It uses [CUDA
+12.8.1](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-toolkit-release-notes/index.html#cuda-toolkit-major-component-versions),
+with the exact tool binaries pinned by hash. Other architectures and
+operations need a checked profile extension, and the compiler will report an
+unsupported construct's source location, profile and failed obligation.
 
-The table below defines the planned initial operation set.
-Other architectures and operations require a checked profile extension.
-Diagnostics for unsupported constructs will report their source location, profile and failed
-obligation before any artifact is accepted.
-
-| Area | Initial contract |
+| Area | Initial support |
 | --- | --- |
 | Values | `f32` lane values and predicates, 32-bit integer indices and 64-bit device addresses. Uniformity is tracked separately |
 | Arithmetic | binary32 add, subtract, multiply, divide, square root, explicit FMA, ordered comparisons and selection. Divide and square root require correctly rounded forms |
@@ -89,20 +81,15 @@ obligation before any artifact is accepted.
 | Control | uniform bounds and source traversal control are permitted. Pure fused regions forbid calls and hidden lane loops |
 | Initial exclusions | shared-memory collectives, atomics, dynamic allocation, recursion, device callbacks, tensor operations, scatter and unsupported numerical functions |
 
-Every launched warp will contain 32 invocations. Padding invocations remain
-present until required collectives finish, with neutral operands for inactive
-data lanes. All participants reach the same collective with the same
-membership mask. The checker will reject reads from unavailable shuffle
-sources and collectives whose participation cannot be established. Execution
-never relies on implicit lockstep between threads.
-
-For 400 records the mapping needs twelve full racks and a rack with sixteen
-data lanes. Additional dispatch padding may be needed for the block size.
-Padding invocations never touch out-of-bounds records.
+Every launched warp will contain 32 invocations. Padding invocations stay
+present until the required collectives finish, supplying neutral operands
+for inactive data lanes, and never touch out-of-bounds records. Every
+participant reaches the same collective with the same membership mask.
+Execution never relies on implicit lockstep between threads, so the checker
+will reject reads from unavailable shuffle sources, and any collective when
+it can't establish which lanes take part.
 
 ## Compilation and final-code verification
-
-The backend belongs in Rake's profile, lowering and verifier pipeline:
 
 ```text
 Rake source and GPU lane contract
@@ -115,45 +102,34 @@ Rake source and GPU lane contract
 ```
 
 NVIDIA owns final instruction selection, physical register allocation and
-instruction scheduling on this virtual profile. Rake's verifier will check
-the resulting artifact against the profile's requirements.
-
-The verifier will inspect every reachable instruction and control-flow path,
-relating register/data flow to the lane, mask, memory and collective contract.
-It will reject unknown instructions, opaque helper paths, unexplained loops
-and insufficient evidence. Designated pure regions forbid
-spills, reloads, calls and hidden serial lane loops. Explicit address
+instruction scheduling on this virtual profile, so Rake verifies the
+resulting artifact instead. Using NVIDIA's
+[binary utilities](https://docs.nvidia.com/cuda/cuda-binary-utilities/),
+the verifier will inspect every reachable instruction and control-flow path,
+relate register and data flow to the profile's lane, mask, memory and
+collective rules, and check the `LOCAL` and `STACK` resource counts. It
+rejects unknown instructions, opaque helper paths and unexplained loops,
+and rejects the artifact whenever the evidence is insufficient. Designated pure regions forbid
+spills, reloads, calls and hidden serial lane loops, while explicit address
 and traversal work has separate obligations.
-
-NVIDIA's
-[binary utilities](https://docs.nvidia.com/cuda/cuda-binary-utilities/)
-supply disassembly, control-flow output and resource reports. The verifier
-will check memory instructions and their data flow as well as `LOCAL` and
-`STACK` resource counts.
 
 ## Artifact identity and runtime boundary
 
 Verification will bind the exact cubin and kernel hashes to the source,
 profile, compiler revision, PTX hash, toolchain binaries and flags, target
-SM, verifier version and launch/parameter ABI. Runtime evidence also records
-device and driver identity. A driver or runtime change requires refreshed
-compatibility checks and execution evidence.
-
-The runtime will load those cubin bytes and confirm target and kernel identity.
-It will refuse unverified PTX JIT fallback, a rebuild with different flags,
-or verification transferred to different bytes.
+SM, verifier version and launch/parameter ABI, and runtime evidence also
+records the device and driver. A driver or runtime change requires refreshed
+compatibility checks and execution evidence. The runtime will load only those
+verified bytes, and refuse PTX JIT fallback or a rebuild with different
+flags.
 
 The host interface is a separate C ABI for loading a verified artifact and
-launching a kernel with an explicit CUDA context, stream and parameter layout.
-Column arguments will be device addresses with counts and alignment
-requirements. The caller owns allocation, lifetimes, stream ordering and
-synchronisation. Launch errors remain visible. CUDA supplies the execution
-interface, while Rake source compiles directly to PTX.
-
-The compiler/runtime handoff requires a versioned parameter layout and launch
-contract, semantic checks and an exact artifact identity. Engine adoption
-additionally requires CPU, official-engine and GPU parity, then bounded
-resource and throughput measurements.
+launching a kernel with an explicit CUDA context, stream and versioned
+parameter layout. Column arguments will be device addresses with counts and
+alignment requirements, and the caller owns allocation, lifetimes, stream
+ordering and synchronisation, and launch errors stay visible to it. CUDA
+supplies the execution interface, while Rake source compiles directly
+to PTX.
 
 ## Guarantees and measurements
 
@@ -165,51 +141,44 @@ resource and throughput measurements.
 | parameter layout and lane-to-address pattern | memory transactions, caches and transfer overhead |
 | numerical semantics and explicit synchronisation scopes | elapsed time and application throughput |
 
-More registers per thread can leave room for fewer resident warps. A strict
-no-spill profile will reject a forbidden spill even when another policy
-might run faster. A relaxed resource policy will have a separate profile.
-Balanced workloads and enough independent work
-remain program responsibilities. NVIDIA's [register and occupancy
+More registers per thread can leave room for fewer resident warps, as
+NVIDIA's [register and occupancy
 discussion](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-cuda-kernels.html#registers)
-explains that trade-off.
+explains. A strict no-spill profile will still reject a forbidden spill when
+another policy might run faster, and a relaxed resource policy will get a
+profile of its own.
 
-## Acceptance checks
+## Verification tests
 
 Independent numerical and CPU reference results will check lane mapping,
-mask priority, tails, collectives and floating-point edge cases. Boundary
-counts include empty data and partial warps. Collective checks include
-missing participants and unavailable shuffle sources.
-
-Final-code negative fixtures will contain spills/reloads, helper calls,
-serial lane loops, unexpected divergent control, incorrect address patterns
-and unknown instructions. The verifier will refuse them even when a resource
-summary appears acceptable. Artifact checks will change bytes, architecture,
-flags and launch metadata to ensure verification cannot follow a different
-kernel silently.
+mask priority, tails, collectives and floating-point edge cases, including
+empty data, partial warps, missing participants and unavailable shuffle
+sources. Negative fixtures will give the verifier each forbidden pattern,
+including incorrect address patterns and unexpected divergent control, and
+it refuses them even when a resource summary looks acceptable. Artifact
+checks will alter bytes, architecture, flags and launch metadata, so
+verification can't silently carry over to a different kernel.
 
 ## Later portable and physical profiles
 
-SPIR-V/Vulkan is a later portable virtual profile. A rack will span a required
-subgroup width, rather than a large `OpTypeVector` inside one invocation.
-Profiles such as `vulkan-subgroup32` and `vulkan-subgroup64` will specify
-SPIR-V/Vulkan versions, memory model, numerical modes, operations and
-collective participation. Pipeline creation will reject incompatible devices.
-The [SPIR-V specification](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
-and [Vulkan subgroup guide](https://docs.vulkan.org/guide/latest/subgroups.html)
-define those interfaces.
+A later [SPIR-V](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)/Vulkan
+profile, such as `vulkan-subgroup32` or `vulkan-subgroup64`, will span a rack
+across a required
+[subgroup](https://docs.vulkan.org/guide/latest/subgroups.html) width rather
+than a large `OpTypeVector` inside one invocation. Each will specify its
+SPIR-V and Vulkan versions, memory model, numerical modes, operations and
+collective participation, and pipeline creation will reject incompatible
+devices. Physical resource verification needs the driver-generated
+executable, and Vulkan's optional
+[pipeline executable properties extension](https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_pipeline_executable_properties.html)
+may expose it. Rake refuses certification without enough final-code evidence,
+and binds that evidence to the module, pipeline state, device, driver and
+verifier.
 
-Source and module verification can preserve the lane contract. Physical
-resource verification requires the particular driver-generated executable. Vulkan's
-optional [pipeline executable properties extension](https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_pipeline_executable_properties.html)
-may expose statistics or representations, depending on the implementation.
-Insufficient final-code evidence means rejection of certification. Evidence
-will bind the module, pipeline state, device, driver and verifier.
-
-A later physical profile could use a sufficiently documented ISA, such as
-one in [AMD's architecture documentation](https://gpuopen.com/amd-gpu-architecture-programming-documentation/).
-Rake would own selection, allocation and instruction scheduling as well as
-final-object verification. This would extend Rake's ownership to the
-physical instruction set.
+A physical profile for a sufficiently documented ISA, such as one in
+[AMD's architecture documentation](https://gpuopen.com/amd-gpu-architecture-programming-documentation/),
+would let Rake own selection, allocation and scheduling as well as
+verification.
 
 [Rake and other languages](COMPARISONS.md#gpu-execution-rake-ispc-and-bend)
-compares this lane contract with ISPC's gangs and Bend 2's fork–join tasks.
+compares this design with ISPC's gangs and Bend 2's fork–join tasks.

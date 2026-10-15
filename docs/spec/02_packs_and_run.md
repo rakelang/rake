@@ -1,20 +1,17 @@
 # Packs, stacks and runs
 
-A run applies rakes and scratches to whole stacks. The programmer names the
-columns and the calculations. The compiler splits the columns into racks,
+A run applies rakes and scratches to whole stacks. The source chooses the
+columns and the calculations, and the compiler splits the columns into racks,
 handles the final partial rack, fuses the calculations and stores the results.
-Stack runs compile for SSE2, AVX2, AVX-512, NEON and `wasm-simd128`.
-
-A run may also be a [general run](#general-runs) over views, with counted
-loops that index memory a rack at a time. General runs compile for
-`wasm-simd128`.
+Stack runs compile for SSE2, AVX2, AVX-512, NEON and `wasm-simd128`, while
+[general runs](#general-runs), which index views with counted loops, compile
+for `wasm-simd128`.
 
 ## Packs and stacks
 
 A `pack` defines one record. A `stack` holds many of those records in
 structure-of-arrays storage: one contiguous column for each field, and a
-count of records. Remember the hierarchy as "define our pack, then rack 'em
-and stack 'em".
+count of records.
 
 ```text
 PACK: one record          { posx, posy, velx, vely, kill }
@@ -26,10 +23,8 @@ STACK: count records, one column per field
          └── one rack: the target's lane count of records ──┘
 ```
 
-Each column's stored type is scalar, such as `f32` or `u8`. The run works on
-its racks, whose plural types such as `f32s` have the target's lane count. A
-column can have a million entries without making its rack a million lanes
-wide.
+Each column's stored type is scalar, such as `f32` or `u8`, and the run works
+on its racks, whose plural types such as `f32s` have the target's lane count.
 
 ## Stack runs
 
@@ -68,44 +63,36 @@ in source order:
 | `compact s where p` | keep only the records where `p` holds |
 | `compact s with { ... } where p` | replace the fields, then keep those records |
 
-The run's last statement specifies one stack parameter, `s`, whose pack is the declared result. Fields omitted from that statement keep their values. A replacement's value has the field's working rack type, so an `f32`
-field takes `f32s`. Replacing a byte or 16-bit field is work in progress.
-
-`p` is any predicate a rake's sweep accepts: a local tine, a global tine
-application such as `#alive(kill)`, or a composition such as
+The last statement specifies one stack parameter, `s`, whose pack is the
+declared result, and omitted fields keep their values. A replacement has the
+field's working rack type, so an `f32` field takes `f32s`. Replacing a byte or
+16-bit field is work in progress. `p` can be any predicate accepted by a
+rake's sweep, such as a local tine, `#alive(kill)` or
 `(#alive and #near) gaps`.
 
 ### Masking and compaction
 
-`where` masks. The run computes the new fields for every record, and the
-records outside the predicate keep their old values. The stack's count doesn't
-change, and every later operation still visits the unselected records.
+`where` masks: the run computes the new fields for every record, and records
+outside the predicate keep their old values. The count doesn't change, so
+every later operation still visits the unselected records.
 
-`compact` removes. The selected records move to the front of each column in
-their original order, and the stack's count becomes the number selected. A
-compaction rewrites every column, including the ones the run doesn't replace.
+`compact` removes: the selected records move to the front of each column in
+their original order, and the count becomes the number selected. A compaction
+rewrites every column, including unreplaced ones.
 
-Both forms mean the same thing on every target. Which one is faster depends on
-the data: compaction costs roughly the same per record, while masking carries
-unselected records through all the work that follows. The compiler can't know
-how many records survive, so the source chooses. Each target implements
-compaction with vector instructions:
-
-| Target | Compaction |
-| --- | --- |
-| AVX-512 | `vcompressps` under the selection mask, then `vpmovdb` or `vpmovdw` for compact columns |
-| AVX2 | `vpermps` by a permutation table indexed by the selection bits |
-| NEON | `tbl` by a byte table indexed by the selection bits, then `xtn` for compact columns |
-| `wasm-simd128` | `i8x16.swizzle` by a byte table indexed by the selection bits |
-| SSE2 | a jump to one of 16 fixed `pshufd` permutations |
-
-The [kernel report](#kernel-report) identifies the method used by each build.
-Compacting a run whose widest column has 8 bits is work in progress on
-WebAssembly.
+Compaction costs roughly the same per record, while masking carries
+unselected records through all the work that follows. The faster choice
+depends on how many records survive, and the compiler can't know that, so the
+source chooses. Every target compacts with vector instructions, such as
+`vcompressps` on AVX-512 and `i8x16.swizzle` by a table of selection bits on
+WebAssembly, and the [kernel report](#kernel-report) shows each build's
+method. Compacting a run whose widest column has 8 bits is work in progress
+on WebAssembly.
 
 ### Several stacks
 
-A run can read stacks other than its result. They need to have the same count as the result's stack:
+A run can read stacks other than its result, with the same count as the
+result's stack:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -129,8 +116,9 @@ run roots(input: stack Samples, output: stack Roots) -> stack Roots:
   output with { root: safe_root(input.value) }
 ```
 
-The result's stack, `output`, moves into the run. Every other stack parameter
-is read only. A call traps before the run starts if the counts differ.
+The result's stack, `output`, moves into the run, and every other stack
+parameter is read only. A call traps before the run starts if the counts
+differ.
 
 ## Moves and copies
 
@@ -156,42 +144,41 @@ slow main() -> i32:
   return i32(twice.value[0] + samples.value[3] + twice.value[3]) + i32(count(samples))
 ```
 
-After `doubled(samples)`, the old value of `samples` is gone. Reading it is a
-compile error until it is assigned again, as `samples <- doubled(samples)`
-does. A stack moved in one branch of an `if` counts as moved after it, and a stack moved inside a loop needs to be assigned again before the next iteration.
+After `doubled(samples)`, reading `samples` is a compile error until it is
+assigned again, as `samples <- doubled(samples)` does. A stack moved in one
+branch of an `if` counts as moved after it, and a stack moved inside a loop
+needs to be assigned again before the next iteration.
 
 `copy(samples)` creates a stack with its own columns and the same records,
 and leaves `samples` usable. The copy's columns come from the slow function's
 frame arena, so they last until that function returns, and a copy larger than
 the arena's `RAKE_FRAME_BYTES` (4 MiB unless defined) traps. A copy is the
-only way to keep a stack after passing it to a run, and the compiler never
-copies one implicitly. An implicit copy would be a slower way to write the same program.
+only way to keep a stack after passing it to a run, because the compiler
+never copies one implicitly.
 
 Moving gives each run exclusive use of its result's columns, so its stores
-can't change memory that its other arguments read, except through exactly the
-same column. A call traps before the run starts if the result's columns
+can't change memory read through its other arguments, except through exactly
+the same column. A call traps before the run starts if the result's columns
 overlap another argument's memory in any other way.
 
 A stack built from arrays, as `stack Samples { value: values }`, uses those
-arrays as its columns. Its count is their length, and a stack literal traps if
-its columns have different lengths. After a run updates the stack in place,
-the arrays hold the new values. A compaction leaves the records past the new
-count unspecified.
-
-In slow code, `s.field` is a column as a view of `count(s)` elements, and
-`count(s)` is the stack's count as an `i64`.
+arrays as its columns, so they hold the new values after a run updates the
+stack in place. Its count is their length, and a stack literal traps if its
+columns have different lengths. A compaction leaves the records past the new
+count unspecified. In slow code, `s.field` is a column as a view of `count(s)`
+elements, and `count(s)` is the stack's count as an `i64`.
 
 ## Columns and domains
 
-A run computes in one domain: the widest element type of the columns it reads
-or writes. Every rack in the run has that domain's lane count, so a run over
+A run computes in one domain: the widest element type among its columns. Every rack in the run has that domain's lane count, so a run over
 `f32` and `u8` columns visits four records at a time on SSE2 and NEON, eight on
 AVX2 and sixteen on AVX-512.
 
 A column as wide as the domain is a rack directly: in a 32-bit domain an `f32`
-column is `f32s` and a `u32` column is `u32s`. A narrower column has no rack
-value until `widen` converts it, so a byte column can't turn into a hidden
-scalar loop. `widen` preserves the value, extending by the stored type's sign:
+column is `f32s` and a `u32` column is `u32s`. A narrower column stays compact
+in memory and has no rack value until `widen` converts it, so a byte column
+can't turn into a hidden scalar loop. `widen` preserves the value, extending
+by the stored type's sign:
 
 | Stored column | 32-bit domains | 64-bit domains |
 | --- | --- | --- |
@@ -203,9 +190,8 @@ scalar loop. `widen` preserves the value, extending by the stored type's sign:
 *WIP: work in progress. Native targets implement 32-bit domains. WebAssembly
 implements the domains above.*
 
-The column stays compact in memory, and its pointer advances by one or two
-bytes per record instead of four. The unsigned fields of this pack fit in a
-signed 32-bit lane, so their bitcasts preserve their values:
+The unsigned fields of this pack fit in a signed 32-bit lane, so their
+bitcasts preserve their values:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -225,7 +211,7 @@ run combine_readings(input: stack CompactReadings) -> stack CompactReadings:
   input with { total: ((adjustment + offset) + quality) + weight }
 ```
 
-In general `bitcast` changes only the interpretation of bits: an unsigned
+In general `bitcast` changes only the interpretation of bits, so an unsigned
 32-bit value above 2³¹−1 becomes a negative signed value. `to_f32` converts
 `i32s` or `u32s` to floats. `to_i32` and `to_u32` round floats to integers with
 ties to even and saturation: NaNs become zero, values beyond the range saturate
@@ -235,20 +221,18 @@ to its endpoints, and for `to_u32` negative values become zero.
 
 A stack of zero records runs nothing. A count that isn't a multiple of the lane
 count ends with a tail rack whose mask is `lane < count mod lanes`. Its memory
-transfers touch only existing records: lane-sized loads and stores on
-WebAssembly, count-guarded lane transfers on SSE2 and NEON, masked vector
-transfers for 32-bit columns on AVX2 and for all columns on AVX-512, and
-count-guarded transfers for compact AVX2 columns. In the tail a column's
-inactive lanes hold zero. Expressions run under the tail's mask, and inactive
-operands are made benign before exception-capable arithmetic.
+transfers touch only existing records, using lane-sized loads and stores on
+WebAssembly and guarded or masked transfers on the native targets. In the tail
+a column's inactive lanes hold zero. Expressions run under the tail's mask,
+and inactive operands are made benign before exception-capable arithmetic.
 
-Each rack loads every column the run reads before storing its results, so a
+Each rack loads all its input columns before storing its results, so a
 replacement sees the record's values as they were.
 
 ## Kernel report
 
 A successful build that emits code ends with a report on standard error. It
-lists each run with the facts the compiler used: the domain and lanes, the
+lists each run with the compiler's decisions: the domain and lanes, the
 columns read and written, whether the result is updated in place, the
 selection (every record, masked or compacted) and its method, and the tail's
 memory transfers. For example, an AVX2 build of the first example reports:
@@ -266,8 +250,8 @@ rakec: kernel report for x86-avx2
 ## General runs
 
 A general run indexes views with counted loops. Its parameters are views
-(`[]T`, or `mut []T` to write), uniform scalars (`<name: T>`) and racks
-(`x: f32s`), which only a C caller can pass. Its body uses these forms:
+(`[]T`, or `mut []T` to write), uniform scalars (`<name: T>`) and, from C
+callers only, racks (`x: f32s`). Its body uses these forms:
 
 | Form | Meaning |
 | --- | --- |
@@ -293,8 +277,8 @@ is uniform, so a run has no scatter.
 Rack expressions in a run mean what they mean in a scratch. A scratch or rake
 called from a run is inlined, and its tines combine with any mask around the
 call. `repeat` is unrolled while its trips times its body's statements stay
-within 4096 and otherwise stays a loop, which bounds code size and compile
-time. A rack location or rack array stays in registers across a loop.
+within 4096, and otherwise stays a loop. A rack location or rack array stays
+in registers across a loop.
 
 <!-- rake-check: run 14 -->
 ```rake
@@ -311,30 +295,25 @@ slow main() -> i32:
   return i32(sums[4] + sums[5])
 ```
 
-A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks).
-It returns to vector mode at the closing brace. The block can't capture racks,
-and it never scalarises the surrounding rack work. A run can't loop with
-`while`, `break` or `continue`, call slow code, call C, or read module state.
+A run may enter scalar code explicitly with a [slow block](08_slow_tier.md#slow-blocks),
+which can't capture racks or scalarise the rack work around it. Outside slow
+blocks, a run can't loop with `while`, `break` or `continue`, call slow code,
+call C, or read module state.
 
 ## Addressing
 
-In each counted loop, Rake forms addresses itself. Accesses whose index is
-affine in the loop index share one strength-reduced pointer for each view,
-stride and invariant base, and the constant term of the index becomes the
-instruction's offset. A uniform whose only uses are such accesses isn't
-computed again each iteration. Bounds are checked once, before the loop,
-for its first and last iterations: an affine index lies between its values
-there, so those two checks cover every iteration.
+In each counted loop, accesses whose index is affine in the loop index share
+one strength-reduced pointer for each view, stride and invariant base, and the
+index's constant term becomes the instruction's offset. A uniform used only in
+such accesses isn't recomputed each iteration. Bounds are checked once, before
+the loop, for the first and last iterations, which together cover every
+iteration of an affine index.
 
 Clang folds a constant offset into a WebAssembly load only when it can see
 that the address doesn't wrap, and loop strength reduction hides that. The
-default `--wasm-addressing barrier` gives each pointer an empty `asm`
-statement with one `i32` operand at the top of every iteration. That keeps
-the pointer opaque, so the offsets fold. `--wasm-addressing plain` omits
-these pointer barriers. Both modes keep a partial store's remainder opaque
-with an empty scalar `asm`, so clang retains the rack arithmetic before
-selecting its active lane stores. These barriers take scalar operands,
-because a `v128` operand to `asm` crashes some wasm32 builds of clang.
+default `--wasm-addressing barrier` keeps each pointer opaque with an empty
+`asm` statement at the top of every iteration, so the offsets fold.
+`--wasm-addressing plain` omits these barriers.
 
 ## The C boundary
 
@@ -370,14 +349,17 @@ void roots(const struct rake_stack_Samples_v2 *input,
 
 The caller owns all the storage, and a run never allocates, keeps or frees
 it. A run reads each column pointer once and writes the result's count, which
-only a compaction changes. With a count of zero or less, the columns may be
+changes only in a compaction. With a count of zero or less, the columns may be
 null. Every column holds at least `count` elements, and every stack in a call
-has the same count. Slow code calling a run checks these and traps. A C caller needs to satisfy the same conditions. On WebAssembly a positive count is at most 2^32 - 1.
+has the same count. Slow code calling a run checks these conditions and traps,
+and a C caller needs to satisfy them too. On WebAssembly a positive count is at
+most 2^32 - 1.
 
 The result's columns may share storage with another argument only when an
 element of one starts at exactly the same address as the corresponding element
-of the other, for an in-place update. Otherwise their storage needs to be disjoint.
-The C declaration has no `restrict`, because that exact aliasing is allowed.
+of the other, for an in-place update. Otherwise their storage needs to be
+disjoint. The C declaration has no `restrict`, because that exact aliasing is
+allowed.
 
 On x86-64 Linux a stack run follows System V, and on AArch64 Linux it follows
 AAPCS64. Stack descriptors take integer argument registers in source order, and
@@ -387,25 +369,19 @@ The run never spills an argument or accepts stack arguments, so a run with more
 integer arguments than registers (six on x86, eight on AArch64) fails
 compilation, as does one with more than eight uniforms. An `i32` uniform's
 unspecified upper register bits can't change its value, and a `bool` keeps only
-its value bit. The run calls nothing, and touches the stack only to save the
-callee-saved registers that x86 needs when a run has many columns. The AVX
-profiles execute `vzeroupper` before returning.
+its value bit. The run calls nothing, and touches the stack only to save x86's
+callee-saved registers when it has many columns. The AVX profiles execute
+`vzeroupper` before returning.
 
-Native stack runs keep the columns they read in vector registers: up to six on
-SSE2, seven on AVX2 and NEON, and twenty on AVX-512.
-Views, reductions, scans, extraction, insertion and shuffles in native stack
-runs are work in progress and fail compilation.
+Native stack runs keep their input columns in vector registers: up to six on
+SSE2, seven on AVX2 and NEON, and twenty on AVX-512. Views, reductions, scans,
+extraction, insertion and shuffles in native stack runs are work in progress
+and fail compilation.
 
 ## Verification
 
 The final-object verifier compares each native run with its separately
 assembled selection, including branch offsets, memory operands and embedded
-literals. Any difference or unresolved relocation is rejected. On WebAssembly, every SIMD instruction in a run needs to come from instruction selection for its source operations.
-
-`test/native_stream_test.sh` checks native stack runs against independent C
-results, with exact in-place output and every tail remainder, columns ending at
-guard pages, masked and compacted selections, compact columns and uniform
-arguments. AVX-512 runs on capable hardware or through Intel SDE, and NEON
-through AArch64 QEMU. `test/abi_test.sh` calls WebAssembly runs from C for
-every count from 0 to 20 with misaligned columns, sentinels after each column
-and null columns for empty counts.
+literals, and rejects any difference or unresolved relocation. On
+WebAssembly, every SIMD instruction in a run needs to come from instruction
+selection for its source operations.

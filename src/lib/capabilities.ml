@@ -1,14 +1,22 @@
-(** The frontend semantic contract.
+(** The capability contract: what the frontend checks, and what each target
+    profile compiles.
 
     The parser intentionally recognizes more syntax than the type checker can
     validate.  A [Checked] entry means that the frontend defines and checks the
-    construct's semantics; it does not claim that every production backend can
-    lower it.  Native lowering is a separate, stricter compiler gate. *)
+    construct's semantics.  Each profile then compiles every checked feature
+    except those [profile_exceptions] lists, which the type checker rejects
+    with a source location when that profile is selected. *)
 
 open Ast
 
-type target = Frontend
+type target = Frontend | Profile of Target.profile
 type status = Checked | Reserved | Unavailable
+
+(** A target profile's decision about one feature. *)
+type profile_support =
+  | Compiled
+  | Compiled_slice of string  (** names the part that compiles *)
+  | Not_compiled of string    (** names the missing obligation *)
 
 type feature =
   | Type_float_rack | Type_scalar | Type_mask | Type_pack | Type_stack
@@ -212,18 +220,62 @@ let all = [
   supported Stmt_uniform "statement.uniform" "statement" "let <name: T> = e: a uniform scalar binding in vector code";
 ]
 
+let features = List.map (fun entry -> entry.feature) all
+
 let find feature =
   List.find (fun entry -> entry.feature = feature) all
 
-let status target feature =
-  let entry = find feature in
-  match target with Frontend -> entry.frontend
+let physical_profiles = Target.[ X86_sse2; X86_avx2; X86_avx512; Aarch64_neon ]
 
-let is_available target feature = status target feature <> Unavailable
+(** Where a production profile compiles less than the frontend checks.
+    test/capability_profile_test.sh checks these decisions against what the
+    fixtures actually compile on each profile. *)
+let profile_exceptions =
+  [
+    ( Expr_fma,
+      Target.[ X86_sse2; Wasm_simd128; Wasm_simd128_relaxed ],
+      Not_compiled "the profile has no single-rounding fused multiply-add" );
+    ( Value_non_f32,
+      physical_profiles,
+      Compiled_slice "i32 and u32 racks; 8-, 16- and 64-bit racks compile only for WebAssembly" );
+    ( Def_run,
+      physical_profiles,
+      Compiled_slice "stack runs; general runs over views compile only for WebAssembly" );
+    ( Expr_gather,
+      physical_profiles,
+      Not_compiled "gathers read views, which native stack runs and general runs don't compile yet" );
+  ]
+
+let profile_support profile feature =
+  match ((find feature).frontend, profile) with
+  | (Reserved | Unavailable), _ -> Not_compiled "the frontend does not check it"
+  | Checked, Target.Scalar -> Not_compiled "the scalar profile has no production backend"
+  | Checked, _ -> (
+      match
+        List.find_opt
+          (fun (excepted, profiles, _) -> excepted = feature && List.mem profile profiles)
+          profile_exceptions
+      with
+      | Some (_, _, support) -> support
+      | None -> Compiled)
+
+(** Why [target] rejects [feature], or [None] when it accepts it. *)
+let unavailable_reason target feature =
+  match target with
+  | Frontend when (find feature).frontend = Unavailable -> Some "the frontend does not check it"
+  | Frontend -> None
+  | Profile profile -> (
+      match profile_support profile feature with
+      | Not_compiled reason -> Some reason
+      | Compiled | Compiled_slice _ -> None)
+
+let is_available target feature = unavailable_reason target feature = None
 let id feature = (find feature).id
 let description feature = (find feature).description
 
-let string_of_target Frontend = "frontend"
+let string_of_target = function
+  | Frontend -> "frontend"
+  | Profile profile -> Target.profile_name profile
 let string_of_status = function
   | Checked -> "checked"
   | Reserved -> "reserved"
@@ -306,11 +358,24 @@ let feature_of_def = function
   | DState _ -> Def_state | DEmbed _ -> Def_embed | DConst _ -> Def_const
 
 let print oc =
-  output_string oc "rake-capabilities-v2\ncontract\tstatus\tfeature\tcategory\tdescription\n";
+  output_string oc
+    "rake-capabilities-v3\ncontract\tstatus\tfeature\tcategory\tdescription\treason\n";
   List.iter
     (fun entry ->
-      Printf.fprintf oc "%s\t%s\t%s\t%s\t%s\n"
-        (string_of_target Frontend)
-        (string_of_status entry.frontend) entry.id entry.category
-        entry.description)
-    all
+      Printf.fprintf oc "%s\t%s\t%s\t%s\t%s\t-\n" (string_of_target Frontend)
+        (string_of_status entry.frontend) entry.id entry.category entry.description)
+    all;
+  List.iter
+    (fun profile ->
+      List.iter
+        (fun entry ->
+          let status, reason =
+            match profile_support profile entry.feature with
+            | Compiled -> ("compiled", "-")
+            | Compiled_slice slice -> ("compiled-slice", slice)
+            | Not_compiled reason -> ("unavailable", reason)
+          in
+          Printf.fprintf oc "%s\t%s\t%s\t%s\t%s\t%s\n" (string_of_target (Profile profile)) status
+            entry.id entry.category entry.description reason)
+        all)
+    Target.profiles

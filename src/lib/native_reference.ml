@@ -512,6 +512,7 @@ let typed_literal_value other value =
   | F32_rack xs -> Some (F32_rack (Array.make (Array.length xs) (f32 (Int64.to_float value))))
   | F32_scalar _ -> Some (F32_scalar (f32 (Int64.to_float value)))
   | Int_scalar (s, _) -> Some (int_scalar s value)
+  | U32_scalar _ -> Some (int_scalar Types.SUint value)
   | other -> (match int_lanes other with Some (element, xs) -> Some (int_rack element (Array.make (Array.length xs) value)) | None -> None)
 
 (** A uniform integer broadcast to the integer rack beside it. *)

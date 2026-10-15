@@ -17,6 +17,13 @@ int64_t native_packet_check(const NativePacket *packet)
            + packet->values[2] + packet->samples[1];
 }
 
+int32_t native_text_length(const uint8_t *text)
+{
+    int32_t length = 0;
+    while (text[length] != 0) ++length;
+    return length;
+}
+
 static pthread_barrier_t frame_barrier;
 static atomic_int callback_failures;
 
@@ -81,6 +88,7 @@ int main(void)
     /* Sum_i i = 8128 per frame; each call keeps four 128-element frames. */
     if (calls[0].result != 8 * 628992 || calls[1].result != 8 * 1140992
         || atomic_load(&callback_failures) != 0) return 9;
+    if (rake_slow_values() != 419) return 10;
     puts("native C imports, exports and struct layout passed");
     return 0;
 }

@@ -11,7 +11,7 @@
  (libraries rake))
 
 (executable
- (name native_expected)
+ (name reference_harness)
  (libraries rake))
 
 (executable
@@ -66,10 +66,6 @@
  (name aarch64_neon_asm_test)
  (libraries rake str))
 
-(executable
- (name neon_expected)
- (libraries rake))
-
 (test
  (name wasm_simd128_test)
  (libraries rake))
@@ -81,3 +77,7 @@
 (rule
  (alias runtest-wasm)
  (action (run %{exe:wasm_simd128_verify_test.exe})))
+
+(executable
+ (name capability_features)
+ (libraries rake))

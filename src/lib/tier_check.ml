@@ -74,6 +74,10 @@ let mk k ty loc = { k; ty; loc }
 (* ─── Types ─────────────────────────────────────────────────────────── *)
 
 let rec ty_of ctx (t : Ast.typ) =
+  Typecheck.require_feature ctx.tc t.loc (Capabilities.feature_of_type t.v);
+  (match t.v with
+   | TScalar p | TRack p -> Typecheck.require_feature ctx.tc t.loc (Capabilities.feature_of_prim p)
+   | _ -> ());
   match t.v with
   | TScalar p -> Sc (scalar_of_prim p)
   | TRack p -> Rack (scalar_of_prim p)
@@ -233,6 +237,7 @@ let rec mentions_racks env (e : Ast.expr) =
 
 let rec check_uniform env ?expected (e : Ast.expr) : expr =
   let loc = e.loc in
+  Typecheck.require_feature env.ctx.tc loc (Capabilities.feature_of_expr e.v);
   let literal_int value =
     match expected with
     | Some (Sc s) when is_integer s ->
@@ -764,6 +769,7 @@ and check_slow_block env stmts = snd (check_slow_statements env stmts)
 
 and check_slow_stmt env (stmt : Ast.stmt) =
   let loc = stmt.loc in
+  Typecheck.require_feature env.ctx.tc loc (Capabilities.feature_of_stmt stmt.v);
   let st s = { s; sloc = loc } in
   let declare name annotation value mutable_ =
     let expected = Option.map (ty_of env.ctx) annotation in
@@ -835,6 +841,7 @@ let slow_params ctx loc (params : Ast.param list) =
           match t.v with
           | TMut ({ v = TView _; _ }) -> { pname = name; pty = ty_of ctx t; pass = By_value }
           | TMut inner -> (
+              Typecheck.require_feature ctx.tc t.loc Capabilities.Type_mutable;
               match () with
               | () -> (
                   match ty_of ctx inner with
@@ -974,6 +981,7 @@ let refuse_branch_read renv loc =
 let rec normalise renv (e : Ast.expr) : Ast.expr =
   let open Ast in
   let loc = e.loc in
+  Typecheck.require_feature renv.env.ctx.tc loc (Capabilities.feature_of_expr e.v);
   let re v = { e with v } in
   let var name = re (EVar name) in
   let hoist_uniform (value : Tier_ir.expr) =
@@ -1026,6 +1034,7 @@ let rec normalise renv (e : Ast.expr) : Ast.expr =
       | View (Sc element, _) ->
           let view = check_uniform { renv.env with mode = Slow_mode } (re (EVar base)) in
           if mentions_racks renv.env index then (
+            Typecheck.require_feature renv.env.ctx.tc loc Capabilities.Expr_gather;
             let indices = normalise renv index in
             let index_name = fresh renv.env "g" in
             (match infer_pure renv indices with
@@ -1236,6 +1245,7 @@ let rec check_run_block renv (stmts : Ast.stmt list) : run_env * rstmt list =
 
 and check_run_stmt renv (stmt : Ast.stmt) : run_env =
   let loc = stmt.loc in
+  Typecheck.require_feature renv.env.ctx.tc loc (Capabilities.feature_of_stmt stmt.v);
   let bind_name renv name binding = { renv with env = bind renv.env loc name binding } in
   match stmt.v with
   | SUniform b ->
@@ -1438,6 +1448,9 @@ let check_stack_run env params result_pack body loc =
     | { Ast.v = Ast.SResult r; loc = rloc } :: rest -> (List.rev rest, r, rloc)
     | _ -> fail loc "a stack run ends with its result: s with { field: e }, or compact s where #tine"
   in
+  Typecheck.require_feature env.ctx.tc rloc Capabilities.Stmt_result;
+  if List.exists (fun (_, pack) -> List.exists (fun (_, element) -> element <> Types.SFloat) pack.pack_fields) stacks then
+    Typecheck.require_feature env.ctx.tc loc Capabilities.Stack_non_f32_field;
   let output =
     match List.assoc_opt r.result_stack stacks with
     | Some pack when pack.pack_name = result_pack -> pack
@@ -1593,8 +1606,8 @@ let check_moves vectors (f : slow_func) =
   in
   ignore (stmts SS.empty f.fbody)
 
-let check_program ?(base_dir = ".") (program : Ast.program) : program =
-  let tc = Typecheck.check_program program in
+let check_program ?(base_dir = ".") ?target (program : Ast.program) : program =
+  let tc = Typecheck.check_program ?target program in
   let ctx =
     {
       records = Hashtbl.create 16; packs = Hashtbl.create 16; slows = Hashtbl.create 32;
@@ -1603,6 +1616,7 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     }
   in
   let defs = List.concat_map (fun (m : Ast.module_) -> m.mod_defs) program in
+  List.iter (fun (d : Ast.def) -> Typecheck.require_feature tc d.loc (Capabilities.feature_of_def d.v)) defs;
   let record_declaration (d : Ast.def) = match d.v with
     | DPack (name, fields) -> Some (name, Rake_struct, fields)
     | DRecord (name, header, fields) ->
@@ -1808,9 +1822,10 @@ let check_program ?(base_dir = ".") (program : Ast.program) : program =
     slows = slows @ List.rev !(ctx.block_functions);
     runs;
     vector_defs = List.filter (fun (d : Ast.def) -> match d.v with DScratch _ | DRake _ | DTine _ -> true | _ -> false) defs;
+    used_features = Typecheck.used_features tc;
   }
 
-let check ?base_dir program =
-  try Ok (check_program ?base_dir program) with
+let check ?base_dir ?target program =
+  try Ok (check_program ?base_dir ?target program) with
   | Error (loc, message) -> Error (format_error loc message)
   | Typecheck.TypeError (message, loc) -> Error (format_error loc message)

@@ -1,0 +1,73 @@
+# Reference cases for test/reference_harness.ml, shared by every runtime profile.
+# Columns: function, exception rule, NaN rule, then one argument per parameter.
+# The exception rule is quiet when the call must raise no invalid,
+# divide-by-zero or overflow flag, and any otherwise. The NaN rule is exact when
+# a NaN result must match the reference bit for bit, as bit casts, selections
+# and strict reductions require, and nan-any where the language leaves a NaN
+# result's sign and payload unspecified.
+# A rack argument lists 16 comma-separated lanes, and a profile uses as many as
+# it has; a uniform argument is one value. Values are decimals, inf, -inf, nan,
+# or 0x followed by the exact 32-bit pattern. The interpreter holds f32 lanes as
+# OCaml floats, so a signalling NaN would reach it already quiet; the C oracles
+# in test/*_oracle.h cover signalling NaNs.
+lowering_add	quiet	exact	-8,-3.5,-0,1024,2.5,8,16,1,-1.5,6,0.25,-0,3,7,-2,9	3,1.5,0,0.5,2.5,0.25,-8,-4,4,-6,0.75,0,-3,1,2,-9
+lowering_add	quiet	exact	16777216,1,-16777216,1,2,3,4,5,0x7f7fffff,-0,0x00000001,0x80000001,0.1,0.2,1e30,-1e30	2,-1,0,3,-2,0.5,1,-4,0xff7fffff,-0,0x00000001,0x00000001,0.2,0.1,1e30,1e30
+choose_positive	quiet	exact	-8,3.5,-0,1024,-2.5,8,-16,1,5,-5,0,nan,2,-2,7,-7	9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9
+scale_and_add	quiet	exact	-8,-3.5,-0,1024,2.5,8,16,1,-1.5,6,0.25,-0,3,7,-2,9	0.5	3,1.5,0,0.5,2.5,0.25,-8,-4,4,-6,0.75,0,-3,1,2,-9
+fused_madd	quiet	exact	1.0000001192092896,-3.5,16,-0,2,3,4,5,1,1,1,1,1,1,1,1	1.0000001192092896,2,0.25,8,2,2,2,2,1,1,1,1,1,1,1,1	-1.000000238418579,7,-4,0,1,1,1,1,0,0,0,0,0,0,0,0
+contracted_madd	quiet	exact	1,-2,0.5,-0,1e30,3,7,-7,0,1,2,3,4,5,6,7	1.0000001192092896,4,-8,0,1e30,0.25,-0.5,2,1,1,1,1,1,1,1,1
+guarded_partial	quiet	exact	1,-1,1,-1,1,-1,1,-1,1,-1,1,-1,1,-1,1,-1	4,-1,9,0x7f7fffff,16,0x7f800001,25,-4,36,-9,49,-16,64,-25,81,-36	2,0,3,0,4,0,5,0,6,0,7,0,8,0,9,0	1,inf,1,inf,1,inf,1,inf,1,inf,1,inf,1,inf,1,inf	0,-inf,0,-inf,0,-inf,0,-inf,0,-inf,0,-inf,0,-inf,0,-inf
+overlap_priority_native	any	exact	-1,0,1,nan,-0,5,-5,nan,2,-2,0,1,-1,3,-3,0
+guarded_roots	quiet	exact	16,-4,0,-0,2,-2,inf,-inf,1,-1,9,-9,0.25,-0.25,100,-100
+ordered_difference	quiet	exact	0,nan,2,nan,4,5,nan,7,-0,0,inf,nan,1,2,3,4	-1,1,2,3,-1,5,6,7,0,-0,inf,nan,-1,2,3,0
+strict_reduce_add	quiet	exact	16777216,1,-16777216,1,2,3,4,5,6,7,8,9,10,11,12,13
+strict_reduce_mul	quiet	exact	1.5,2,0.5,-1,2,0.25,4,1,1,1,1,1,1,1,1,1
+strict_reduce_min	any	exact	3,0,-0,5,nan,inf,-inf,2,1,1,1,1,1,1,1,1
+strict_reduce_max	any	exact	3,0,-0,5,nan,inf,-inf,2,1,1,1,1,1,1,1,1
+strict_scan_add	quiet	exact	16777216,1,-16777216,1,2,3,4,5,6,7,8,9,10,11,12,13
+strict_scan_mul	quiet	exact	1.5,2,0.5,-1,2,0.25,4,1,1,1,1,1,1,1,1,1
+strict_scan_min	any	exact	3,0,-0,5,nan,inf,-inf,2,1,1,1,1,1,1,1,1
+strict_scan_max	any	exact	3,0,-0,5,nan,inf,-inf,2,1,1,1,1,1,1,1,1
+absolute_value	quiet	exact	0,-0,1,-1,0x7f7fffff,0xff7fffff,inf,-inf,0x00000001,0x80000001,2.5,-2.5,1e-40,-1e-40,7,-7
+smaller	any	nan-any	1,-0,0,nan,2,-inf,inf,3,-1,5,0x00000001,0x80000001,8,-8,4,4	2,0,-0,1,nan,1,2,3,-2,-5,0,0,9,9,4,-4
+larger	any	nan-any	1,-0,0,nan,2,-inf,inf,3,-1,5,0x00000001,0x80000001,8,-8,4,4	2,0,-0,1,nan,1,2,3,-2,-5,0,0,9,9,4,-4
+round_floor	quiet	exact	1.5,-1.5,2.5,-2.5,0.49999997,-0.49999997,8388607.5,-8388607.5,-0,0,inf,-inf,1e-40,-1e-40,3,-3
+round_ceil	quiet	exact	1.5,-1.5,2.5,-2.5,0.49999997,-0.49999997,8388607.5,-8388607.5,-0,0,inf,-inf,1e-40,-1e-40,3,-3
+round_trunc	quiet	exact	1.5,-1.5,2.5,-2.5,0.49999997,-0.49999997,8388607.5,-8388607.5,-0,0,inf,-inf,1e-40,-1e-40,3,-3
+round_nearest	quiet	exact	1.5,-1.5,2.5,-2.5,0.49999997,-0.49999997,8388607.5,-8388607.5,-0,0,inf,-inf,1e-40,-1e-40,3,-3
+absolute_root	quiet	exact	16,-16,0,-0,2,-2,inf,-inf,1,-1,9,-9,0.25,-0.25,100,-100
+visible_fallback	quiet	exact	16,-16,0,-0,2,-2,inf,-inf,1,-1,9,-9,0.25,-0.25,100,-100
+overlapping_partial	quiet	exact	16,-16,0,-0,2,-2,inf,4,1,-1,9,-9,0.25,3.5,100,4.5
+partitioned_partial	quiet	exact	16,-16,0,-0,2,-2,inf,4,1,-1,9,-9,0.25,3.5,100,4.5
+signed_sum	quiet	exact	0x7fffffff,1,-5,7,100,-100,3,-3,1,2,3,4,5,6,7,8
+signed_product	quiet	exact	3,-2,0x10000,0x10000,1,1,-1,1,1,1,1,1,1,1,1,1
+signed_minimum	quiet	exact	3,-2,0x7fffffff,0x80000000,0,5,-5,9,1,2,3,4,5,6,7,8
+signed_maximum	quiet	exact	3,-2,0x7fffffff,0x80000000,0,5,-5,9,1,2,3,4,5,6,7,8
+unsigned_sum	quiet	exact	4294967295,1,5,7,100,200,3,3,1,2,3,4,5,6,7,8
+unsigned_product	quiet	exact	3,2,0x10000,0x10000,1,1,7,1,1,1,1,1,1,1,1,1
+unsigned_minimum	quiet	exact	3,2,4294967295,0,0x80000000,5,7,9,1,2,3,4,5,6,7,8
+unsigned_maximum	quiet	exact	3,2,4294967295,0,0x80000000,5,7,9,1,2,3,4,5,6,7,8
+signed_scan_sum	quiet	exact	0x7fffffff,1,-5,7,100,-100,3,-3,1,2,3,4,5,6,7,8
+signed_scan_product	quiet	exact	3,-2,0x10000,0x10000,1,1,-1,1,1,1,1,1,1,1,1,1
+signed_scan_minimum	quiet	exact	3,-2,0x7fffffff,0x80000000,0,5,-5,9,1,2,3,4,5,6,7,8
+signed_scan_maximum	quiet	exact	3,-2,0x7fffffff,0x80000000,0,5,-5,9,1,2,3,4,5,6,7,8
+unsigned_scan_sum	quiet	exact	4294967295,1,5,7,100,200,3,3,1,2,3,4,5,6,7,8
+unsigned_scan_product	quiet	exact	3,2,0x10000,0x10000,1,1,7,1,1,1,1,1,1,1,1,1
+unsigned_scan_minimum	quiet	exact	3,2,4294967295,0,0x80000000,5,7,9,1,2,3,4,5,6,7,8
+unsigned_scan_maximum	quiet	exact	3,2,4294967295,0,0x80000000,5,7,9,1,2,3,4,5,6,7,8
+float_uniform_arithmetic	quiet	exact	3	0.5
+signed_uniform_arithmetic	quiet	exact	0x7ffffff0	3
+unsigned_uniform_arithmetic	quiet	exact	4294967290	7
+float_reduced_spread	quiet	exact	3,-2,0.5,8,-7,1,0,-0,1,2,3,4,5,6,7,8
+signed_reduced_span	quiet	exact	3,-2,0x7fffffff,-1,0,5,-5,9,1,2,3,4,5,6,7,8
+unsigned_reduced_span	quiet	exact	3,2,4294967295,1,0x80000000,5,7,9,1,2,3,4,5,6,7,8
+unsigned_mask_offset	quiet	exact	1,-1,0,nan,2,-2,3,-3,4,-4,5,-5,6,-6,7,-7
+unsigned_extracted_keep	quiet	exact	3,2,4294967295,0,0x80000000,5,7,9,1,2,3,4,5,6,7,8
+float_negated_keep	quiet	exact	2.5,-1,0,-0,inf,1e30,3,-3,1,2,3,4,5,6,7,8
+signed_negated_keep	quiet	exact	0x80000000,1,0x7fffffff,-1,0,5,-5,9,1,2,3,4,5,6,7,8
+float_signed_bits	any	exact	0,-0,1,-1,nan,inf,-inf,0x00000001,0xffc12345,2,3,4,5,6,7,8
+unsigned_float_bits	any	exact	0,0x80000000,0x3f800000,0xbf800000,0x7fc00000,0x7f800000,0xff800000,1,0xffc12345,2,3,4,5,6,7,8
+bitcast_keep_input	any	exact	0,-0,1,-1,nan,inf,-inf,0x00000001,0xffc12345,2,3,4,5,6,7,8
+reversed_4_lanes	quiet	exact	1,-2,nan,-0,5,6,7,8,9,10,11,12,13,14,15,16
+reversed_8_lanes	quiet	exact	1,-2,nan,-0,5,6,7,8,9,10,11,12,13,14,15,16
+reversed_16_lanes	quiet	exact	1,-2,nan,-0,5,6,7,8,9,10,11,12,13,14,15,16

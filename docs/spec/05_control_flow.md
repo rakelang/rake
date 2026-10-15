@@ -1,11 +1,11 @@
 # Control flow
 
-Rake has two kinds of choice: a uniform condition chooses the same branch for every lane, while a mask chooses independently in each lane.
-In vector code, both choices use vector selection. Slow code can branch
-around statements. Tines, through blocks and sweeps are the
-named form of the second kind, defined in [tines, through and
-sweeps](03_tines_and_through.md). This page defines conditional
-expressions, loops and branches.
+Rake has two kinds of choice: a uniform condition chooses the same branch
+for every lane, while a mask chooses independently in each lane. Vector code
+makes both choices by vector selection, whereas slow code can branch around
+statements. Tines, through blocks and sweeps are the named form of mask
+choice, defined in [tines, through and sweeps](03_tines_and_through.md). This
+page defines conditional expressions, loops and branches.
 
 ## Conditional expressions
 
@@ -15,10 +15,10 @@ A mask condition chooses lane by lane. Each branch is computed under its
 mask, the condition's lanes for `a` and the others for `b`, combined with
 any mask around the expression, and a lane-wise selection joins them. An
 inactive lane's computation doesn't happen, as in a through block, so
-operands are replaced with benign values on targets with floating-point
-exceptions. On WebAssembly, the expression below is two subtractions, a
-comparison and one `v128.bitselect`. A mask conditional compiles on
-every production profile:
+targets with floating-point exceptions replace its operands with benign
+values. A mask conditional compiles on every production profile, and on
+WebAssembly the expression below is two subtractions, a comparison and one
+`v128.bitselect`:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -26,15 +26,13 @@ scratch distance(v: f32s, w: f32s) -> f32s:
   if v > w then v - w else w - v
 ```
 
-A uniform condition chooses one whole rack. Rake 0.7.0 accepts
-a direct comparison of uniform `f32`, `i32` or `u32` values on every
-production profile. A comparison can also use a literal of the same type
-or an extracted `f32` bound as a uniform.
-The physical profiles broadcast the operands, compare them as vectors and
-select the same branch in every participating lane. Both branches have
-instructions, with benign operands substituted for untaken work that could
-raise floating-point exceptions. A surrounding `through` or a stack run's tail
-also limits participation.
+A uniform condition chooses one whole rack. It can be a direct comparison of
+uniform `f32`, `i32` or `u32` values, including a literal of the same type or
+an extracted `f32` bound as a uniform. The physical profiles broadcast the
+operands, compare them as vectors and select the same branch in every
+participating lane, with benign operands in untaken work that could raise
+floating-point exceptions. A surrounding `through` or a stack run's tail also
+limits participation.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -43,14 +41,12 @@ scratch pick(near: f32s, far: f32s, <distance: f32>, <limit: f32>) -> f32s:
 ```
 
 Float comparisons with a NaN are false, including `!=`, so an unordered
-condition chooses the `else` arm. Integer comparisons retain their declared
-signed or unsigned order, including values across bit 31. These native
-conditionals are included in Rake 0.7.0.
+condition chooses the `else` arm. Integer comparisons keep their declared
+signed or unsigned order, including values across bit 31.
 
-WebAssembly retains one scalar condition and a whole-rack selection. It
-computes both pure branches before selecting, and has no floating-point
-exception flags. This signed integer condition works on every production
-profile:
+WebAssembly keeps one scalar condition and a whole-rack selection, computing
+both pure branches before selecting. These integer conditions work on every
+production profile:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -65,8 +61,8 @@ A Boolean uniform chooses a whole rack on every production profile. On the
 physical profiles its value bit expands into an all-lane mask, so untaken
 floating-point work keeps the same operand protection as a comparison.
 The condition can come from a parameter, a marked Boolean literal such as
-`<true>`, or a mask reduction. `any`
-below makes every lane choose `near` when at least one lane is positive:
+`<true>`, or a mask reduction. Below, `any` makes every lane choose `near`
+when at least one lane is positive:
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake
@@ -81,15 +77,13 @@ scratch pick_first(near: f32s, far: f32s) -> f32s:
   pick_enabled(near, far, <true>)
 ```
 
-These native Boolean conditions and C `bool` parameters are included in
-Rake 0.7.0. Native stack runs also take `i32`, `u32` and `bool` uniforms within
-their [C register boundary](02_packs_and_run.md#the-c-boundary).
+Native stack runs take `i32`, `u32` and `bool` uniforms within their [C
+register boundary](02_packs_and_run.md#the-c-boundary).
 
 In slow code, only the chosen branch is evaluated.
 
 In vector code, a branch can't read memory. A load, gather or element read is
-bound with `let` before the conditional, so it visibly happens whichever way
-the condition goes:
+bound with `let` before the conditional, so it visibly happens either way:
 
 <!-- rake-check: reject "an if's branches compute on values" -->
 ```rake
@@ -119,15 +113,11 @@ scratch cube(a: f32s) -> f32s:
 ```
 
 In a run, `repeat` unrolls while its trips times its body's statements stay
-within 4096, and otherwise it stays a loop with the same meaning. On
-WebAssembly each rack location stays one `v128` value in a local. In
-`test/program/vector_tier.rk`, a `repeat` of 5000 trips compiles to a loop of
-one `f32x4.mul`, one `f32x4.add` and the counter.
-
-Native stack runs accept these unrolled repeats too, including nested copies
-and updates to local rack locations or arrays of racks. Assignments preserve
-earlier immutable snapshots, and each rack of records starts with fresh
-locations. Repeats beyond the unrolling budget still fail native compilation.
+within 4096, and otherwise it stays a loop with the same meaning, keeping
+each rack location in one `v128` local on WebAssembly. Native stack runs
+accept only unrolled repeats, including nested ones that update local rack
+locations or arrays of racks. Each rack of records starts with fresh
+locations, and earlier immutable bindings keep their values.
 
 <!-- rake-check: verify x86-sse2 x86-avx2 x86-avx512 aarch64-neon wasm-simd128 -->
 ```rake

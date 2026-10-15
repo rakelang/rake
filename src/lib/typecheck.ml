@@ -22,6 +22,8 @@ type env = {
   global_tines: def list;          (** Parameterized predicates, never runtime globals *)
   funcs: (ident, t list * t) Hashtbl.t;  (** Function signatures *)
   locations: (ident, unit) Hashtbl.t;    (** Mutable locations (from :=) *)
+  used_features: (Capabilities.feature, unit) Hashtbl.t;
+    (** Every feature the gate admitted, shared by all copies of the environment *)
 }
 
 let create_env target global_tines = {
@@ -32,6 +34,7 @@ let create_env target global_tines = {
   tines = Hashtbl.create 16;
   funcs = Hashtbl.create 32;
   locations = Hashtbl.create 32;
+  used_features = Hashtbl.create 64;
 }
 
 let copy_env env = {
@@ -42,6 +45,7 @@ let copy_env env = {
   global_tines = env.global_tines;
   funcs = Hashtbl.copy env.funcs;
   locations = Hashtbl.copy env.locations;
+  used_features = env.used_features;
 }
 
 (** Error handling *)
@@ -54,11 +58,19 @@ let type_errorf loc fmt =
   Printf.ksprintf (fun msg -> type_error msg loc) fmt
 
 let require_feature env loc feature =
-  if not (Capabilities.is_available env.target feature) then
-    type_errorf loc "WIP: feature '%s' (%s) is unavailable for target '%s'"
-      (Capabilities.id feature)
-      (Capabilities.description feature)
-      (Capabilities.string_of_target env.target)
+  (match Capabilities.unavailable_reason env.target feature with
+   | Some reason ->
+       type_errorf loc "WIP: feature '%s' (%s) is unavailable for target '%s': %s"
+         (Capabilities.id feature)
+         (Capabilities.description feature)
+         (Capabilities.string_of_target env.target)
+         reason
+   | None -> ());
+  Hashtbl.replace env.used_features feature ()
+
+(** The features a checked program uses, in catalogue order. *)
+let used_features env =
+  List.filter (Hashtbl.mem env.used_features) Capabilities.features
 
 let unavailable_invariant feature =
   failwith (Printf.sprintf
