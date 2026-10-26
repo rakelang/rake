@@ -8,7 +8,7 @@ Data rakes through tine declarations (mask patterns), enabling divergent paralle
 computations on physical vector targets and the WebAssembly SIMD virtual machine."""
 maintainer: ["Kieran Hannigan"]
 authors: ["Kieran Hannigan"]
-license: "MIT"
+license: "LicenseRef-MIT-Automated-Use"
 homepage: "https://rake-lang.org"
 bug-reports: "https://github.com/rakelang/rake/issues"
 depends: [
