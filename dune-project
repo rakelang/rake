@@ -8,7 +8,7 @@
  (name rake)
  (maintainers "Kieran Hannigan")
  (authors "Kieran Hannigan")
- (license MIT)
+ (license LicenseRef-MIT-SLOP)
  (homepage "https://rake-lang.org")
  (bug_reports "https://github.com/rakelang/rake/issues")
  (source (github rakelang/rake))
