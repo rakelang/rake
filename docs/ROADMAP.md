@@ -55,8 +55,10 @@ opt-in until we've validated it on the competition runtime.
 ### GPU profiles
 
 Once CPU coverage and native C interoperation are done, we'll implement
-`nvidia-ptx-sm120`, a 32-lane warp profile that emits PTX 8.7 and compiles it
-ahead of time with pinned CUDA 12.8.1 tools. NVIDIA allocates registers and
+`nvidia-ptx-sm120a`, a 32-lane warp profile that emits PTX 8.7 and compiles it
+ahead of time with pinned CUDA 12.8.1 tools. It puts matrix products on the
+tensor cores in their declared formats and compiles each fused region to one
+kernel. NVIDIA allocates registers and
 schedules instructions on that profile, so Rake's verifier checks the final
 cubin's lane mapping, control and data flow, memory effects and resources,
 and the runtime loads only that exact verified artifact. Portable

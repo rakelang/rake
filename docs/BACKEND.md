@@ -315,7 +315,9 @@ NVIDIA (planned): Rake SIMT mapping -> PTX -> pinned ptxas -> cubin verification
 Vulkan (later): Rake subgroup mapping -> SPIR-V -> driver -> device verification
 ```
 
-The proposed `nvidia-ptx-sm120` profile targets PTX 8.7 and a 32-thread warp.
+The proposed `nvidia-ptx-sm120a` profile targets PTX 8.7 and a 32-thread warp,
+lowers matrix products to tensor-core `mma` instructions and compiles each
+fused region to one kernel.
 NVIDIA will own final allocation and instruction scheduling, and Rake will
 check the final cubin's instructions, control and data flow and resources,
 rejecting unknown or insufficient evidence. A certificate applies to that

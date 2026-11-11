@@ -166,7 +166,9 @@ playground](docs/PLAYGROUND.md) is an interactive tutorial in twelve lessons,
 languages](docs/COMPARISONS.md) and [GPU profiles](docs/GPU.md) set Rake
 beside ISPC and Bend 2. The GPU contract is a design, not an implemented
 backend. Its first proposed profile maps racks across NVIDIA warp lanes,
-emits PTX and verifies the ahead-of-time cubin. It separates checked
+emits PTX and verifies the ahead-of-time cubin, including that matrix
+products run on the tensor cores in their declared formats and that each
+fused region is one kernel. It separates checked
 execution properties from occupancy, memory costs and elapsed time, which
 still need measurement.
 [The rakec command](docs/RAKEC.md) lists its modes and options,

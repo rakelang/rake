@@ -134,6 +134,14 @@ collective participation, memory address patterns and synchronisation scopes
 will be explicit parts of the profile, and the compiler will verify the
 declared lane mapping and permitted control flow.
 
+On NVIDIA, the same rule covers the tensor cores. A matrix product runs on
+tensor-core instructions or compilation fails, and `slow { ... }` marks one
+kept on the CUDA cores. A declared number format runs as itself, so a format
+the profile has no instruction for is rejected, never widened, and declaring a
+wider format than the values need, where a narrower one runs at the same
+speed, gets a warning. A fused region compiles to one kernel whose intermediate values stay
+in registers and shared memory.
+
 The initial NVIDIA PTX route leaves final register allocation and
 instruction scheduling to NVIDIA, then verifies the exact cubin. Register
 count, memory address structure and the absence of forbidden lowering can be

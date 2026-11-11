@@ -59,12 +59,44 @@ Partial masks are legitimate program choices, and Rake can't make arbitrary
 inputs keep every lane active. It can tell uniform control from lane-varying
 control, though, and refuse serialization introduced by the compiler.
 
+## Matrix products, formats and fused regions
+
+A GPU has two kinds of arithmetic unit. Its CUDA cores do ordinary arithmetic
+on one value per lane, while its tensor cores multiply whole tiles of two
+matrices at once, many times faster, and do nothing else. Most of an
+inference workload's arithmetic is matrix multiplication, so where those
+products run decides how fast the program is. The GPU profiles carry Rake's
+vectorisation rule over to these units with three checks on the compiled
+kernel.
+
+A matrix product runs on the tensor cores. If the profile can't lower one to
+tensor-core instructions, compilation fails, and a `slow { ... }` block is the
+explicit place for a matrix product on the CUDA cores, such as a convolution
+too small to fill a tile.
+
+A declared number format runs as itself. Each tensor-core instruction takes
+particular formats, from 4-bit NVFP4 to TF32, and an engine without a kernel
+for a format can quietly widen it, running an FP8 product as BF16, or fall
+back from a fused attention kernel to a slower one. Rake rejects a format the
+profile has no instruction for. It warns when a narrower format at the same
+speed would hold every value exactly, such as BF16 weights declared as TF32.
+
+A fused region is one kernel, and the values between its operations stay in
+registers and shared memory. Norms, activations and softmax are limited by
+memory traffic more than arithmetic, so writing each intermediate result out
+to device memory and reading it back, as an eager framework does with one
+kernel per operation, costs more than the operations themselves. The
+verifier checks the cubin for spills and for device-memory traffic inside the
+region, and rejects the kernel if it finds either.
+
 ## First profile: NVIDIA PTX
 
-The proposed profile, `nvidia-ptx-sm120`, fixes [PTX ISA
+The proposed profile, `nvidia-ptx-sm120a`, fixes [PTX ISA
 8.7](https://docs.nvidia.com/cuda/archive/12.8.1/parallel-thread-execution/index.html),
-`sm_120`, 64-bit addressing and a 32-lane rack, and initially supports only
-that SM architecture. It uses [CUDA
+`sm_120a`, 64-bit addressing and a 32-lane rack, and initially supports only
+that SM architecture. It targets `sm_120a` because PTX 8.7 provides the
+block-scaled and 4- and 6-bit forms of `mma` only for that architecture-specific
+target. It uses [CUDA
 12.8.1](https://docs.nvidia.com/cuda/archive/12.8.1/cuda-toolkit-release-notes/index.html#cuda-toolkit-major-component-versions),
 with the exact tool binaries pinned by hash. Other architectures and
 operations need a checked profile extension, and the compiler will report an
@@ -79,7 +111,8 @@ unsupported construct's source location, profile and failed obligation.
 | Collectives | broadcast, static shuffle, ballot and ordered float reductions/scans through published warp-shuffle sequences. Participation and reduction order are explicit |
 | Memory | typed structure-of-arrays global loads/stores, with alignment, count and lane-to-address mapping. Tails suppress out-of-bounds accesses |
 | Control | uniform bounds and source traversal control are permitted. Pure fused regions forbid calls and hidden lane loops |
-| Initial exclusions | shared-memory collectives, atomics, dynamic allocation, recursion, device callbacks, tensor operations, scatter and unsupported numerical functions |
+| Matrix products | warp-level `mma` in each form `sm_120a` provides: block-scaled NVFP4 and MXFP4 (`kind::mxf4nvf4`), FP4, FP6 and FP8 in any pairing (`kind::mxf8f6f4`), INT8, FP16, BF16 and TF32, with FP32 accumulation |
+| Initial exclusions | shared-memory collectives, atomics, dynamic allocation, recursion, device callbacks, scatter and unsupported numerical functions |
 
 Every launched warp will contain 32 invocations. Padding invocations stay
 present until the required collectives finish, supplying neutral operands
@@ -94,10 +127,10 @@ it can't establish which lanes take part.
 ```text
 Rake source and GPU lane contract
   -> checked IR: uniformity, masks and memory effects
-  -> inspectable PTX 8.7 for sm_120
+  -> inspectable PTX 8.7 for sm_120a
   -> pinned ptxas: ahead-of-time cubin
   -> nvdisasm and cuobjdump: instructions, control flow and resources
-  -> Rake's sm_120 artifact verifier
+  -> Rake's sm_120a artifact verifier
   -> exact verified cubin loaded by the runtime
 ```
 
@@ -136,6 +169,8 @@ to PTX.
 | Compilation or artifact verification | Execution and measurement |
 | --- | --- |
 | lanes map to threads, without a hidden serial lane loop | enough independent warps to use the device |
+| matrix products on tensor-core instructions, in their declared formats | how fully the tensor cores are kept busy |
+| one kernel per fused region, with its intermediate values kept on chip | memory bandwidth achieved between regions |
 | permitted predicates, control flow and collective participation | input-dependent inactive lanes |
 | no forbidden spills, reloads or helpers in checked regions | achieved occupancy and whether another register policy is faster |
 | parameter layout and lane-to-address pattern | memory transactions, caches and transfer overhead |
